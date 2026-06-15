@@ -225,7 +225,7 @@ fn draw(f: &mut Frame, app: &App) {
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(3), Constraint::Length(3)])
+        .constraints([Constraint::Length(1), Constraint::Min(3), Constraint::Length(3)])
         .split(f.area());
 
     draw_header(f, chunks[0]);
@@ -246,25 +246,17 @@ fn draw_header(f: &mut Frame, area: Rect) {
         .constraints([Constraint::Min(0), Constraint::Length(20)])
         .split(area);
 
-    // Big block-letter AELLO banner.
-    let banner = vec![
-        Line::raw(" █▀█ █▀▀ █   █   █▀█"),
-        Line::raw(" █▀█ █▀▀ █   █   █ █"),
-        Line::raw(" ▀ ▀ ▀▀▀ ▀▀▀ ▀▀▀ ▀▀▀"),
-    ];
-    f.render_widget(
-        Paragraph::new(banner)
-            .style(Style::default().fg(ORANGE_HOT).bg(BG).add_modifier(Modifier::BOLD)),
-        cols[0],
-    );
+    // Original single-line header; AELLO letter-spaced + bold to read larger.
+    let brand = Line::from(vec![
+        Span::styled(" A E L L O", Style::default().fg(ORANGE_HOT).add_modifier(Modifier::BOLD)),
+        Span::styled("   //   ", Style::default().fg(DIM)),
+        Span::styled("BLUEPRINT_REGISTRY", Style::default().fg(MUTED)),
+    ]);
+    f.render_widget(Paragraph::new(brand).style(Style::default().bg(BG)), cols[0]);
 
-    let right = vec![
-        Line::from(Span::styled("SYS_ADMIN_SEC_7 ◆", Style::default().fg(AMBER))),
-        Line::from(Span::styled("BLUEPRINT_REGISTRY", Style::default().fg(ORANGE))),
-        Line::from(Span::styled("NODE·0x7F", Style::default().fg(DIM))),
-    ];
+    let telemetry = Line::from(Span::styled("SYS_ADMIN_SEC_7 ◆ ", Style::default().fg(DIM)));
     f.render_widget(
-        Paragraph::new(right).alignment(Alignment::Right).style(Style::default().bg(BG)),
+        Paragraph::new(telemetry).alignment(Alignment::Right).style(Style::default().bg(BG)),
         cols[1],
     );
 }
