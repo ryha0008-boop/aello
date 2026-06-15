@@ -122,12 +122,15 @@ struct App {
     status: String,
     /// Launch directory as "PARENT / CURRENT", uppercased — shown top-right.
     dir: String,
+    share_login: bool,
 }
 
 impl App {
     fn load() -> Result<Self> {
+        let cfg = config::load()?;
         Ok(Self {
-            blueprints: config::load()?.blueprints,
+            share_login: config::share_login(&cfg),
+            blueprints: cfg.blueprints,
             selected: 0,
             mode: Mode::Normal,
             status: String::new(),
@@ -229,6 +232,14 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                     let dir = browse_start();
                     let entries = list_dirs(&dir);
                     app.mode = Mode::Config { dir, entries, sel: 0, new: None };
+                }
+                KeyCode::Char('l') => {
+                    let mut cfg = config::load()?;
+                    let new = !config::share_login(&cfg);
+                    cfg.share_login = Some(new);
+                    config::save(&cfg)?;
+                    app.share_login = new;
+                    app.status = if new { "SHARED LOGIN: ON".into() } else { "SHARED LOGIN: OFF".into() };
                 }
                 KeyCode::Char('u') => return Ok(PostExit::Update),
                 KeyCode::Down | KeyCode::Char('j') => {
@@ -490,12 +501,14 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         keyhint("A", "ADD"),
         keyhint("D", "DELETE"),
         keyhint("C", "CONTEXTDB"),
+        keyhint("L", "LOGIN"),
         keyhint("U", "UPDATE"),
         keyhint("Q", "QUIT"),
     ]);
     let status = Line::from(Span::styled(format!(" {}", app.status), Style::default().fg(ORANGE)));
+    let login = if app.share_login { "SHARED" } else { "PER-ENV" };
     let telemetry = Line::from(Span::styled(
-        format!(" AELLO v{VERSION} · STABLE · LOCAL_NODE_01 · {} BLUEPRINT(S)", app.blueprints.len()),
+        format!(" AELLO v{VERSION} · {} BLUEPRINT(S) · LOGIN:{login}", app.blueprints.len()),
         Style::default().fg(DIM),
     ));
     f.render_widget(

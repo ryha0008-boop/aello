@@ -202,7 +202,19 @@ pub(crate) fn run_blueprint(
 
     project::place(&env, &inst, claude_md.as_deref())?;
 
-    if !env.join(".credentials.json").exists() {
+    // Shared login: seed this env's credentials from the central cache (freshest)
+    // or the normal ~/.claude login, so a new env doesn't prompt for login.
+    let share = config::share_login(&cfg);
+    let env_creds = env.join(".credentials.json");
+    if share && !env_creds.exists() {
+        let source = config::credentials_cache()
+            .filter(|p| p.exists())
+            .or_else(|| config::default_claude_creds().filter(|p| p.exists()));
+        if let Some(src) = source {
+            let _ = std::fs::copy(&src, &env_creds);
+        }
+    }
+    if !env_creds.exists() {
         println!("Launching '{}' — new env, Claude will prompt login on first use.", bp.name);
     }
 
@@ -212,7 +224,19 @@ pub(crate) fn run_blueprint(
         other => other,
     };
     let contextdb = config::contextdb_dir(&cfg);
-    launch::launch(&env, resume.as_ref(), prompt, extra, &contextdb)
+    let code = launch::launch(&env, resume.as_ref(), prompt, extra, &contextdb)?;
+
+    // Refresh the central cache from this env so future envs get the latest
+    // (refreshed) token.
+    if share && env_creds.exists() {
+        if let Some(cache) = config::credentials_cache() {
+            if let Some(parent) = cache.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::copy(&env_creds, &cache);
+        }
+    }
+    Ok(code)
 }
 
 fn cmd_list(json: bool) -> Result<()> {

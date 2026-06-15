@@ -16,6 +16,21 @@ pub fn config_dir() -> Result<PathBuf> {
 /// Default contextdb path when unset.
 pub const DEFAULT_CONTEXTDB: &str = "~/aello/contextdb";
 
+/// Whether to share one Claude login across envs (default true).
+pub fn share_login(cfg: &Config) -> bool {
+    cfg.share_login.unwrap_or(true)
+}
+
+/// aello's central credential cache (freshest shared login).
+pub fn credentials_cache() -> Option<PathBuf> {
+    config_dir().ok().map(|d| d.join("credentials.json"))
+}
+
+/// The normal (non-isolated) Claude login: `~/.claude/.credentials.json`.
+pub fn default_claude_creds() -> Option<PathBuf> {
+    home_dir().map(|h| h.join(".claude").join(".credentials.json"))
+}
+
 /// Resolve the unified contextdb path (config value or default), expanding `~`.
 pub fn contextdb_dir(cfg: &Config) -> PathBuf {
     let raw = cfg.contextdb.as_deref().unwrap_or(DEFAULT_CONTEXTDB);

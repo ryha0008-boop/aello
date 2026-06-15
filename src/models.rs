@@ -27,6 +27,9 @@ pub struct Config {
     /// Unset → default `~/aello/contextdb`. Configurable from the TUI.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contextdb: Option<String>,
+    /// Share one Claude login across all envs via a central cache. Unset → on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub share_login: Option<bool>,
 }
 
 impl Config {
