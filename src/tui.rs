@@ -2,6 +2,9 @@
 //!
 //! Browse blueprints, add, delete, self-update, quit. Run/edit/etc. fill in as
 //! later phases land. Built on ratatui + crossterm (cross-platform).
+//!
+//! Visual style: "Kinetic Command" — inky black, kinetic-orange/amber accents,
+//! uppercase monospace labels, sharp bordered modules, telemetry flourishes.
 
 use anyhow::Result;
 use ratatui::crossterm::{
@@ -9,16 +12,29 @@ use ratatui::crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
-use ratatui::{backend::CrosstermBackend, Terminal};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
+use ratatui::{backend::CrosstermBackend, Frame, Terminal};
 use std::io::{self, Stdout};
 
 use crate::config;
 use crate::models::Blueprint;
 
 type Term = Terminal<CrosstermBackend<Stdout>>;
+
+// ── Kinetic Command palette (from DESIGN.md) ────────────────────────────────
+const BG: Color = Color::Rgb(0x0a, 0x0a, 0x0a); // inky void
+const SURFACE: Color = Color::Rgb(0x14, 0x13, 0x13); // module fill
+const STRIPE: Color = Color::Rgb(0x11, 0x11, 0x11); // alternate-row tint
+const ORANGE: Color = Color::Rgb(0xff, 0xb5, 0x96); // primary (kinetic orange)
+const ORANGE_HOT: Color = Color::Rgb(0xff, 0x66, 0x00); // primary-container
+const AMBER: Color = Color::Rgb(0xff, 0xae, 0x00); // secondary (amber glow)
+const TEXT: Color = Color::Rgb(0xe5, 0xe2, 0xe1); // on-surface
+const MUTED: Color = Color::Rgb(0xaa, 0x8a, 0x7d); // outline
+const DIM: Color = Color::Rgb(0x5a, 0x41, 0x36); // outline-variant
+const ERR: Color = Color::Rgb(0xff, 0xb4, 0xab); // error
 
 enum Mode {
     Normal,
@@ -113,7 +129,7 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                 }
                 KeyCode::Char('d') | KeyCode::Char('x') => {
                     if app.blueprints.is_empty() {
-                        app.status = "No blueprints to delete.".into();
+                        app.status = "NO BLUEPRINTS TO DELETE".into();
                     } else {
                         app.mode = Mode::ConfirmDelete;
                     }
@@ -123,7 +139,7 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
             Mode::Adding { name, buf } => match key.code {
                 KeyCode::Esc => {
                     app.mode = Mode::Normal;
-                    app.status = "Cancelled.".into();
+                    app.status = "CANCELLED".into();
                 }
                 KeyCode::Backspace => {
                     buf.pop();
@@ -135,12 +151,12 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                         // Entering the name.
                         None => match crate::validate_name(&value) {
                             Ok(()) if config::load()?.blueprints.iter().any(|b| b.name == value) => {
-                                app.status = format!("'{value}' already exists.");
+                                app.status = format!("'{value}' ALREADY EXISTS");
                             }
                             Ok(()) => {
                                 app.mode = Mode::Adding { name: Some(value), buf: String::new() };
                             }
-                            Err(e) => app.status = e.to_string(),
+                            Err(e) => app.status = e.to_string().to_uppercase(),
                         },
                         // Entering the model.
                         Some(n) => match crate::validate_model(&value) {
@@ -152,11 +168,11 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                                     claude_md: None,
                                 });
                                 config::save(&cfg)?;
-                                app.status = format!("Added '{n}'.");
+                                app.status = format!("ADDED '{n}'");
                                 app.mode = Mode::Normal;
                                 app.reload()?;
                             }
-                            Err(e) => app.status = e.to_string(),
+                            Err(e) => app.status = e.to_string().to_uppercase(),
                         },
                     }
                 }
@@ -168,13 +184,13 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                     let mut cfg = config::load()?;
                     cfg.blueprints.retain(|b| b.name != target);
                     config::save(&cfg)?;
-                    app.status = format!("Removed '{target}'.");
+                    app.status = format!("REMOVED '{target}'");
                     app.mode = Mode::Normal;
                     app.reload()?;
                 }
                 KeyCode::Char('n') | KeyCode::Esc => {
                     app.mode = Mode::Normal;
-                    app.status = "Cancelled.".into();
+                    app.status = "CANCELLED".into();
                 }
                 _ => {}
             },
@@ -182,52 +198,146 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
     }
 }
 
-fn draw(f: &mut ratatui::Frame, app: &App) {
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+fn draw(f: &mut Frame, app: &App) {
+    // Paint the inky-void background across the whole frame.
+    f.render_widget(Block::default().style(Style::default().bg(BG)), f.area());
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(1), Constraint::Length(2)])
+        .constraints([Constraint::Length(1), Constraint::Min(3), Constraint::Length(3)])
         .split(f.area());
 
-    // Title.
-    let title = Paragraph::new(format!(" aello v{}", env!("CARGO_PKG_VERSION")))
-        .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
-    f.render_widget(title, chunks[0]);
+    draw_header(f, chunks[0]);
+    draw_registry(f, chunks[1], app);
+    draw_footer(f, chunks[2], app);
+}
 
-    // Blueprint list.
-    let items: Vec<ListItem> = if app.blueprints.is_empty() {
-        vec![ListItem::new("  (no blueprints — press 'a' to add)")]
-    } else {
-        app.blueprints
-            .iter()
-            .map(|b| {
-                let md = b.claude_md.as_deref().unwrap_or("-");
-                ListItem::new(format!("{:<16} {:<12} {}", b.name, b.model, md))
-            })
-            .collect()
-    };
-    let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title(" blueprints "))
-        .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
-        .highlight_symbol("› ");
-    let mut state = ListState::default();
-    if !app.blueprints.is_empty() {
-        state.select(Some(app.selected));
+fn draw_header(f: &mut Frame, area: Rect) {
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(0), Constraint::Length(30)])
+        .split(area);
+
+    let brand = Line::from(vec![
+        Span::styled(" AELLO", Style::default().fg(ORANGE).add_modifier(Modifier::BOLD)),
+        Span::styled("  //  ", Style::default().fg(DIM)),
+        Span::styled("BLUEPRINT_REGISTRY", Style::default().fg(MUTED)),
+    ]);
+    f.render_widget(Paragraph::new(brand).style(Style::default().bg(BG)), cols[0]);
+
+    let telemetry = Line::from(vec![
+        Span::styled("SYS_ADMIN_SEC_7 ", Style::default().fg(DIM)),
+        Span::styled("◆", Style::default().fg(ORANGE_HOT)),
+    ]);
+    f.render_widget(
+        Paragraph::new(telemetry).alignment(Alignment::Right).style(Style::default().bg(BG)),
+        cols[1],
+    );
+}
+
+fn draw_registry(f: &mut Frame, area: Rect, app: &App) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(DIM))
+        .title(Span::styled(" BLUEPRINTS ", Style::default().fg(ORANGE).add_modifier(Modifier::BOLD)))
+        .title_top(Line::from(Span::styled(" NODE_REGISTRY·0x7F ", Style::default().fg(DIM))).right_aligned())
+        .style(Style::default().bg(SURFACE));
+
+    if app.blueprints.is_empty() {
+        let hint = Paragraph::new("\n  NO BLUEPRINTS — PRESS [A] TO ADD")
+            .style(Style::default().fg(MUTED).bg(SURFACE))
+            .block(block);
+        f.render_widget(hint, area);
+        return;
     }
-    f.render_stateful_widget(list, chunks[1], &mut state);
 
-    // Footer: help line driven by mode, plus the status line.
-    let help = match &app.mode {
-        Mode::Normal => "↑/↓ move · a add · d delete · u update · q quit · (run: soon)".to_string(),
-        Mode::Adding { name: None, buf } => format!("name: {buf}_   (Enter to confirm · Esc cancel)"),
-        Mode::Adding { name: Some(n), buf } => {
-            format!("name={n}  model: {buf}_   (Enter to confirm · Esc cancel)")
-        }
+    let header = Row::new(["NAME", "MODEL", "CLAUDE.MD", "STATUS"].map(|h| {
+        Cell::from(h).style(Style::default().fg(ORANGE).add_modifier(Modifier::BOLD | Modifier::UNDERLINED))
+    }))
+    .height(1);
+
+    let rows = app.blueprints.iter().enumerate().map(|(i, b)| {
+        let bg = if i % 2 == 0 { SURFACE } else { STRIPE };
+        Row::new(vec![
+            Cell::from(b.name.clone()).style(Style::default().fg(TEXT)),
+            Cell::from(b.model.clone()).style(Style::default().fg(AMBER)),
+            Cell::from(b.claude_md.clone().unwrap_or_else(|| "—".into())).style(Style::default().fg(MUTED)),
+            Cell::from("● READY").style(Style::default().fg(ORANGE_HOT)),
+        ])
+        .style(Style::default().bg(bg))
+    });
+
+    let table = Table::new(
+        rows,
+        [Constraint::Length(18), Constraint::Length(16), Constraint::Min(8), Constraint::Length(9)],
+    )
+    .header(header)
+    .block(block)
+    .column_spacing(2)
+    .row_highlight_style(Style::default().bg(ORANGE_HOT).fg(Color::Black).add_modifier(Modifier::BOLD))
+    .highlight_symbol("› ");
+
+    let mut state = TableState::default();
+    state.select(Some(app.selected));
+    f.render_stateful_widget(table, area, &mut state);
+}
+
+fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
+    let bg = Style::default().bg(BG);
+
+    // Line 0 — context: key hints (Normal) or the active prompt.
+    let context = match &app.mode {
+        Mode::Normal => Line::from(vec![
+            keyhint("↑/↓", "MOVE"),
+            keyhint("A", "ADD"),
+            keyhint("D", "DELETE"),
+            keyhint("U", "UPDATE"),
+            keyhint("Q", "QUIT"),
+            Span::styled("RUN:SOON", Style::default().fg(DIM)),
+        ]),
+        Mode::Adding { name: None, buf } => Line::from(vec![
+            Span::styled(" NAME ▸ ", Style::default().fg(ORANGE).add_modifier(Modifier::BOLD)),
+            Span::styled(buf.clone(), Style::default().fg(TEXT)),
+            Span::styled("█", Style::default().fg(ORANGE_HOT)),
+            Span::styled("   [ENTER] CONFIRM · [ESC] CANCEL", Style::default().fg(DIM)),
+        ]),
+        Mode::Adding { name: Some(n), buf } => Line::from(vec![
+            Span::styled(format!(" NAME={n}  "), Style::default().fg(MUTED)),
+            Span::styled("MODEL ▸ ", Style::default().fg(ORANGE).add_modifier(Modifier::BOLD)),
+            Span::styled(buf.clone(), Style::default().fg(TEXT)),
+            Span::styled("█", Style::default().fg(ORANGE_HOT)),
+            Span::styled("   [ENTER] CONFIRM · [ESC] CANCEL", Style::default().fg(DIM)),
+        ]),
         Mode::ConfirmDelete => {
             let n = &app.blueprints[app.selected].name;
-            format!("Delete '{n}'?  y / n")
+            Line::from(vec![
+                Span::styled(format!(" DELETE '{n}' ? "), Style::default().fg(ERR).add_modifier(Modifier::BOLD)),
+                Span::styled("[Y] / [N]", Style::default().fg(MUTED)),
+            ])
         }
     };
-    let footer = Paragraph::new(format!("{help}\n{}", app.status))
-        .style(Style::default().fg(Color::Gray));
-    f.render_widget(footer, chunks[2]);
+
+    // Line 1 — status echo.
+    let status = Line::from(Span::styled(
+        format!(" {}", app.status),
+        Style::default().fg(ORANGE),
+    ));
+
+    // Line 2 — telemetry bar.
+    let telemetry = Line::from(Span::styled(
+        format!(" AELLO v{VERSION} · STABLE · LOCAL_NODE_01 · {} BLUEPRINT(S)", app.blueprints.len()),
+        Style::default().fg(DIM),
+    ));
+
+    f.render_widget(Paragraph::new(vec![context, status, telemetry]).style(bg), area);
+}
+
+/// `[KEY] LABEL ` chip for the footer hint line.
+fn keyhint<'a>(key: &'a str, label: &'a str) -> Span<'a> {
+    Span::styled(
+        format!(" [{key}] {label}  "),
+        Style::default().fg(MUTED),
+    )
 }
