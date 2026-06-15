@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 
 mod config;
 mod models;
+mod tui;
 mod update;
 
 use models::Blueprint;
@@ -49,11 +50,7 @@ fn main() {
 
     let cli = Cli::parse();
     let result = match cli.command {
-        None => {
-            // No args → interactive mode (Phase 6). Placeholder for now.
-            println!("aello {} — interactive mode coming soon", env!("CARGO_PKG_VERSION"));
-            Ok(())
-        }
+        None => tui::run(),
         Some(Commands::Add { name, model, claude_md }) => cmd_add(name, model, claude_md),
         Some(Commands::List { json }) => cmd_list(json),
         Some(Commands::Remove { name }) => cmd_remove(name),
@@ -67,7 +64,7 @@ fn main() {
 }
 
 /// Blueprint names map to env-dir names, so keep them filesystem-safe.
-fn validate_name(name: &str) -> Result<()> {
+pub(crate) fn validate_name(name: &str) -> Result<()> {
     if name.is_empty() {
         bail!("name cannot be empty");
     }
@@ -83,7 +80,7 @@ const MODEL_ALIASES: &[&str] = &["opus", "sonnet", "haiku", "default"];
 /// Reject typo'd models before they reach settings.json. Accept a known alias
 /// (case-insensitive) or any full `claude-*` model id (forward-compatible with
 /// new releases without an exact-version allowlist).
-fn validate_model(model: &str) -> Result<()> {
+pub(crate) fn validate_model(model: &str) -> Result<()> {
     let m = model.trim().to_lowercase();
     if m.is_empty() {
         bail!("model cannot be empty");
