@@ -19,6 +19,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState};
 use ratatui::{backend::CrosstermBackend, Frame, Terminal};
 use std::io::{self, Stdout};
+use std::path::{Path, PathBuf};
 
 use crate::models::Blueprint;
 use crate::{config, project, sessions};
@@ -66,8 +67,43 @@ enum Mode {
     ConfirmDelete,
     /// Picking a past session to resume for blueprint `name`.
     Sessions { name: String, items: Vec<sessions::Session>, sel: usize },
-    /// Editing the unified contextdb path. Empty buf = use default.
-    Config { buf: String },
+    /// Folder picker for the unified contextdb path. `new` Some => typing a
+    /// new folder name to create under `dir`.
+    Config { dir: PathBuf, entries: Vec<String>, sel: usize, new: Option<String> },
+}
+
+/// Subdirectories of `dir` (sorted, dotfolders hidden), with ".." first if
+/// there's a parent.
+fn list_dirs(dir: &Path) -> Vec<String> {
+    let mut v: Vec<String> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| !n.starts_with('.'))
+        .collect();
+    v.sort_by_key(|s| s.to_lowercase());
+    if dir.parent().is_some() {
+        v.insert(0, "..".into());
+    }
+    v
+}
+
+/// Where the folder picker opens: the configured dir if it exists, else its
+/// parent, else home, else cwd.
+fn browse_start() -> PathBuf {
+    let cfg = config::load().unwrap_or_default();
+    let resolved = config::contextdb_dir(&cfg);
+    if resolved.is_dir() {
+        return resolved;
+    }
+    if let Some(p) = resolved.parent() {
+        if p.is_dir() {
+            return p.to_path_buf();
+        }
+    }
+    config::home_dir().unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
 }
 
 /// What to do after the TUI loop yields. Update/Run need the terminal restored
@@ -190,8 +226,9 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                 }
                 KeyCode::Char('c') => {
                     app.status.clear();
-                    let cur = config::load()?.contextdb.unwrap_or_default();
-                    app.mode = Mode::Config { buf: cur };
+                    let dir = browse_start();
+                    let entries = list_dirs(&dir);
+                    app.mode = Mode::Config { dir, entries, sel: 0, new: None };
                 }
                 KeyCode::Char('u') => return Ok(PostExit::Update),
                 KeyCode::Down | KeyCode::Char('j') => {
@@ -283,25 +320,74 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                 }
                 _ => {}
             },
-            Mode::Config { buf } => match key.code {
-                KeyCode::Esc => {
-                    app.mode = Mode::Normal;
-                    app.status = "CANCELLED".into();
+            Mode::Config { dir, entries, sel, new } => {
+                if let Some(buf) = new {
+                    // Typing a new folder name to create under `dir`.
+                    match key.code {
+                        KeyCode::Esc => *new = None,
+                        KeyCode::Backspace => {
+                            buf.pop();
+                        }
+                        KeyCode::Char(c) => buf.push(c),
+                        KeyCode::Enter => {
+                            let name = buf.trim();
+                            if !name.is_empty() {
+                                let target = dir.join(name);
+                                if std::fs::create_dir_all(&target).is_ok() {
+                                    *dir = target;
+                                    *entries = list_dirs(dir);
+                                    *sel = 0;
+                                }
+                            }
+                            *new = None;
+                        }
+                        _ => {}
+                    }
+                } else {
+                    match key.code {
+                        KeyCode::Esc => {
+                            app.mode = Mode::Normal;
+                            app.status = "CANCELLED".into();
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            if !entries.is_empty() {
+                                *sel = (*sel + 1).min(entries.len() - 1);
+                            }
+                        }
+                        KeyCode::Up | KeyCode::Char('k') => *sel = sel.saturating_sub(1),
+                        KeyCode::Left | KeyCode::Backspace => {
+                            if let Some(p) = dir.parent() {
+                                *dir = p.to_path_buf();
+                                *entries = list_dirs(dir);
+                                *sel = 0;
+                            }
+                        }
+                        KeyCode::Enter => {
+                            if let Some(name) = entries.get(*sel) {
+                                if name == ".." {
+                                    if let Some(p) = dir.parent() {
+                                        *dir = p.to_path_buf();
+                                    }
+                                } else {
+                                    *dir = dir.join(name);
+                                }
+                                *entries = list_dirs(dir);
+                                *sel = 0;
+                            }
+                        }
+                        KeyCode::Char('n') => *new = Some(String::new()),
+                        KeyCode::Char('s') => {
+                            let chosen = dir.to_string_lossy().into_owned();
+                            let mut cfg = config::load()?;
+                            cfg.contextdb = Some(chosen);
+                            config::save(&cfg)?;
+                            app.status = "CONTEXTDB FOLDER SAVED".into();
+                            app.mode = Mode::Normal;
+                        }
+                        _ => {}
+                    }
                 }
-                KeyCode::Backspace => {
-                    buf.pop();
-                }
-                KeyCode::Char(c) => buf.push(c),
-                KeyCode::Enter => {
-                    let v = buf.trim().to_string();
-                    let mut cfg = config::load()?;
-                    cfg.contextdb = if v.is_empty() { None } else { Some(v) };
-                    config::save(&cfg)?;
-                    app.status = "CONTEXTDB PATH SAVED".into();
-                    app.mode = Mode::Normal;
-                }
-                _ => {}
-            },
+            }
         }
     }
 }
@@ -326,7 +412,7 @@ fn draw(f: &mut Frame, app: &App) {
         Mode::AddModel { name, sel } => draw_add_model(f, name, *sel),
         Mode::ConfirmDelete => draw_confirm_delete(f, &app.blueprints[app.selected].name),
         Mode::Sessions { name, items, sel } => draw_sessions(f, name, items, *sel),
-        Mode::Config { buf } => draw_config(f, buf),
+        Mode::Config { dir, entries, sel, new } => draw_config(f, dir, entries, *sel, new),
     }
 }
 
@@ -507,31 +593,52 @@ fn draw_confirm_delete(f: &mut Frame, name: &str) {
     f.render_widget(Paragraph::new(body).style(Style::default().bg(SURFACE_HI)), inner);
 }
 
-fn draw_config(f: &mut Frame, buf: &str) {
-    let inner = modal(f, "CONFIG // CONTEXTDB", 70, 9);
+fn draw_config(f: &mut Frame, dir: &Path, entries: &[String], sel: usize, new: &Option<String>) {
+    const VIS: usize = 10; // visible rows
+    let inner = modal(f, "CONFIG // CONTEXTDB", 72, VIS as u16 + 6);
 
-    // Resolve what the current buffer would expand to.
-    let tmp = crate::models::Config {
-        contextdb: if buf.trim().is_empty() { None } else { Some(buf.trim().to_string()) },
-        ..Default::default()
-    };
-    let resolved = config::contextdb_dir(&tmp);
-
-    let shown = if buf.is_empty() { "(default)".to_string() } else { buf.to_string() };
-    let body = vec![
-        Line::from(Span::styled("  Unified PostCompact transcript folder.", Style::default().fg(MUTED))),
-        Line::from(""),
+    let mut lines = vec![
         Line::from(vec![
-            Span::styled("  PATH ▸ ", Style::default().fg(ORANGE).add_modifier(Modifier::BOLD)),
-            Span::styled(shown, Style::default().fg(TEXT)),
-            Span::styled("█", Style::default().fg(ORANGE_HOT)),
+            Span::styled("  DIR ", Style::default().fg(MUTED)),
+            Span::styled(dir.display().to_string(), Style::default().fg(AMBER).add_modifier(Modifier::BOLD)),
         ]),
-        Line::from(Span::styled(format!("  → {}", resolved.display()), Style::default().fg(AMBER))),
         Line::from(""),
-        Line::from(Span::styled("  Empty = default (~/aello/contextdb). ~ expands to home.", Style::default().fg(DIM))),
-        Line::from(Span::styled("  [ENTER] SAVE · [ESC] CANCEL", Style::default().fg(DIM))),
     ];
-    f.render_widget(Paragraph::new(body).style(Style::default().bg(SURFACE_HI)), inner);
+
+    if entries.is_empty() {
+        lines.push(Line::from(Span::styled("   (no subfolders)", Style::default().fg(DIM))));
+    } else {
+        // Window the list around the selection.
+        let start = sel.saturating_sub(VIS - 1).min(entries.len().saturating_sub(VIS));
+        for (i, name) in entries.iter().enumerate().skip(start).take(VIS) {
+            let label = if name == ".." { "../".to_string() } else { format!("{name}/") };
+            if i == sel {
+                lines.push(Line::from(Span::styled(
+                    format!(" › {label}"),
+                    Style::default().bg(ORANGE_HOT).fg(Color::Black).add_modifier(Modifier::BOLD),
+                )));
+            } else {
+                lines.push(Line::from(Span::styled(format!("   {label}"), Style::default().fg(TEXT))));
+            }
+        }
+    }
+
+    lines.push(Line::from(""));
+    if let Some(buf) = new {
+        lines.push(Line::from(vec![
+            Span::styled("  NEW FOLDER ▸ ", Style::default().fg(ORANGE).add_modifier(Modifier::BOLD)),
+            Span::styled(buf.clone(), Style::default().fg(TEXT)),
+            Span::styled("█", Style::default().fg(ORANGE_HOT)),
+            Span::styled("   [ENTER] CREATE · [ESC] CANCEL", Style::default().fg(DIM)),
+        ]));
+    } else {
+        lines.push(Line::from(Span::styled(
+            "  [↑/↓] MOVE · [↵] OPEN · [←] UP · [S] SELECT THIS · [N] NEW · [ESC] CANCEL",
+            Style::default().fg(DIM),
+        )));
+    }
+
+    f.render_widget(Paragraph::new(lines).style(Style::default().bg(SURFACE_HI)), inner);
 }
 
 fn draw_sessions(f: &mut Frame, name: &str, items: &[sessions::Session], sel: usize) {
