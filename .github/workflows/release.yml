@@ -1,8 +1,10 @@
 name: release
 
-# Rolling "latest" release: every push to main rebuilds the binaries and
-# replaces the single `latest` release. No version tags to manage —
-# `aello update` always pulls from `latest`.
+# Every push to main auto-bumps the patch version (+0.0.1), commits the bumped
+# Cargo.toml back, then builds the binaries from it and replaces the rolling
+# `latest` release. Bump minor/major by hand in Cargo.toml for big updates —
+# patch is automatic. The bump commit is pushed with GITHUB_TOKEN, which does
+# NOT re-trigger workflows, so there is no infinite loop.
 on:
   push:
     branches: [main]
@@ -12,8 +14,33 @@ permissions:
   contents: write
 
 jobs:
+  bump:
+    name: bump patch version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: bump patch in Cargo.toml
+        id: bump
+        run: |
+          cur=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+          IFS=. read -r MA MI PA <<< "$cur"
+          new="$MA.$MI.$((PA + 1))"
+          # Replace only the first (package) version line — dep versions are not at column 0.
+          sed -i -E "0,/^version = .*/s//version = \"$new\"/" Cargo.toml
+          echo "version=$new" >> "$GITHUB_OUTPUT"
+          echo "bumped $cur -> $new"
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -am "release: v$new [skip ci]"
+          git push origin main
+
   build:
     name: build ${{ matrix.asset }}
+    needs: bump
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -25,7 +52,10 @@ jobs:
             target: x86_64-pc-windows-msvc
             asset: aello-x86_64-windows.exe
     steps:
+      # Check out main HEAD (the bump commit) so the binary reports the new version.
       - uses: actions/checkout@v4
+        with:
+          ref: main
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -44,7 +74,7 @@ jobs:
 
   release:
     name: publish latest
-    needs: build
+    needs: [bump, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -55,9 +85,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.bump.outputs.version }}
         run: |
           gh release delete latest --yes --cleanup-tag || true
           gh release create latest dist/* \
-            --title "latest" \
-            --notes "Rolling build from ${{ github.sha }}" \
+            --title "v$VERSION" \
+            --notes "aello v$VERSION — build ${{ github.sha }}" \
             --latest
