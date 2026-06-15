@@ -1,12 +1,14 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 
 mod config;
+mod launch;
 mod models;
+mod project;
 mod tui;
 mod update;
 
-use models::Blueprint;
+use models::{Blueprint, Instance};
 
 /// Isolated Claude Code environments — like venvs, but for AI agents.
 #[derive(Parser)]
@@ -35,9 +37,23 @@ enum Commands {
     },
     /// Remove a blueprint by name.
     Remove { name: String },
+    /// Place a blueprint in the current directory and launch it.
+    Run {
+        /// Blueprint name (optional if you have exactly one).
+        name: Option<String>,
+        /// Resume the most recent session, or a specific session id.
+        #[arg(long, num_args = 0..=1, default_missing_value = "")]
+        resume: Option<Option<String>>,
+        /// Run a single prompt headless and exit.
+        #[arg(short = 'p', long)]
+        prompt: Option<String>,
+        /// Extra args passed straight to claude (after `--`).
+        #[arg(last = true)]
+        extra: Vec<String>,
+    },
     /// Update aello to the latest build from GitHub.
     Update,
-    // More subcommands land here in later phases (run, edit, hook, ...).
+    // More subcommands land here in later phases (edit, sessions, ...).
 }
 
 fn main() {
@@ -54,6 +70,7 @@ fn main() {
         Some(Commands::Add { name, model, claude_md }) => cmd_add(name, model, claude_md),
         Some(Commands::List { json }) => cmd_list(json),
         Some(Commands::Remove { name }) => cmd_remove(name),
+        Some(Commands::Run { name, resume, prompt, extra }) => cmd_run(name, resume, prompt, extra),
         Some(Commands::Update) => update::run(),
     };
 
@@ -117,6 +134,53 @@ fn cmd_remove(name: String) -> Result<()> {
     config::save(&cfg)?;
     println!("Removed blueprint '{name}'.");
     Ok(())
+}
+
+fn cmd_run(
+    name: Option<String>,
+    resume: Option<Option<String>>,
+    prompt: Option<String>,
+    extra: Vec<String>,
+) -> Result<()> {
+    let cfg = config::load()?;
+    let bp: &Blueprint = match &name {
+        Some(n) => cfg.find(n).with_context(|| format!("no blueprint named '{n}'"))?,
+        None => match cfg.blueprints.as_slice() {
+            [one] => one,
+            [] => bail!("no blueprints — add one with: aello add <name> --model <model>"),
+            _ => bail!("multiple blueprints — specify one: aello run <name>"),
+        },
+    };
+
+    let project = std::env::current_dir().context("could not determine current directory")?;
+    let env = project::env_dir(&project, &bp.name);
+    let inst = Instance { name: bp.name.clone(), model: bp.model.clone() };
+
+    // Read the CLAUDE.md template contents if the blueprint points at one.
+    let claude_md = match &bp.claude_md {
+        Some(path) => match std::fs::read_to_string(path) {
+            Ok(c) => Some(c),
+            Err(_) => {
+                eprintln!("warning: claude_md '{path}' not found — skipping");
+                None
+            }
+        },
+        None => None,
+    };
+
+    project::place(&env, &inst, claude_md.as_deref())?;
+
+    if !env.join(".credentials.json").exists() {
+        println!("Launching '{}' — new env, Claude will prompt login on first use.", bp.name);
+    }
+
+    // `--resume` with no value means "continue most recent".
+    let resume = match resume {
+        Some(Some(s)) if s.is_empty() => Some(None),
+        other => other,
+    };
+    let code = launch::launch(&env, resume.as_ref(), prompt.as_deref(), &extra)?;
+    std::process::exit(code);
 }
 
 fn cmd_list(json: bool) -> Result<()> {

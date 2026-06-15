@@ -11,6 +11,14 @@ pub struct Blueprint {
     pub claude_md: Option<String>,
 }
 
+/// A blueprint placed into a project directory. Stored as `.aello.toml` inside
+/// the env dir.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Instance {
+    pub name: String,
+    pub model: String,
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
