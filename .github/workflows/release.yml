@@ -1,0 +1,63 @@
+name: release
+
+# Rolling "latest" release: every push to main rebuilds the binaries and
+# replaces the single `latest` release. No version tags to manage —
+# `aello update` always pulls from `latest`.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build ${{ matrix.asset }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            asset: aello-x86_64-linux
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset: aello-x86_64-windows.exe
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --target ${{ matrix.target }}
+      - name: stage binary
+        shell: bash
+        run: |
+          src="target/${{ matrix.target }}/release/aello"
+          [ -f "$src.exe" ] && src="$src.exe"
+          cp "$src" "${{ matrix.asset }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+
+  release:
+    name: publish latest
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: replace rolling latest release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest dist/* \
+            --title "latest" \
+            --notes "Rolling build from ${{ github.sha }}" \
+            --latest
