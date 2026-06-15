@@ -20,8 +20,8 @@ use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Table
 use ratatui::{backend::CrosstermBackend, Frame, Terminal};
 use std::io::{self, Stdout};
 
-use crate::config;
 use crate::models::Blueprint;
+use crate::{config, project, sessions};
 
 type Term = Terminal<CrosstermBackend<Stdout>>;
 
@@ -64,6 +64,8 @@ enum Mode {
     AddName { buf: String },
     AddModel { name: String, sel: usize },
     ConfirmDelete,
+    /// Picking a past session to resume for blueprint `name`.
+    Sessions { name: String, items: Vec<sessions::Session>, sel: usize },
 }
 
 /// What to do after the TUI loop yields. Update/Run need the terminal restored
@@ -71,7 +73,8 @@ enum Mode {
 enum PostExit {
     Quit,
     Update,
-    Run(String),
+    /// Run a blueprint; `session` Some(id) resumes that session, None starts fresh.
+    Run { name: String, session: Option<String> },
 }
 
 struct App {
@@ -124,10 +127,11 @@ pub fn run() -> Result<()> {
                 }
                 return Ok(());
             }
-            PostExit::Run(name) => {
+            PostExit::Run { name, session } => {
                 // Terminal is restored; Claude takes over. On return, loop
-                // re-enters the TUI fresh.
-                if let Err(e) = crate::run_blueprint(&name, None, None, &[]) {
+                // re-enters the TUI fresh. session Some(id) → --resume id.
+                let resume = session.map(Some);
+                if let Err(e) = crate::run_blueprint(&name, resume, None, &[]) {
                     eprintln!("error: {e:#}");
                     eprintln!("(press Enter to return to aello)");
                     let mut _s = String::new();
@@ -166,7 +170,20 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                 KeyCode::Char('q') | KeyCode::Esc => return Ok(PostExit::Quit),
                 KeyCode::Enter => {
                     if let Some(b) = app.blueprints.get(app.selected) {
-                        return Ok(PostExit::Run(b.name.clone()));
+                        return Ok(PostExit::Run { name: b.name.clone(), session: None });
+                    }
+                }
+                KeyCode::Char('s') => {
+                    if let Some(b) = app.blueprints.get(app.selected) {
+                        let name = b.name.clone();
+                        let cwd = std::env::current_dir().unwrap_or_default();
+                        let env = project::env_dir(&cwd, &name);
+                        let items = sessions::list(&env, &cwd);
+                        if items.is_empty() {
+                            app.status = format!("NO SESSIONS FOR '{name}' IN THIS DIR");
+                        } else {
+                            app.mode = Mode::Sessions { name, items, sel: 0 };
+                        }
                     }
                 }
                 KeyCode::Char('u') => return Ok(PostExit::Update),
@@ -247,6 +264,18 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                 }
                 _ => {}
             },
+            Mode::Sessions { name, items, sel } => match key.code {
+                KeyCode::Esc => app.mode = Mode::Normal,
+                KeyCode::Down | KeyCode::Char('j') => *sel = (*sel + 1).min(items.len() - 1),
+                KeyCode::Up | KeyCode::Char('k') => *sel = sel.saturating_sub(1),
+                KeyCode::Enter => {
+                    return Ok(PostExit::Run {
+                        name: name.clone(),
+                        session: Some(items[*sel].id.clone()),
+                    });
+                }
+                _ => {}
+            },
         }
     }
 }
@@ -270,6 +299,7 @@ fn draw(f: &mut Frame, app: &App) {
         Mode::AddName { buf } => draw_add_name(f, buf),
         Mode::AddModel { name, sel } => draw_add_model(f, name, *sel),
         Mode::ConfirmDelete => draw_confirm_delete(f, &app.blueprints[app.selected].name),
+        Mode::Sessions { name, items, sel } => draw_sessions(f, name, items, *sel),
     }
 }
 
@@ -343,6 +373,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
     let hints = Line::from(vec![
         keyhint("↑/↓", "MOVE"),
         Span::styled(" [↵] RUN  ", Style::default().fg(ORANGE_HOT).add_modifier(Modifier::BOLD)),
+        keyhint("S", "SESSIONS"),
         keyhint("A", "ADD"),
         keyhint("D", "DELETE"),
         keyhint("U", "UPDATE"),
@@ -446,4 +477,33 @@ fn draw_confirm_delete(f: &mut Frame, name: &str) {
         Line::from(Span::styled("  [Y] CONFIRM · [N] CANCEL", Style::default().fg(DIM))),
     ];
     f.render_widget(Paragraph::new(body).style(Style::default().bg(SURFACE_HI)), inner);
+}
+
+fn draw_sessions(f: &mut Frame, name: &str, items: &[sessions::Session], sel: usize) {
+    let shown = items.len().min(12);
+    let inner = modal(f, &format!("RESUME // {}", name.to_uppercase()), 66, shown as u16 + 5);
+
+    let mut lines = vec![Line::from(Span::styled(
+        format!("  {} session(s) — newest first", items.len()),
+        Style::default().fg(MUTED),
+    ))];
+    for (i, s) in items.iter().take(shown).enumerate() {
+        let kb = s.size.div_ceil(1024);
+        let label = format!("{:<8}  {}  {:>5} KB", &s.id[..s.id.len().min(8)], sessions::format_utc(s.modified), kb);
+        if i == sel {
+            lines.push(Line::from(Span::styled(
+                format!(" › {label}"),
+                Style::default().bg(ORANGE_HOT).fg(Color::Black).add_modifier(Modifier::BOLD),
+            )));
+        } else {
+            lines.push(Line::from(Span::styled(format!("   {label}"), Style::default().fg(TEXT))));
+        }
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  [↑/↓] SELECT · [ENTER] RESUME · [ESC] CANCEL",
+        Style::default().fg(DIM),
+    )));
+
+    f.render_widget(Paragraph::new(lines).style(Style::default().bg(SURFACE_HI)), inner);
 }

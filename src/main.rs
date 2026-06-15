@@ -5,6 +5,7 @@ mod config;
 mod launch;
 mod models;
 mod project;
+mod sessions;
 mod tui;
 mod update;
 
