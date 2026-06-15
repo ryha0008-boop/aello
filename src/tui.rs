@@ -66,11 +66,12 @@ enum Mode {
     ConfirmDelete,
 }
 
-/// What to do after the TUI exits. Update can't run while the alternate screen
-/// is active, so defer it until the terminal is restored.
+/// What to do after the TUI loop yields. Update/Run need the terminal restored
+/// first (Claude takes over the screen); after Run we re-enter the TUI.
 enum PostExit {
     Quit,
     Update,
+    Run(String),
 }
 
 struct App {
@@ -106,21 +107,33 @@ pub fn run() -> Result<()> {
     // Capture before any update replaces the binary at this path.
     let exe = std::env::current_exe().ok();
 
-    let mut terminal = setup()?;
-    let result = run_app(&mut terminal);
-    restore(&mut terminal);
+    loop {
+        let mut terminal = setup()?;
+        let result = run_app(&mut terminal);
+        restore(&mut terminal);
 
-    match result? {
-        PostExit::Quit => Ok(()),
-        PostExit::Update => {
-            crate::update::run()?;
-            // Re-launch the freshly-installed binary so the TUI reopens on the
-            // new version instead of just closing.
-            if let Some(exe) = exe {
-                let status = std::process::Command::new(exe).status()?;
-                std::process::exit(status.code().unwrap_or(0));
+        match result? {
+            PostExit::Quit => return Ok(()),
+            PostExit::Update => {
+                crate::update::run()?;
+                // Re-launch the freshly-installed binary so the TUI reopens on
+                // the new version instead of just closing.
+                if let Some(exe) = exe {
+                    let status = std::process::Command::new(exe).status()?;
+                    std::process::exit(status.code().unwrap_or(0));
+                }
+                return Ok(());
             }
-            Ok(())
+            PostExit::Run(name) => {
+                // Terminal is restored; Claude takes over. On return, loop
+                // re-enters the TUI fresh.
+                if let Err(e) = crate::run_blueprint(&name, None, None, &[]) {
+                    eprintln!("error: {e:#}");
+                    eprintln!("(press Enter to return to aello)");
+                    let mut _s = String::new();
+                    let _ = std::io::stdin().read_line(&mut _s);
+                }
+            }
         }
     }
 }
@@ -151,6 +164,11 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
         match &mut app.mode {
             Mode::Normal => match key.code {
                 KeyCode::Char('q') | KeyCode::Esc => return Ok(PostExit::Quit),
+                KeyCode::Enter => {
+                    if let Some(b) = app.blueprints.get(app.selected) {
+                        return Ok(PostExit::Run(b.name.clone()));
+                    }
+                }
                 KeyCode::Char('u') => return Ok(PostExit::Update),
                 KeyCode::Down | KeyCode::Char('j') => {
                     if !app.blueprints.is_empty() {
@@ -324,11 +342,11 @@ fn draw_registry(f: &mut Frame, area: Rect, app: &App) {
 fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
     let hints = Line::from(vec![
         keyhint("↑/↓", "MOVE"),
+        Span::styled(" [↵] RUN  ", Style::default().fg(ORANGE_HOT).add_modifier(Modifier::BOLD)),
         keyhint("A", "ADD"),
         keyhint("D", "DELETE"),
         keyhint("U", "UPDATE"),
         keyhint("Q", "QUIT"),
-        Span::styled("RUN:SOON", Style::default().fg(DIM)),
     ]);
     let status = Line::from(Span::styled(format!(" {}", app.status), Style::default().fg(ORANGE)));
     let telemetry = Line::from(Span::styled(

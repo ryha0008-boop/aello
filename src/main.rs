@@ -143,14 +143,33 @@ fn cmd_run(
     extra: Vec<String>,
 ) -> Result<()> {
     let cfg = config::load()?;
-    let bp: &Blueprint = match &name {
-        Some(n) => cfg.find(n).with_context(|| format!("no blueprint named '{n}'"))?,
+    let bp_name = match name {
+        Some(n) => {
+            if cfg.find(&n).is_none() {
+                bail!("no blueprint named '{n}'");
+            }
+            n
+        }
         None => match cfg.blueprints.as_slice() {
-            [one] => one,
+            [one] => one.name.clone(),
             [] => bail!("no blueprints — add one with: aello add <name> --model <model>"),
             _ => bail!("multiple blueprints — specify one: aello run <name>"),
         },
     };
+    let code = run_blueprint(&bp_name, resume, prompt.as_deref(), &extra)?;
+    std::process::exit(code);
+}
+
+/// Place a named blueprint into the current dir and launch Claude. Returns the
+/// child exit code. Shared by the CLI `run` command and the TUI's Enter action.
+pub(crate) fn run_blueprint(
+    name: &str,
+    resume: Option<Option<String>>,
+    prompt: Option<&str>,
+    extra: &[String],
+) -> Result<i32> {
+    let cfg = config::load()?;
+    let bp = cfg.find(name).with_context(|| format!("no blueprint named '{name}'"))?;
 
     let project = std::env::current_dir().context("could not determine current directory")?;
     let env = project::env_dir(&project, &bp.name);
@@ -179,8 +198,7 @@ fn cmd_run(
         Some(Some(s)) if s.is_empty() => Some(None),
         other => other,
     };
-    let code = launch::launch(&env, resume.as_ref(), prompt.as_deref(), &extra)?;
-    std::process::exit(code);
+    launch::launch(&env, resume.as_ref(), prompt, extra)
 }
 
 fn cmd_list(json: bool) -> Result<()> {
