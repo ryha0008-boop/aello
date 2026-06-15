@@ -32,6 +32,8 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Remove a blueprint by name.
+    Remove { name: String },
     /// Update aello to the latest build from GitHub.
     Update,
     // More subcommands land here in later phases (run, edit, hook, ...).
@@ -54,6 +56,7 @@ fn main() {
         }
         Some(Commands::Add { name, model, claude_md }) => cmd_add(name, model, claude_md),
         Some(Commands::List { json }) => cmd_list(json),
+        Some(Commands::Remove { name }) => cmd_remove(name),
         Some(Commands::Update) => update::run(),
     };
 
@@ -104,6 +107,18 @@ fn cmd_add(name: String, model: String, claude_md: Option<String>) -> Result<()>
     cfg.blueprints.push(Blueprint { name: name.clone(), model, claude_md });
     config::save(&cfg)?;
     println!("Added blueprint '{name}'.");
+    Ok(())
+}
+
+fn cmd_remove(name: String) -> Result<()> {
+    let mut cfg = config::load()?;
+    let before = cfg.blueprints.len();
+    cfg.blueprints.retain(|b| b.name != name);
+    if cfg.blueprints.len() == before {
+        bail!("no blueprint named '{name}'");
+    }
+    config::save(&cfg)?;
+    println!("Removed blueprint '{name}'.");
     Ok(())
 }
 
