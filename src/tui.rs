@@ -595,7 +595,7 @@ fn draw_confirm_delete(f: &mut Frame, name: &str) {
 
 fn draw_config(f: &mut Frame, dir: &Path, entries: &[String], sel: usize, new: &Option<String>) {
     const VIS: usize = 10; // visible rows
-    let inner = modal(f, "CONFIG // CONTEXTDB", 72, VIS as u16 + 6);
+    let inner = modal(f, "CONFIG // CONTEXTDB", 72, VIS as u16 + 7);
 
     let mut lines = vec![
         Line::from(vec![
@@ -629,11 +629,16 @@ fn draw_config(f: &mut Frame, dir: &Path, entries: &[String], sel: usize, new: &
             Span::styled("  NEW FOLDER ▸ ", Style::default().fg(ORANGE).add_modifier(Modifier::BOLD)),
             Span::styled(buf.clone(), Style::default().fg(TEXT)),
             Span::styled("█", Style::default().fg(ORANGE_HOT)),
-            Span::styled("   [ENTER] CREATE · [ESC] CANCEL", Style::default().fg(DIM)),
         ]));
+        lines.push(Line::from(Span::styled("  [↵] CREATE · [ESC] CANCEL", Style::default().fg(DIM))));
     } else {
+        // Two short lines so nothing overruns the modal border.
         lines.push(Line::from(Span::styled(
-            "  [↑/↓] MOVE · [↵] OPEN · [←] UP · [S] SELECT THIS · [N] NEW · [ESC] CANCEL",
+            "  ↑/↓ move · ↵ open · ← up",
+            Style::default().fg(DIM),
+        )));
+        lines.push(Line::from(Span::styled(
+            "  [S] select this · [N] new · [ESC] cancel",
             Style::default().fg(DIM),
         )));
     }
