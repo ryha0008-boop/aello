@@ -81,14 +81,19 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - name: replace rolling latest release
+      - name: publish rolling latest release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           VERSION: ${{ needs.bump.outputs.version }}
         run: |
-          gh release delete latest --yes --cleanup-tag || true
-          gh release create latest dist/* \
-            --title "v$VERSION" \
-            --notes "aello v$VERSION — build ${{ github.sha }}" \
-            --latest
+          notes="aello v$VERSION — build ${{ github.sha }}"
+          # Keep ONE permanent published release tagged `latest`; never delete it
+          # (delete+recreate intermittently produced a draft → 404 on update).
+          # Just clobber its assets and refresh title/notes each build.
+          if gh release view latest >/dev/null 2>&1; then
+            gh release upload latest dist/* --clobber
+            gh release edit latest --title "v$VERSION" --notes "$notes" --draft=false --latest
+          else
+            gh release create latest dist/* --title "v$VERSION" --notes "$notes" --latest
+          fi
