@@ -74,8 +74,29 @@ fn validate_name(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Short aliases Claude Code accepts in settings.json "model".
+const MODEL_ALIASES: &[&str] = &["opus", "sonnet", "haiku", "default"];
+
+/// Reject typo'd models before they reach settings.json. Accept a known alias
+/// (case-insensitive) or any full `claude-*` model id (forward-compatible with
+/// new releases without an exact-version allowlist).
+fn validate_model(model: &str) -> Result<()> {
+    let m = model.trim().to_lowercase();
+    if m.is_empty() {
+        bail!("model cannot be empty");
+    }
+    if MODEL_ALIASES.contains(&m.as_str()) || m.starts_with("claude-") {
+        return Ok(());
+    }
+    bail!(
+        "unknown model '{model}'. Use an alias ({}) or a full model id like claude-opus-4-8",
+        MODEL_ALIASES.join(", ")
+    );
+}
+
 fn cmd_add(name: String, model: String, claude_md: Option<String>) -> Result<()> {
     validate_name(&name)?;
+    validate_model(&model)?;
     let mut cfg = config::load()?;
     if cfg.find(&name).is_some() {
         bail!("blueprint '{name}' already exists");
@@ -125,6 +146,20 @@ mod tests {
     fn invalid_names_rejected() {
         for n in ["", "bad name", "a/b", "x.y", "a:b"] {
             assert!(validate_name(n).is_err(), "{n:?} should be rejected");
+        }
+    }
+
+    #[test]
+    fn valid_models_accepted() {
+        for m in ["opus", "Sonnet", "HAIKU", "default", "claude-opus-4-8", "claude-fable-5"] {
+            assert!(validate_model(m).is_ok(), "{m} should be valid");
+        }
+    }
+
+    #[test]
+    fn invalid_models_rejected() {
+        for m in ["", "opu", "sonnett", "gpt-4", "opus4"] {
+            assert!(validate_model(m).is_err(), "{m:?} should be rejected");
         }
     }
 }
