@@ -40,6 +40,18 @@ const ERR: Color = Color::Rgb(0xff, 0xb4, 0xab); // error
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Launch directory as "PARENT / CURRENT", uppercased (e.g. "WORK / AELLO-TEST").
+fn launch_dir_label() -> String {
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let cur = cwd.file_name().map(|s| s.to_string_lossy().into_owned());
+    let parent = cwd.parent().and_then(|p| p.file_name()).map(|s| s.to_string_lossy().into_owned());
+    match (parent, cur) {
+        (Some(p), Some(c)) => format!("{p} / {c}").to_uppercase(),
+        (_, Some(c)) => c.to_uppercase(),
+        _ => "—".into(),
+    }
+}
+
 /// Curated model choices — picked from a list so the user never types a model.
 const MODELS: &[(&str, &str)] = &[
     ("opus", "most capable"),
@@ -66,6 +78,8 @@ struct App {
     selected: usize,
     mode: Mode,
     status: String,
+    /// Launch directory as "PARENT / CURRENT", uppercased — shown top-right.
+    dir: String,
 }
 
 impl App {
@@ -75,6 +89,7 @@ impl App {
             selected: 0,
             mode: Mode::Normal,
             status: String::new(),
+            dir: launch_dir_label(),
         })
     }
 
@@ -246,12 +261,11 @@ fn draw_header(f: &mut Frame, area: Rect) {
         .constraints([Constraint::Min(0), Constraint::Length(20)])
         .split(area);
 
-    // Original single-line header; AELLO letter-spaced + bold to read larger.
-    let brand = Line::from(vec![
-        Span::styled(" A E L L O", Style::default().fg(ORANGE_HOT).add_modifier(Modifier::BOLD)),
-        Span::styled("   //   ", Style::default().fg(DIM)),
-        Span::styled("BLUEPRINT_REGISTRY", Style::default().fg(MUTED)),
-    ]);
+    // Letter-spaced, bold AELLO wordmark — nothing else on the left.
+    let brand = Line::from(Span::styled(
+        " A E L L O",
+        Style::default().fg(ORANGE_HOT).add_modifier(Modifier::BOLD),
+    ));
     f.render_widget(Paragraph::new(brand).style(Style::default().bg(BG)), cols[0]);
 
     let telemetry = Line::from(Span::styled("SYS_ADMIN_SEC_7 ◆ ", Style::default().fg(DIM)));
@@ -265,8 +279,7 @@ fn draw_registry(f: &mut Frame, area: Rect, app: &App) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(DIM))
-        .title(Span::styled(" BLUEPRINTS ", Style::default().fg(ORANGE_HOT).add_modifier(Modifier::BOLD)))
-        .title_top(Line::from(Span::styled(" NODE_REGISTRY·0x7F ", Style::default().fg(MUTED))).right_aligned())
+        .title_top(Line::from(Span::styled(format!(" {} ", app.dir), Style::default().fg(MUTED))).right_aligned())
         .style(Style::default().bg(SURFACE));
 
     if app.blueprints.is_empty() {
