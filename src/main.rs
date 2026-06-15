@@ -208,7 +208,10 @@ pub(crate) fn run_blueprint(
 
     // Concurrency-safe shared login: pass the long-lived OAuth token to the env.
     // No token configured → Claude prompts its own login in this env.
-    if cfg.oauth_token.is_none() && !env.join(".credentials.json").exists() {
+    if cfg.oauth_token.is_some() {
+        // Token handles auth; skip Claude's interactive first-run wizard.
+        let _ = project::mark_onboarded(&env);
+    } else if !env.join(".credentials.json").exists() {
         println!("Launching '{}' — no shared token (run `aello login`); Claude will prompt login.", bp.name);
     }
 

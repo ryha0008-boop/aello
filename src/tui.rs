@@ -38,6 +38,7 @@ const TEXT: Color = Color::Rgb(0xe5, 0xe2, 0xe1); // on-surface
 const MUTED: Color = Color::Rgb(0xaa, 0x8a, 0x7d); // outline
 const DIM: Color = Color::Rgb(0x5a, 0x41, 0x36); // outline-variant
 const ERR: Color = Color::Rgb(0xff, 0xb4, 0xab); // error
+const GREEN: Color = Color::Rgb(0x4a, 0xff, 0x8a); // success ("matrix" green)
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -517,11 +518,18 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         keyhint("Q", "QUIT"),
     ]);
     let status = Line::from(Span::styled(format!(" {}", app.status), Style::default().fg(ORANGE)));
-    let auth = if app.has_token { "TOKEN" } else { "PER-ENV LOGIN" };
-    let telemetry = Line::from(Span::styled(
-        format!(" AELLO v{VERSION} · {} BLUEPRINT(S) · AUTH:{auth}", app.blueprints.len()),
-        Style::default().fg(DIM),
-    ));
+    let auth_span = if app.has_token {
+        Span::styled("AUTH: TOKEN ✓", Style::default().fg(GREEN).add_modifier(Modifier::BOLD))
+    } else {
+        Span::styled("AUTH: NONE ✗ (press L)", Style::default().fg(ERR))
+    };
+    let telemetry = Line::from(vec![
+        Span::styled(
+            format!(" AELLO v{VERSION} · {} BLUEPRINT(S) · ", app.blueprints.len()),
+            Style::default().fg(DIM),
+        ),
+        auth_span,
+    ]);
     f.render_widget(
         Paragraph::new(vec![hints, status, telemetry]).style(Style::default().bg(BG)),
         area,

@@ -12,6 +12,22 @@ pub fn env_dir(project: &Path, name: &str) -> PathBuf {
     project.join(format!(".claude-env-{name}"))
 }
 
+/// Mark the env as onboarded so interactive `claude` skips its first-run
+/// wizard (theme/login) and goes straight in — auth is handled by the shared
+/// token. Merges `hasCompletedOnboarding: true` into `.claude.json`.
+pub fn mark_onboarded(env_dir: &Path) -> Result<()> {
+    let path = env_dir.join(".claude.json");
+    let mut v: serde_json::Value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    if let Some(obj) = v.as_object_mut() {
+        obj.insert("hasCompletedOnboarding".into(), serde_json::Value::Bool(true));
+    }
+    std::fs::write(&path, serde_json::to_string_pretty(&v)?)
+        .context("could not write .claude.json")
+}
+
 #[allow(dead_code)] // used in later phases (edit/sessions)
 pub fn load_instance(env_dir: &Path) -> Option<Instance> {
     let text = std::fs::read_to_string(env_dir.join(".aello.toml")).ok()?;
