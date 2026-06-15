@@ -83,13 +83,25 @@ fn replace_binary(exe: &std::path::Path, buf: &[u8]) -> Result<()> {
             return Err(e).context("failed to write new binary");
         }
     }
+    // Unix can't write() over a running executable (ETXTBSY). Write the new
+    // binary to a temp file in the same directory, then rename it over the
+    // original — rename swaps the path atomically even while the old binary
+    // is still executing.
     #[cfg(not(windows))]
     {
-        std::fs::write(exe, buf).context("failed to write new binary")?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(exe, std::fs::Permissions::from_mode(0o755));
+        use std::os::unix::fs::PermissionsExt;
+        let dir = exe.parent().unwrap_or_else(|| std::path::Path::new("."));
+        let tmp = dir.join(format!(".aello-update-{}", std::process::id()));
+        std::fs::write(&tmp, buf).with_context(|| {
+            format!(
+                "failed to write to {} — need write access to the install dir (use a user-writable PATH dir like ~/.local/bin, or run with sudo)",
+                dir.display()
+            )
+        })?;
+        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755));
+        if let Err(e) = std::fs::rename(&tmp, exe) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e).context("failed to replace binary — need write access to the install dir");
         }
     }
     Ok(())
