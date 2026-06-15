@@ -45,10 +45,6 @@ const MODELS: &[(&str, &str)] = &[
     ("opus", "most capable"),
     ("sonnet", "balanced speed / intelligence"),
     ("haiku", "fastest, cheapest"),
-    ("default", "account default"),
-    ("claude-opus-4-8", "Opus 4.8 — pinned"),
-    ("claude-sonnet-4-6", "Sonnet 4.6 — pinned"),
-    ("claude-fable-5", "Fable 5 — most powerful"),
 ];
 
 enum Mode {
@@ -229,7 +225,7 @@ fn draw(f: &mut Frame, app: &App) {
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(3), Constraint::Length(3)])
+        .constraints([Constraint::Length(3), Constraint::Min(3), Constraint::Length(3)])
         .split(f.area());
 
     draw_header(f, chunks[0]);
@@ -245,27 +241,30 @@ fn draw(f: &mut Frame, app: &App) {
 }
 
 fn draw_header(f: &mut Frame, area: Rect) {
-    // Raised, filled title bar so the brand reads loud.
-    f.render_widget(Block::default().style(Style::default().bg(SURFACE_HI)), area);
-
     let cols = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Min(0), Constraint::Length(20)])
         .split(area);
 
-    let brand = Line::from(vec![
-        Span::styled(" AELLO ", Style::default().fg(Color::Black).bg(ORANGE_HOT).add_modifier(Modifier::BOLD)),
-        Span::styled("  //  ", Style::default().fg(DIM).bg(SURFACE_HI)),
-        Span::styled("BLUEPRINT_REGISTRY", Style::default().fg(ORANGE).bg(SURFACE_HI).add_modifier(Modifier::BOLD)),
-    ]);
-    f.render_widget(Paragraph::new(brand).style(Style::default().bg(SURFACE_HI)), cols[0]);
-
-    let telemetry = Line::from(vec![
-        Span::styled("SEC_7 ", Style::default().fg(AMBER).bg(SURFACE_HI)),
-        Span::styled("◆ ", Style::default().fg(ORANGE_HOT).bg(SURFACE_HI)),
-    ]);
+    // Big block-letter AELLO banner.
+    let banner = vec![
+        Line::raw(" █▀█ █▀▀ █   █   █▀█"),
+        Line::raw(" █▀█ █▀▀ █   █   █ █"),
+        Line::raw(" ▀ ▀ ▀▀▀ ▀▀▀ ▀▀▀ ▀▀▀"),
+    ];
     f.render_widget(
-        Paragraph::new(telemetry).alignment(Alignment::Right).style(Style::default().bg(SURFACE_HI)),
+        Paragraph::new(banner)
+            .style(Style::default().fg(ORANGE_HOT).bg(BG).add_modifier(Modifier::BOLD)),
+        cols[0],
+    );
+
+    let right = vec![
+        Line::from(Span::styled("SYS_ADMIN_SEC_7 ◆", Style::default().fg(AMBER))),
+        Line::from(Span::styled("BLUEPRINT_REGISTRY", Style::default().fg(ORANGE))),
+        Line::from(Span::styled("NODE·0x7F", Style::default().fg(DIM))),
+    ];
+    f.render_widget(
+        Paragraph::new(right).alignment(Alignment::Right).style(Style::default().bg(BG)),
         cols[1],
     );
 }
