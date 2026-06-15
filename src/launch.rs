@@ -11,9 +11,12 @@ pub fn launch(
     resume: Option<&Option<String>>,
     prompt: Option<&str>,
     extra: &[String],
+    contextdb: &Path,
 ) -> Result<i32> {
     let mut c = Command::new("claude");
     c.env("CLAUDE_CONFIG_DIR", env_dir);
+    // Unified transcript folder for the PostCompact hook.
+    c.env("AELLO_CONTEXTDB", contextdb);
 
     match resume {
         Some(Some(id)) => {

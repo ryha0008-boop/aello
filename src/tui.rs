@@ -66,6 +66,8 @@ enum Mode {
     ConfirmDelete,
     /// Picking a past session to resume for blueprint `name`.
     Sessions { name: String, items: Vec<sessions::Session>, sel: usize },
+    /// Editing the unified contextdb path. Empty buf = use default.
+    Config { buf: String },
 }
 
 /// What to do after the TUI loop yields. Update/Run need the terminal restored
@@ -186,6 +188,11 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                         }
                     }
                 }
+                KeyCode::Char('c') => {
+                    app.status.clear();
+                    let cur = config::load()?.contextdb.unwrap_or_default();
+                    app.mode = Mode::Config { buf: cur };
+                }
                 KeyCode::Char('u') => return Ok(PostExit::Update),
                 KeyCode::Down | KeyCode::Char('j') => {
                     if !app.blueprints.is_empty() {
@@ -276,6 +283,25 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                 }
                 _ => {}
             },
+            Mode::Config { buf } => match key.code {
+                KeyCode::Esc => {
+                    app.mode = Mode::Normal;
+                    app.status = "CANCELLED".into();
+                }
+                KeyCode::Backspace => {
+                    buf.pop();
+                }
+                KeyCode::Char(c) => buf.push(c),
+                KeyCode::Enter => {
+                    let v = buf.trim().to_string();
+                    let mut cfg = config::load()?;
+                    cfg.contextdb = if v.is_empty() { None } else { Some(v) };
+                    config::save(&cfg)?;
+                    app.status = "CONTEXTDB PATH SAVED".into();
+                    app.mode = Mode::Normal;
+                }
+                _ => {}
+            },
         }
     }
 }
@@ -300,6 +326,7 @@ fn draw(f: &mut Frame, app: &App) {
         Mode::AddModel { name, sel } => draw_add_model(f, name, *sel),
         Mode::ConfirmDelete => draw_confirm_delete(f, &app.blueprints[app.selected].name),
         Mode::Sessions { name, items, sel } => draw_sessions(f, name, items, *sel),
+        Mode::Config { buf } => draw_config(f, buf),
     }
 }
 
@@ -376,6 +403,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         keyhint("S", "SESSIONS"),
         keyhint("A", "ADD"),
         keyhint("D", "DELETE"),
+        keyhint("C", "CONTEXTDB"),
         keyhint("U", "UPDATE"),
         keyhint("Q", "QUIT"),
     ]);
@@ -475,6 +503,33 @@ fn draw_confirm_delete(f: &mut Frame, name: &str) {
         ]),
         Line::from(""),
         Line::from(Span::styled("  [Y] CONFIRM · [N] CANCEL", Style::default().fg(DIM))),
+    ];
+    f.render_widget(Paragraph::new(body).style(Style::default().bg(SURFACE_HI)), inner);
+}
+
+fn draw_config(f: &mut Frame, buf: &str) {
+    let inner = modal(f, "CONFIG // CONTEXTDB", 70, 9);
+
+    // Resolve what the current buffer would expand to.
+    let tmp = crate::models::Config {
+        contextdb: if buf.trim().is_empty() { None } else { Some(buf.trim().to_string()) },
+        ..Default::default()
+    };
+    let resolved = config::contextdb_dir(&tmp);
+
+    let shown = if buf.is_empty() { "(default)".to_string() } else { buf.to_string() };
+    let body = vec![
+        Line::from(Span::styled("  Unified PostCompact transcript folder.", Style::default().fg(MUTED))),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  PATH ▸ ", Style::default().fg(ORANGE).add_modifier(Modifier::BOLD)),
+            Span::styled(shown, Style::default().fg(TEXT)),
+            Span::styled("█", Style::default().fg(ORANGE_HOT)),
+        ]),
+        Line::from(Span::styled(format!("  → {}", resolved.display()), Style::default().fg(AMBER))),
+        Line::from(""),
+        Line::from(Span::styled("  Empty = default (~/aello/contextdb). ~ expands to home.", Style::default().fg(DIM))),
+        Line::from(Span::styled("  [ENTER] SAVE · [ESC] CANCEL", Style::default().fg(DIM))),
     ];
     f.render_widget(Paragraph::new(body).style(Style::default().bg(SURFACE_HI)), inner);
 }

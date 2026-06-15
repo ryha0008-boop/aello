@@ -13,6 +13,32 @@ pub fn config_dir() -> Result<PathBuf> {
     Ok(pd.config_dir().to_path_buf())
 }
 
+/// Default contextdb path when unset.
+pub const DEFAULT_CONTEXTDB: &str = "~/aello/contextdb";
+
+/// Resolve the unified contextdb path (config value or default), expanding `~`.
+pub fn contextdb_dir(cfg: &Config) -> PathBuf {
+    let raw = cfg.contextdb.as_deref().unwrap_or(DEFAULT_CONTEXTDB);
+    expand_home(raw)
+}
+
+fn home() -> Option<PathBuf> {
+    directories::BaseDirs::new().map(|b| b.home_dir().to_path_buf())
+}
+
+/// Expand a leading `~` to the home directory; otherwise pass through.
+fn expand_home(p: &str) -> PathBuf {
+    if p == "~" {
+        return home().unwrap_or_else(|| PathBuf::from(p));
+    }
+    if let Some(rest) = p.strip_prefix("~/").or_else(|| p.strip_prefix("~\\")) {
+        if let Some(h) = home() {
+            return h.join(rest);
+        }
+    }
+    PathBuf::from(p)
+}
+
 pub fn config_path() -> Result<PathBuf> {
     Ok(config_dir()?.join("config.toml"))
 }

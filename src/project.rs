@@ -39,11 +39,11 @@ pub fn place(env_dir: &Path, inst: &Instance, claude_md: Option<&str>) -> Result
         }
     }
 
-    let hook = env_dir.join("hooks").join("post-compact.py");
-    if !hook.exists() {
-        std::fs::create_dir_all(env_dir.join("hooks")).context("could not create hooks dir")?;
-        std::fs::write(&hook, POST_COMPACT_SCRIPT).context("could not write post-compact.py")?;
-    }
+    // Always refresh the hook script so updates (e.g. AELLO_CONTEXTDB support)
+    // propagate to existing envs on the next run.
+    std::fs::create_dir_all(env_dir.join("hooks")).context("could not create hooks dir")?;
+    std::fs::write(env_dir.join("hooks").join("post-compact.py"), POST_COMPACT_SCRIPT)
+        .context("could not write post-compact.py")?;
 
     Ok(())
 }

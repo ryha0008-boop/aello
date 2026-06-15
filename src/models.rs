@@ -23,6 +23,10 @@ pub struct Instance {
 pub struct Config {
     #[serde(default)]
     pub blueprints: Vec<Blueprint>,
+    /// Unified folder for PostCompact transcripts (per-machine). `~` allowed.
+    /// Unset → default `~/aello/contextdb`. Configurable from the TUI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contextdb: Option<String>,
 }
 
 impl Config {

@@ -18,7 +18,12 @@ prefix = ".claude-env-"
 if agent.startswith(prefix):
     agent = agent[len(prefix):]
 
-contextdb_dir = os.path.join(env_dir, "contextdb")
+# Unified location if aello passed one (AELLO_CONTEXTDB), else local to the env.
+base = os.environ.get("AELLO_CONTEXTDB", "")
+if base:
+    contextdb_dir = os.path.join(base, agent)
+else:
+    contextdb_dir = os.path.join(env_dir, "contextdb")
 os.makedirs(contextdb_dir, exist_ok=True)
 
 ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")

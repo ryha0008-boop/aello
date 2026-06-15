@@ -199,7 +199,8 @@ pub(crate) fn run_blueprint(
         Some(Some(s)) if s.is_empty() => Some(None),
         other => other,
     };
-    launch::launch(&env, resume.as_ref(), prompt, extra)
+    let contextdb = config::contextdb_dir(&cfg);
+    launch::launch(&env, resume.as_ref(), prompt, extra, &contextdb)
 }
 
 fn cmd_list(json: bool) -> Result<()> {
