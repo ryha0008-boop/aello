@@ -1,6 +1,6 @@
 [package]
 name = "aello"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
 description = "Isolated Claude Code environments — like venvs, but for AI agents"
 
