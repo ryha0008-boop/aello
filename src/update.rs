@@ -42,10 +42,16 @@ pub fn run() -> Result<()> {
         .with_context(|| format!("no {expected} in latest release — download from: {RELEASES_PAGE}"))?;
 
     let url = asset["browser_download_url"].as_str().context("missing download URL")?;
-    let sha = release["target_commitish"].as_str().unwrap_or("");
-    let short_sha = sha.get(..7).unwrap_or(sha);
+    // CI writes "Rolling build from <sha>" into the release notes; pull the
+    // commit from there (target_commitish is just the branch name).
+    let sha = release["body"]
+        .as_str()
+        .and_then(|b| b.split_whitespace().last())
+        .filter(|s| s.len() >= 7 && s.chars().all(|c| c.is_ascii_hexdigit()))
+        .map(|s| &s[..7])
+        .unwrap_or("");
     println!("ok");
-    println!("Downloading {expected}{}...", if short_sha.is_empty() { String::new() } else { format!(" ({short_sha})") });
+    println!("Downloading {expected}{}...", if sha.is_empty() { String::new() } else { format!(" ({sha})") });
 
     let mut reader = ureq::get(url)
         .set("User-Agent", &ua)
