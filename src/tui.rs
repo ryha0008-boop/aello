@@ -111,6 +111,8 @@ fn browse_start() -> PathBuf {
 enum PostExit {
     Quit,
     Update,
+    /// Run `claude setup-token` and store the shared login token.
+    Login,
     /// Run a blueprint; `session` Some(id) resumes that session, None starts fresh.
     Run { name: String, session: Option<String> },
 }
@@ -122,14 +124,14 @@ struct App {
     status: String,
     /// Launch directory as "PARENT / CURRENT", uppercased — shown top-right.
     dir: String,
-    share_login: bool,
+    has_token: bool,
 }
 
 impl App {
     fn load() -> Result<Self> {
         let cfg = config::load()?;
         Ok(Self {
-            share_login: config::share_login(&cfg),
+            has_token: cfg.oauth_token.is_some(),
             blueprints: cfg.blueprints,
             selected: 0,
             mode: Mode::Normal,
@@ -167,6 +169,22 @@ pub fn run() -> Result<()> {
                     std::process::exit(status.code().unwrap_or(0));
                 }
                 return Ok(());
+            }
+            PostExit::Login => {
+                // Terminal restored; setup-token runs its browser flow here.
+                match crate::auth::capture_setup_token() {
+                    Ok(Some(token)) => {
+                        let mut cfg = config::load()?;
+                        cfg.oauth_token = Some(token);
+                        config::save(&cfg)?;
+                        println!("Saved shared login token.");
+                    }
+                    Ok(None) => println!("Login cancelled."),
+                    Err(e) => eprintln!("error: {e:#}"),
+                }
+                eprintln!("(press Enter to return to aello)");
+                let mut _s = String::new();
+                let _ = std::io::stdin().read_line(&mut _s);
             }
             PostExit::Run { name, session } => {
                 // Terminal is restored; Claude takes over. On return, loop
@@ -233,14 +251,7 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                     let entries = list_dirs(&dir);
                     app.mode = Mode::Config { dir, entries, sel: 0, new: None };
                 }
-                KeyCode::Char('l') => {
-                    let mut cfg = config::load()?;
-                    let new = !config::share_login(&cfg);
-                    cfg.share_login = Some(new);
-                    config::save(&cfg)?;
-                    app.share_login = new;
-                    app.status = if new { "SHARED LOGIN: ON".into() } else { "SHARED LOGIN: OFF".into() };
-                }
+                KeyCode::Char('l') => return Ok(PostExit::Login),
                 KeyCode::Char('u') => return Ok(PostExit::Update),
                 KeyCode::Down | KeyCode::Char('j') => {
                     if !app.blueprints.is_empty() {
@@ -506,9 +517,9 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         keyhint("Q", "QUIT"),
     ]);
     let status = Line::from(Span::styled(format!(" {}", app.status), Style::default().fg(ORANGE)));
-    let login = if app.share_login { "SHARED" } else { "PER-ENV" };
+    let auth = if app.has_token { "TOKEN" } else { "PER-ENV LOGIN" };
     let telemetry = Line::from(Span::styled(
-        format!(" AELLO v{VERSION} · {} BLUEPRINT(S) · LOGIN:{login}", app.blueprints.len()),
+        format!(" AELLO v{VERSION} · {} BLUEPRINT(S) · AUTH:{auth}", app.blueprints.len()),
         Style::default().fg(DIM),
     ));
     f.render_widget(

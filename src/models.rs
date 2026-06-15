@@ -27,9 +27,11 @@ pub struct Config {
     /// Unset → default `~/aello/contextdb`. Configurable from the TUI.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contextdb: Option<String>,
-    /// Share one Claude login across all envs via a central cache. Unset → on.
+    /// Long-lived Claude OAuth token (from `claude setup-token`), passed to
+    /// every env as CLAUDE_CODE_OAUTH_TOKEN. Doesn't rotate, so concurrent envs
+    /// share it safely. Set via `aello login`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub share_login: Option<bool>,
+    pub oauth_token: Option<String>,
 }
 
 impl Config {

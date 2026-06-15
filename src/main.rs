@@ -1,6 +1,7 @@
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 
+mod auth;
 mod config;
 mod launch;
 mod models;
@@ -52,6 +53,8 @@ enum Commands {
         #[arg(last = true)]
         extra: Vec<String>,
     },
+    /// Generate + store a shared Claude login token (runs `claude setup-token`).
+    Login,
     /// Update aello to the latest build from GitHub.
     Update,
     // More subcommands land here in later phases (edit, sessions, ...).
@@ -84,6 +87,7 @@ fn main() {
         Some(Commands::List { json }) => cmd_list(json),
         Some(Commands::Remove { name }) => cmd_remove(name),
         Some(Commands::Run { name, resume, prompt, extra }) => cmd_run(name, resume, prompt, extra),
+        Some(Commands::Login) => cmd_login(),
         Some(Commands::Update) => update::run(),
     };
 
@@ -202,20 +206,10 @@ pub(crate) fn run_blueprint(
 
     project::place(&env, &inst, claude_md.as_deref())?;
 
-    // Shared login: seed this env's credentials from the central cache (freshest)
-    // or the normal ~/.claude login, so a new env doesn't prompt for login.
-    let share = config::share_login(&cfg);
-    let env_creds = env.join(".credentials.json");
-    if share && !env_creds.exists() {
-        let source = config::credentials_cache()
-            .filter(|p| p.exists())
-            .or_else(|| config::default_claude_creds().filter(|p| p.exists()));
-        if let Some(src) = source {
-            let _ = std::fs::copy(&src, &env_creds);
-        }
-    }
-    if !env_creds.exists() {
-        println!("Launching '{}' — new env, Claude will prompt login on first use.", bp.name);
+    // Concurrency-safe shared login: pass the long-lived OAuth token to the env.
+    // No token configured → Claude prompts its own login in this env.
+    if cfg.oauth_token.is_none() && !env.join(".credentials.json").exists() {
+        println!("Launching '{}' — no shared token (run `aello login`); Claude will prompt login.", bp.name);
     }
 
     // `--resume` with no value means "continue most recent".
@@ -224,19 +218,20 @@ pub(crate) fn run_blueprint(
         other => other,
     };
     let contextdb = config::contextdb_dir(&cfg);
-    let code = launch::launch(&env, resume.as_ref(), prompt, extra, &contextdb)?;
+    launch::launch(&env, resume.as_ref(), prompt, extra, &contextdb, cfg.oauth_token.as_deref())
+}
 
-    // Refresh the central cache from this env so future envs get the latest
-    // (refreshed) token.
-    if share && env_creds.exists() {
-        if let Some(cache) = config::credentials_cache() {
-            if let Some(parent) = cache.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            let _ = std::fs::copy(&env_creds, &cache);
+fn cmd_login() -> Result<()> {
+    match auth::capture_setup_token()? {
+        Some(token) => {
+            let mut cfg = config::load()?;
+            cfg.oauth_token = Some(token);
+            config::save(&cfg)?;
+            println!("Saved shared login token. All envs will use it (CLAUDE_CODE_OAUTH_TOKEN).");
         }
+        None => println!("Cancelled — no token saved."),
     }
-    Ok(code)
+    Ok(())
 }
 
 fn cmd_list(json: bool) -> Result<()> {

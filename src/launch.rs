@@ -12,11 +12,16 @@ pub fn launch(
     prompt: Option<&str>,
     extra: &[String],
     contextdb: &Path,
+    oauth_token: Option<&str>,
 ) -> Result<i32> {
     let mut c = Command::new("claude");
     c.env("CLAUDE_CONFIG_DIR", env_dir);
     // Unified transcript folder for the PostCompact hook.
     c.env("AELLO_CONTEXTDB", contextdb);
+    // Long-lived OAuth token — concurrency-safe shared login (no rotation).
+    if let Some(t) = oauth_token {
+        c.env("CLAUDE_CODE_OAUTH_TOKEN", t);
+    }
 
     match resume {
         Some(Some(id)) => {
