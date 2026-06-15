@@ -58,11 +58,23 @@ enum Commands {
 }
 
 fn main() {
-    // Windows leaves the previous binary as aello.exe.old after a self-update;
-    // remove it on the next launch.
+    // Windows leaves the previous binary as aello.exe.old-<n> after a
+    // self-update; sweep up any such leftovers on launch (locked ones, from a
+    // still-running old instance, are skipped silently).
     #[cfg(windows)]
     if let Ok(exe) = std::env::current_exe() {
-        let _ = std::fs::remove_file(exe.with_extension("exe.old"));
+        if let (Some(dir), Some(name)) =
+            (exe.parent(), exe.file_name().and_then(|n| n.to_str()))
+        {
+            let prefix = format!("{name}.old");
+            if let Ok(rd) = std::fs::read_dir(dir) {
+                for e in rd.flatten() {
+                    if e.file_name().to_str().is_some_and(|f| f.starts_with(&prefix)) {
+                        let _ = std::fs::remove_file(e.path());
+                    }
+                }
+            }
+        }
     }
 
     let cli = Cli::parse();

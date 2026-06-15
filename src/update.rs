@@ -74,10 +74,19 @@ pub fn run() -> Result<()> {
 fn replace_binary(exe: &std::path::Path, buf: &[u8]) -> Result<()> {
     #[cfg(windows)]
     {
-        let old = exe.with_extension("exe.old");
-        let _ = std::fs::remove_file(&old);
+        // Rename the running exe aside under a UNIQUE name. A fixed name
+        // (aello.exe.old) collides + access-denies when another aello instance
+        // is still running from a previous .old. Cleaned up on next launch.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let mut old = exe.to_path_buf().into_os_string();
+        old.push(format!(".old-{nanos}"));
+        let old = std::path::PathBuf::from(old);
+
         std::fs::rename(exe, &old)
-            .context("could not rename current binary — try running as administrator")?;
+            .context("could not rename current binary — close any other running aello, then retry")?;
         if let Err(e) = std::fs::write(exe, buf) {
             let _ = std::fs::rename(&old, exe); // restore on failure
             return Err(e).context("failed to write new binary");
