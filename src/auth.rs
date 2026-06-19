@@ -5,31 +5,45 @@
 //! (whose refresh tokens rotate and break parallel envs).
 
 use anyhow::{Context, Result};
+use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 
-/// Run `claude setup-token`, letting the browser/login flow show on stderr while
-/// capturing stdout to grab the printed token. Falls back to pasting if the
-/// token can't be parsed. Returns None if the user cancels.
+/// Run `claude setup-token`, capturing the printed token. Its stdout carries the
+/// auth URL (critical on a headless VPS) AND the token, so we tee it: each line
+/// is echoed to our stdout as it arrives — the URL shows live — while we scan
+/// for the token. Falls back to pasting if the token can't be parsed. Returns
+/// None if the user cancels.
 pub fn capture_setup_token() -> Result<Option<String>> {
     println!("Running 'claude setup-token' — complete the login in your browser...");
-    let out = Command::new("claude")
+    let mut child = Command::new("claude")
         .arg("setup-token")
         .stdin(Stdio::inherit())
         .stderr(Stdio::inherit())
         .stdout(Stdio::piped())
         .spawn()
-        .context("could not run 'claude setup-token' — is Claude Code on PATH?")?
-        .wait_with_output()
-        .context("'claude setup-token' failed")?;
+        .context("could not run 'claude setup-token' — is Claude Code on PATH?")?;
 
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    if let Some(tok) = extract_token(&stdout) {
+    let mut captured = String::new();
+    if let Some(stdout) = child.stdout.take() {
+        let mut out = std::io::stdout();
+        for line in BufReader::new(stdout).lines() {
+            let line = line.unwrap_or_default();
+            // Echo live so the auth URL is visible (headless VPS has no browser).
+            let _ = writeln!(out, "{line}");
+            let _ = out.flush();
+            captured.push_str(&line);
+            captured.push('\n');
+        }
+    }
+    child.wait().context("'claude setup-token' failed")?;
+
+    if let Some(tok) = extract_token(&captured) {
         return Ok(Some(tok));
     }
 
     // Couldn't parse it from stdout — let the user paste it.
     print!("Couldn't read the token automatically. Paste it (sk-ant-...), or blank to cancel: ");
-    std::io::Write::flush(&mut std::io::stdout()).ok();
+    std::io::stdout().flush().ok();
     let mut line = String::new();
     std::io::stdin().read_line(&mut line)?;
     let t = line.trim();
