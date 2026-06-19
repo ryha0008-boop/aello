@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.1.18]
+## [0.1.19]
 
 ### Fixed
 - `aello login` now streams `claude setup-token` output live, so the auth URL is
