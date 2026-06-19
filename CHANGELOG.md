@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.23]
+
+### Added
+- `README.md` (install, concepts, command + capability reference) and `docs/`
+  (`concepts.md`, `capabilities.md`).
+
 ## [0.1.20]
 
 ### Added
