@@ -15,6 +15,9 @@
   blueprint identity (`<name> <name@aello.local>`), and the GitHub `/sync` section
   appends an `Env: <name>` commit trailer — so `git blame`/`git log` reveal which
   blueprint made each change.
+- With the `github` capability, `run` seeds/appends a `.claude-env-*` line to the
+  project's `.gitignore` (idempotent), so env dirs and their credentials are never
+  committed.
 
 ## [0.1.19]
 

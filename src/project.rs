@@ -121,7 +121,29 @@ fn scaffold_project(project: &Path, caps: &Capabilities) -> Result<()> {
                 .context("could not write project CLAUDE.md")?;
         }
     }
+    if caps.github {
+        // Keep env dirs (and the credentials inside them) out of the repo.
+        ensure_gitignore_entry(project, ".claude-env-*")?;
+    }
     Ok(())
+}
+
+/// Ensure `entry` exists as its own line in the project's `.gitignore`, creating
+/// the file or appending as needed. Idempotent — a matching line (ignoring
+/// surrounding whitespace) is never duplicated. Preserves existing content.
+fn ensure_gitignore_entry(project: &Path, entry: &str) -> Result<()> {
+    let path = project.join(".gitignore");
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    if existing.lines().any(|l| l.trim() == entry) {
+        return Ok(());
+    }
+    let mut out = existing;
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str(entry);
+    out.push('\n');
+    std::fs::write(&path, out).context("could not write .gitignore")
 }
 
 /// settings.json for an isolated Claude env: subscription auth (no keys, no env
@@ -202,6 +224,41 @@ mod tests {
         assert!(!proj.path().join("README.md").exists()); // readme not selected
         assert!(!proj.path().join("docs").exists()); // docs not selected
         assert!(env.join("CLAUDE.md").exists()); // global persona in the env
+    }
+
+    #[test]
+    fn github_cap_gitignores_env_dirs_idempotently() {
+        let proj = tempfile::tempdir().unwrap();
+        let env = env_dir(proj.path(), "demo");
+        let inst = Instance { name: "demo".into(), model: "haiku".into() };
+        let caps = Capabilities { github: true, ..Default::default() };
+        let gi = proj.path().join(".gitignore");
+
+        // Pre-existing .gitignore with unrelated content, no trailing newline.
+        std::fs::write(&gi, "target/\n*.log").unwrap();
+
+        // First placement appends the entry, preserving existing lines.
+        place(&env, &inst, None, &caps).unwrap();
+        let after_first = std::fs::read_to_string(&gi).unwrap();
+        assert!(after_first.contains("target/"));
+        assert!(after_first.contains("*.log"));
+        assert_eq!(after_first.matches(".claude-env-*").count(), 1);
+
+        // Second placement must NOT duplicate the entry.
+        place(&env, &inst, None, &caps).unwrap();
+        let after_second = std::fs::read_to_string(&gi).unwrap();
+        assert_eq!(after_second.matches(".claude-env-*").count(), 1);
+    }
+
+    #[test]
+    fn no_github_cap_writes_no_gitignore() {
+        let proj = tempfile::tempdir().unwrap();
+        let env = env_dir(proj.path(), "bare");
+        let inst = Instance { name: "bare".into(), model: "haiku".into() };
+        let caps = Capabilities { changelog: true, ..Default::default() };
+
+        place(&env, &inst, None, &caps).unwrap();
+        assert!(!proj.path().join(".gitignore").exists());
     }
 
     #[test]
