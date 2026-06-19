@@ -1,7 +1,7 @@
 //! Placing a blueprint into a project: the env dir, its `.aello.toml`,
 //! `settings.json`, optional CLAUDE.md, and the PostCompact hook script.
 
-use crate::models::Instance;
+use crate::models::{Capabilities, Instance};
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
@@ -35,8 +35,15 @@ pub fn load_instance(env_dir: &Path) -> Option<Instance> {
 }
 
 /// Place an instance into its env dir: write `.aello.toml`, and seed
-/// `settings.json`, CLAUDE.md, and the PostCompact hook if absent.
-pub fn place(env_dir: &Path, inst: &Instance, claude_md: Option<&str>) -> Result<()> {
+/// `settings.json`, CLAUDE.md, and the PostCompact hook if absent. Then, from
+/// `caps`, regenerate the `/sync` skill and scaffold the project files this
+/// blueprint maintains.
+pub fn place(
+    env_dir: &Path,
+    inst: &Instance,
+    claude_md: Option<&str>,
+    caps: &Capabilities,
+) -> Result<()> {
     std::fs::create_dir_all(env_dir).context("could not create env dir")?;
 
     std::fs::write(env_dir.join(".aello.toml"), toml::to_string_pretty(inst)?)
@@ -48,6 +55,7 @@ pub fn place(env_dir: &Path, inst: &Instance, claude_md: Option<&str>) -> Result
             .context("could not write settings.json")?;
     }
 
+    // Global persona — set once, never clobbered (the user may have edited it).
     if let Some(content) = claude_md {
         let path = env_dir.join("CLAUDE.md");
         if !path.exists() {
@@ -61,6 +69,58 @@ pub fn place(env_dir: &Path, inst: &Instance, claude_md: Option<&str>) -> Result
     std::fs::write(env_dir.join("hooks").join("post-compact.py"), POST_COMPACT_SCRIPT)
         .context("could not write post-compact.py")?;
 
+    // Regenerate the tailored /sync skill from current caps (or remove it if the
+    // blueprint no longer maintains anything).
+    let skill = env_dir.join("skills").join("sync").join("SKILL.md");
+    if caps.any() {
+        std::fs::create_dir_all(skill.parent().unwrap())
+            .context("could not create skills dir")?;
+        std::fs::write(&skill, crate::templates::render_sync_skill(caps, &inst.name))
+            .context("could not write sync SKILL.md")?;
+    } else if skill.exists() {
+        let _ = std::fs::remove_file(&skill);
+    }
+
+    // Scaffold the project-dir files this blueprint maintains (only if missing).
+    let project = env_dir.parent().unwrap_or(env_dir);
+    scaffold_project(project, caps)?;
+
+    Ok(())
+}
+
+/// Create the docs the enabled capabilities expect, only when absent — so a
+/// fresh project gets its CHANGELOG/README/docs/CLAUDE.md, and existing files
+/// are left untouched. GitHub has no file to scaffold (the repo/remote is
+/// handled interactively by `/sync`).
+fn scaffold_project(project: &Path, caps: &Capabilities) -> Result<()> {
+    let name = project
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("project");
+
+    if caps.changelog {
+        let p = project.join("CHANGELOG.md");
+        if !p.exists() {
+            std::fs::write(&p, "# Changelog\n\n## [Unreleased]\n")
+                .context("could not write CHANGELOG.md")?;
+        }
+    }
+    if caps.readme {
+        let p = project.join("README.md");
+        if !p.exists() {
+            std::fs::write(&p, format!("# {name}\n")).context("could not write README.md")?;
+        }
+    }
+    if caps.docs {
+        std::fs::create_dir_all(project.join("docs")).context("could not create docs dir")?;
+    }
+    if caps.project_md {
+        let p = project.join("CLAUDE.md");
+        if !p.exists() {
+            std::fs::write(&p, format!("# {name}\n\nProject-specific instructions for Claude.\n"))
+                .context("could not write project CLAUDE.md")?;
+        }
+    }
     Ok(())
 }
 
@@ -120,5 +180,39 @@ mod tests {
         assert_eq!(v["model"], "sonnet");
         assert_eq!(v["permissions"]["defaultMode"], "bypassPermissions");
         assert!(v["hooks"]["PostCompact"].is_array());
+    }
+
+    #[test]
+    fn place_seeds_sync_and_scaffolds_selected_files() {
+        let proj = tempfile::tempdir().unwrap();
+        let env = env_dir(proj.path(), "coder");
+        let inst = Instance { name: "coder".into(), model: "opus".into() };
+        let caps = Capabilities { changelog: true, github: true, ..Default::default() };
+
+        place(&env, &inst, Some("# persona"), &caps).unwrap();
+
+        // /sync skill seeded inside the env, reflecting caps.
+        let skill = std::fs::read_to_string(env.join("skills/sync/SKILL.md")).unwrap();
+        assert!(skill.contains("Commit + push"));
+        assert!(skill.contains("CHANGELOG.md"));
+        assert!(!skill.contains("README.md"));
+
+        // Scaffolds land in the PROJECT dir, only for enabled caps.
+        assert!(proj.path().join("CHANGELOG.md").exists());
+        assert!(!proj.path().join("README.md").exists()); // readme not selected
+        assert!(!proj.path().join("docs").exists()); // docs not selected
+        assert!(env.join("CLAUDE.md").exists()); // global persona in the env
+    }
+
+    #[test]
+    fn place_without_caps_seeds_no_sync_skill() {
+        let proj = tempfile::tempdir().unwrap();
+        let env = env_dir(proj.path(), "bare");
+        let inst = Instance { name: "bare".into(), model: "sonnet".into() };
+
+        place(&env, &inst, None, &Capabilities::default()).unwrap();
+
+        assert!(!env.join("skills/sync/SKILL.md").exists());
+        assert!(!proj.path().join("CHANGELOG.md").exists());
     }
 }

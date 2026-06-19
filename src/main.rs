@@ -7,10 +7,11 @@ mod launch;
 mod models;
 mod project;
 mod sessions;
+mod templates;
 mod tui;
 mod update;
 
-use models::{Blueprint, Instance};
+use models::{Blueprint, Capabilities, Instance};
 
 /// Isolated Claude Code environments — like venvs, but for AI agents.
 #[derive(Parser)]
@@ -28,9 +29,25 @@ enum Commands {
         /// Claude model, e.g. sonnet, opus, haiku.
         #[arg(long)]
         model: String,
-        /// Path to a CLAUDE.md template copied into the env dir on first run.
+        /// Global persona: a built-in template (coder, sysadmin) or a path to a
+        /// CLAUDE.md file, placed into the env dir on first run.
         #[arg(long)]
         claude_md: Option<String>,
+        /// `/sync` maintains a project-level CLAUDE.md.
+        #[arg(long)]
+        project_md: bool,
+        /// `/sync` commits and pushes to GitHub.
+        #[arg(long)]
+        github: bool,
+        /// `/sync` keeps CHANGELOG.md current.
+        #[arg(long)]
+        changelog: bool,
+        /// `/sync` keeps the docs/ directory current.
+        #[arg(long)]
+        docs: bool,
+        /// `/sync` keeps README.md current.
+        #[arg(long)]
+        readme: bool,
     },
     /// List all blueprints.
     List {
@@ -83,7 +100,9 @@ fn main() {
     let cli = Cli::parse();
     let result = match cli.command {
         None => tui::run(),
-        Some(Commands::Add { name, model, claude_md }) => cmd_add(name, model, claude_md),
+        Some(Commands::Add { name, model, claude_md, project_md, github, changelog, docs, readme }) => {
+            cmd_add(name, model, claude_md, Capabilities { project_md, github, changelog, docs, readme })
+        }
         Some(Commands::List { json }) => cmd_list(json),
         Some(Commands::Remove { name }) => cmd_remove(name),
         Some(Commands::Run { name, resume, prompt, extra }) => cmd_run(name, resume, prompt, extra),
@@ -128,14 +147,23 @@ pub(crate) fn validate_model(model: &str) -> Result<()> {
     );
 }
 
-fn cmd_add(name: String, model: String, claude_md: Option<String>) -> Result<()> {
+fn cmd_add(
+    name: String,
+    model: String,
+    claude_md: Option<String>,
+    caps: Capabilities,
+) -> Result<()> {
     validate_name(&name)?;
     validate_model(&model)?;
+    // Catch a typo'd built-in / missing template path at add time, not first run.
+    if let Some(cm) = &claude_md {
+        templates::resolve(cm)?;
+    }
     let mut cfg = config::load()?;
     if cfg.find(&name).is_some() {
         bail!("blueprint '{name}' already exists");
     }
-    cfg.blueprints.push(Blueprint { name: name.clone(), model, claude_md });
+    cfg.blueprints.push(Blueprint { name: name.clone(), model, claude_md, caps });
     config::save(&cfg)?;
     println!("Added blueprint '{name}'.");
     Ok(())
@@ -192,19 +220,19 @@ pub(crate) fn run_blueprint(
     let env = project::env_dir(&project, &bp.name);
     let inst = Instance { name: bp.name.clone(), model: bp.model.clone() };
 
-    // Read the CLAUDE.md template contents if the blueprint points at one.
+    // Resolve the global persona: a built-in template name or a file path.
     let claude_md = match &bp.claude_md {
-        Some(path) => match std::fs::read_to_string(path) {
+        Some(spec) => match templates::resolve(spec) {
             Ok(c) => Some(c),
-            Err(_) => {
-                eprintln!("warning: claude_md '{path}' not found — skipping");
+            Err(e) => {
+                eprintln!("warning: {e:#} — skipping CLAUDE.md");
                 None
             }
         },
         None => None,
     };
 
-    project::place(&env, &inst, claude_md.as_deref())?;
+    project::place(&env, &inst, claude_md.as_deref(), &bp.caps)?;
 
     // Concurrency-safe shared login: pass the long-lived OAuth token to the env.
     // No token configured → Claude prompts its own login in this env.
@@ -221,7 +249,7 @@ pub(crate) fn run_blueprint(
         other => other,
     };
     let contextdb = config::contextdb_dir(&cfg);
-    launch::launch(&env, resume.as_ref(), prompt, extra, &contextdb, cfg.oauth_token.as_deref())
+    launch::launch(&env, &bp.name, resume.as_ref(), prompt, extra, &contextdb, cfg.oauth_token.as_deref())
 }
 
 fn cmd_login() -> Result<()> {
@@ -249,16 +277,49 @@ fn cmd_list(json: bool) -> Result<()> {
     }
     let name_w = cfg.blueprints.iter().map(|b| b.name.len()).max().unwrap_or(4).max(4);
     let model_w = cfg.blueprints.iter().map(|b| b.model.len()).max().unwrap_or(5).max(5);
-    println!("{:<name_w$}  {:<model_w$}  CLAUDE.md", "NAME", "MODEL");
+    let cm_w = cfg
+        .blueprints
+        .iter()
+        .map(|b| b.claude_md.as_deref().unwrap_or("-").len())
+        .max()
+        .unwrap_or(9)
+        .max(9);
+    println!("{:<name_w$}  {:<model_w$}  {:<cm_w$}  SYNC", "NAME", "MODEL", "CLAUDE.md");
     for b in &cfg.blueprints {
         println!(
-            "{:<name_w$}  {:<model_w$}  {}",
+            "{:<name_w$}  {:<model_w$}  {:<cm_w$}  {}",
             b.name,
             b.model,
-            b.claude_md.as_deref().unwrap_or("-")
+            b.claude_md.as_deref().unwrap_or("-"),
+            caps_label(&b.caps),
         );
     }
     Ok(())
+}
+
+/// Compact one-line summary of enabled capabilities for `list`.
+fn caps_label(c: &Capabilities) -> String {
+    let mut tags = Vec::new();
+    if c.project_md {
+        tags.push("project-md");
+    }
+    if c.github {
+        tags.push("github");
+    }
+    if c.changelog {
+        tags.push("changelog");
+    }
+    if c.docs {
+        tags.push("docs");
+    }
+    if c.readme {
+        tags.push("readme");
+    }
+    if tags.is_empty() {
+        "-".to_string()
+    } else {
+        tags.join(",")
+    }
 }
 
 #[cfg(test)]

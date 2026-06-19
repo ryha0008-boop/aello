@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.1.20]
+
+### Added
+- Built-in CLAUDE.md persona templates `coder` and `sysadmin`. `--claude-md coder`
+  resolves to a bundled template; any other value is still treated as a file path.
+- Per-blueprint capabilities (`--project-md`, `--github`, `--changelog`, `--docs`,
+  `--readme`), selectable on `aello add` and via a checklist in the TUI add flow.
+  On `run`, each enabled capability scaffolds its file (CHANGELOG/README/docs/,
+  project CLAUDE.md) if missing and adds its section to a generated `/sync` skill.
+- `/sync` is now generated per blueprint from its capabilities — a no-GitHub
+  blueprint gets no git/commit/push sections. `list` shows a `SYNC` column.
+- Per-env git attribution: `run` sets `GIT_AUTHOR_*`/`GIT_COMMITTER_*` to the
+  blueprint identity (`<name> <name@aello.local>`), and the GitHub `/sync` section
+  appends an `Env: <name>` commit trailer — so `git blame`/`git log` reveal which
+  blueprint made each change.
+
 ## [0.1.19]
 
 ### Fixed

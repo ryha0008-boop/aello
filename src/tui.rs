@@ -21,7 +21,7 @@ use ratatui::{backend::CrosstermBackend, Frame, Terminal};
 use std::io::{self, Stdout};
 use std::path::{Path, PathBuf};
 
-use crate::models::Blueprint;
+use crate::models::{Blueprint, Capabilities};
 use crate::{config, project, sessions};
 
 type Term = Terminal<CrosstermBackend<Stdout>>;
@@ -61,10 +61,54 @@ const MODELS: &[(&str, &str)] = &[
     ("haiku", "fastest, cheapest"),
 ];
 
+/// Global-persona choices for the add flow. Index 0 = none; the rest are
+/// built-in templates (kept in sync with `templates::BUILTINS`).
+const PERSONAS: &[(&str, &str)] = &[
+    ("none", "no global persona"),
+    ("coder", "coding agent"),
+    ("sysadmin", "ops / devops"),
+];
+
+/// Capability checklist rows, in toggle order. `toggle`/`enabled` map an index
+/// to the matching `Capabilities` field.
+const CAP_ROWS: &[(&str, &str)] = &[
+    ("project-md", "maintain a project-level CLAUDE.md"),
+    ("github", "/sync commits + pushes to GitHub"),
+    ("changelog", "keep CHANGELOG.md current"),
+    ("docs", "keep docs/ current"),
+    ("readme", "keep README.md current"),
+];
+
+fn cap_toggle(caps: &mut Capabilities, i: usize) {
+    match i {
+        0 => caps.project_md = !caps.project_md,
+        1 => caps.github = !caps.github,
+        2 => caps.changelog = !caps.changelog,
+        3 => caps.docs = !caps.docs,
+        4 => caps.readme = !caps.readme,
+        _ => {}
+    }
+}
+
+fn cap_enabled(caps: &Capabilities, i: usize) -> bool {
+    match i {
+        0 => caps.project_md,
+        1 => caps.github,
+        2 => caps.changelog,
+        3 => caps.docs,
+        4 => caps.readme,
+        _ => false,
+    }
+}
+
 enum Mode {
     Normal,
     AddName { buf: String },
     AddModel { name: String, sel: usize },
+    /// Pick the global persona (none / built-in template).
+    AddPersona { name: String, model: String, sel: usize },
+    /// Toggle the capabilities, then create. `persona` is the chosen template.
+    AddCaps { name: String, model: String, persona: Option<String>, sel: usize, caps: Capabilities },
     ConfirmDelete,
     /// Picking a past session to resume for blueprint `name`.
     Sessions { name: String, items: Vec<sessions::Session>, sel: usize },
@@ -304,10 +348,50 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                 KeyCode::Down | KeyCode::Char('j') => *sel = (*sel + 1).min(MODELS.len() - 1),
                 KeyCode::Up | KeyCode::Char('k') => *sel = sel.saturating_sub(1),
                 KeyCode::Enter => {
-                    let model = MODELS[*sel].0.to_string();
-                    let name = name.clone();
+                    app.mode = Mode::AddPersona {
+                        name: name.clone(),
+                        model: MODELS[*sel].0.to_string(),
+                        sel: 0,
+                    };
+                }
+                _ => {}
+            },
+            Mode::AddPersona { name, model, sel } => match key.code {
+                KeyCode::Esc => {
+                    app.mode = Mode::Normal;
+                    app.status = "CANCELLED".into();
+                }
+                KeyCode::Down | KeyCode::Char('j') => *sel = (*sel + 1).min(PERSONAS.len() - 1),
+                KeyCode::Up | KeyCode::Char('k') => *sel = sel.saturating_sub(1),
+                KeyCode::Enter => {
+                    // Index 0 is "none"; others are built-in template names.
+                    let persona = (*sel != 0).then(|| PERSONAS[*sel].0.to_string());
+                    app.mode = Mode::AddCaps {
+                        name: name.clone(),
+                        model: model.clone(),
+                        persona,
+                        sel: 0,
+                        caps: Capabilities::default(),
+                    };
+                }
+                _ => {}
+            },
+            Mode::AddCaps { name, model, persona, sel, caps } => match key.code {
+                KeyCode::Esc => {
+                    app.mode = Mode::Normal;
+                    app.status = "CANCELLED".into();
+                }
+                KeyCode::Down | KeyCode::Char('j') => *sel = (*sel + 1).min(CAP_ROWS.len() - 1),
+                KeyCode::Up | KeyCode::Char('k') => *sel = sel.saturating_sub(1),
+                KeyCode::Char(' ') => cap_toggle(caps, *sel),
+                KeyCode::Enter => {
                     let mut cfg = config::load()?;
-                    cfg.blueprints.push(Blueprint { name: name.clone(), model, claude_md: None });
+                    cfg.blueprints.push(Blueprint {
+                        name: name.clone(),
+                        model: model.clone(),
+                        claude_md: persona.clone(),
+                        caps: caps.clone(),
+                    });
                     config::save(&cfg)?;
                     app.status = format!("ADDED '{name}'");
                     app.mode = Mode::Normal;
@@ -433,6 +517,10 @@ fn draw(f: &mut Frame, app: &App) {
         Mode::Normal => {}
         Mode::AddName { buf } => draw_add_name(f, buf),
         Mode::AddModel { name, sel } => draw_add_model(f, name, *sel),
+        Mode::AddPersona { name, sel, .. } => draw_add_persona(f, name, *sel),
+        Mode::AddCaps { name, persona, sel, caps, .. } => {
+            draw_add_caps(f, name, persona.as_deref(), *sel, caps)
+        }
         Mode::ConfirmDelete => draw_confirm_delete(f, &app.blueprints[app.selected].name),
         Mode::Sessions { name, items, sel } => draw_sessions(f, name, items, *sel),
         Mode::Config { dir, entries, sel, new } => draw_config(f, dir, entries, *sel, new),
@@ -610,6 +698,66 @@ fn draw_add_model(f: &mut Frame, name: &str, sel: usize) {
     f.render_widget(Paragraph::new(lines).style(Style::default().bg(SURFACE_HI)), inner);
 }
 
+fn draw_add_persona(f: &mut Frame, name: &str, sel: usize) {
+    let h = PERSONAS.len() as u16 + 6;
+    let inner = modal(f, "NEW_BLUEPRINT // GLOBAL_PERSONA", 60, h);
+
+    let mut lines = vec![
+        Line::from(Span::styled(format!("  NAME = {name}"), Style::default().fg(MUTED))),
+        Line::from(""),
+    ];
+    for (i, (id, desc)) in PERSONAS.iter().enumerate() {
+        if i == sel {
+            lines.push(Line::from(vec![
+                Span::styled(format!(" › {id} "), Style::default().bg(ORANGE_HOT).fg(Color::Black).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("  {desc}"), Style::default().fg(AMBER)),
+            ]));
+        } else {
+            lines.push(Line::from(vec![
+                Span::styled(format!("   {id} "), Style::default().fg(TEXT)),
+                Span::styled(format!("  {desc}"), Style::default().fg(DIM)),
+            ]));
+        }
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled("  [↑/↓] SELECT · [ENTER] NEXT · [ESC] CANCEL", Style::default().fg(DIM))));
+
+    f.render_widget(Paragraph::new(lines).style(Style::default().bg(SURFACE_HI)), inner);
+}
+
+fn draw_add_caps(f: &mut Frame, name: &str, persona: Option<&str>, sel: usize, caps: &Capabilities) {
+    let h = CAP_ROWS.len() as u16 + 7;
+    let inner = modal(f, "NEW_BLUEPRINT // SYNC_CAPABILITIES", 64, h);
+
+    let mut lines = vec![
+        Line::from(Span::styled(
+            format!("  {name} · persona: {}", persona.unwrap_or("none")),
+            Style::default().fg(MUTED),
+        )),
+        Line::from(""),
+    ];
+    for (i, (id, desc)) in CAP_ROWS.iter().enumerate() {
+        let mark = if cap_enabled(caps, i) { "[x]" } else { "[ ]" };
+        if i == sel {
+            lines.push(Line::from(vec![
+                Span::styled(format!(" › {mark} {id} "), Style::default().bg(ORANGE_HOT).fg(Color::Black).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("  {desc}"), Style::default().fg(AMBER)),
+            ]));
+        } else {
+            let mark_color = if cap_enabled(caps, i) { GREEN } else { DIM };
+            lines.push(Line::from(vec![
+                Span::styled(format!("   {mark} "), Style::default().fg(mark_color)),
+                Span::styled(format!("{id} "), Style::default().fg(TEXT)),
+                Span::styled(format!("  {desc}"), Style::default().fg(DIM)),
+            ]));
+        }
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled("  [SPACE] TOGGLE · [ENTER] CREATE · [ESC] CANCEL", Style::default().fg(DIM))));
+
+    f.render_widget(Paragraph::new(lines).style(Style::default().bg(SURFACE_HI)), inner);
+}
+
 fn draw_confirm_delete(f: &mut Frame, name: &str) {
     let inner = modal(f, "CONFIRM_DELETE", 48, 7);
     let body = vec![
@@ -676,6 +824,28 @@ fn draw_config(f: &mut Frame, dir: &Path, entries: &[String], sel: usize, new: &
     }
 
     f.render_widget(Paragraph::new(lines).style(Style::default().bg(SURFACE_HI)), inner);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn personas_match_builtins() {
+        // Picker = "none" + every built-in template, in order.
+        let picker: Vec<&str> = PERSONAS.iter().skip(1).map(|(id, _)| *id).collect();
+        assert_eq!(picker, crate::templates::BUILTINS);
+    }
+
+    #[test]
+    fn cap_toggle_round_trips_each_row() {
+        for i in 0..CAP_ROWS.len() {
+            let mut c = Capabilities::default();
+            assert!(!cap_enabled(&c, i));
+            cap_toggle(&mut c, i);
+            assert!(cap_enabled(&c, i), "row {i} did not toggle on");
+        }
+    }
 }
 
 fn draw_sessions(f: &mut Frame, name: &str, items: &[sessions::Session], sel: usize) {
