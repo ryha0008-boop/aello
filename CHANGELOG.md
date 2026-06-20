@@ -7,6 +7,9 @@
   CRLF normalization), a generic `VERSION` file, and a stack-agnostic
   `.github/workflows/version.yml` that patch-bumps `VERSION` on every push to
   `main` and commits it back with `[skip ci]`. All seeded only if absent.
+- `aello github-setup` — drives GitHub repo creation for the current project:
+  prechecks `gh` auth, makes an initial commit if needed, then `gh repo create`
+  (private by default; `--public`), sets `origin`, and pushes. `--name`, `--yes`.
 
 ## [0.1.23]
 

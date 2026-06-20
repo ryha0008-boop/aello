@@ -52,10 +52,13 @@ This is the point of running several blueprints in one repo: when something brea
 
 The seeded `VERSION` + `.github/workflows/version.yml` are **generic and stack-agnostic** — meant for *target* projects. The workflow patch-bumps `VERSION` on every push to `main` and commits it back with `[skip ci]` (a `GITHUB_TOKEN` push doesn't re-trigger CI). Bump minor/major by hand. Delete either file if a project manages versions another way.
 
-## Still deferred
+## GitHub setup — `aello github-setup`
 
-Not yet automated by aello:
+`aello github-setup` creates the GitHub repo for the current project and pushes it, so you don't have to do it by hand before a blueprint can `/sync`:
 
-- `gh` auth precheck → `gh repo create` → set remote → initial push, driven by aello.
+1. Prechecks `gh` is installed and authenticated (`gh auth status`).
+2. Initializes a git repo and an initial commit if the directory has none.
+3. If an `origin` remote already exists, reports it and stops.
+4. Otherwise creates the repo with `gh repo create` (private by default; `--public` for public), sets `origin`, and pushes `main`.
 
-`/sync` *offers* to create the repo at runtime; the rest is future work.
+Flags: `--name <repo>` (default: directory name), `--public`, `--yes` (skip confirmation). This is the aello-driven counterpart to the repo creation `/sync` only *offers* at runtime.

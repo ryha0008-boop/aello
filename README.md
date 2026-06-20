@@ -79,6 +79,7 @@ aello list [--json]
 aello remove <name>
 aello run [name] [--resume [id]] [-p <prompt>] [-- <extra args for claude>]
 aello login                                    # store the shared Claude token
+aello github-setup [--name <repo>] [--public] [--yes]   # create + push the repo via gh
 aello update                                   # self-update to the latest release
 ```
 

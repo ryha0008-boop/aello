@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 
 mod auth;
 mod config;
+mod github;
 mod launch;
 mod models;
 mod project;
@@ -72,6 +73,18 @@ enum Commands {
     },
     /// Generate + store a shared Claude login token (runs `claude setup-token`).
     Login,
+    /// Create a GitHub repo for the current project and push (needs `gh`).
+    GithubSetup {
+        /// Repo name (default: current directory name).
+        #[arg(long)]
+        name: Option<String>,
+        /// Create a public repo (default: private).
+        #[arg(long)]
+        public: bool,
+        /// Skip the confirmation prompt.
+        #[arg(long)]
+        yes: bool,
+    },
     /// Update aello to the latest build from GitHub.
     Update,
     // More subcommands land here in later phases (edit, sessions, ...).
@@ -107,6 +120,7 @@ fn main() {
         Some(Commands::Remove { name }) => cmd_remove(name),
         Some(Commands::Run { name, resume, prompt, extra }) => cmd_run(name, resume, prompt, extra),
         Some(Commands::Login) => cmd_login(),
+        Some(Commands::GithubSetup { name, public, yes }) => github::run(name, public, yes),
         Some(Commands::Update) => update::run(),
     };
 
