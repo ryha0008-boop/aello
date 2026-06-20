@@ -2,3 +2,4 @@
 *.zip
 # Local-only development handoff (contains machine paths; never commit)
 migrate.md
+.claude-env-*
