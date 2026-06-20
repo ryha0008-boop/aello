@@ -7,6 +7,45 @@ use std::path::{Path, PathBuf};
 
 const POST_COMPACT_SCRIPT: &str = include_str!("hooks_post_compact.py");
 
+/// Stack-agnostic CI workflow seeded for `github` blueprints. On every push to
+/// `main` it bumps the patch in a plain `VERSION` file and commits it back with
+/// `[skip ci]` — a `GITHUB_TOKEN` push does not re-trigger workflows, so there's
+/// no loop. Mirrors aello's own release lessons; deliberately tied to no build
+/// system, so it drops into any project.
+const VERSION_WORKFLOW: &str = r#"name: version
+
+# Auto-bump the patch in VERSION on every push to main, then commit it back with
+# [skip ci] so the bump commit does not re-trigger this workflow (GITHUB_TOKEN
+# pushes never do). Seeded by aello — stack-agnostic; VERSION is a plain x.y.z
+# file. Bump minor/major by hand in VERSION for bigger releases.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: bump patch in VERSION
+        run: |
+          cur=$(cat VERSION 2>/dev/null || echo 0.0.0)
+          IFS=. read -r MA MI PA <<< "$cur"
+          new="$MA.$MI.$((PA + 1))"
+          echo "$new" > VERSION
+          echo "bumped $cur -> $new"
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -am "release: v$new [skip ci]"
+          git push origin main
+"#;
+
 /// Env dir for a blueprint inside a project — `project/.claude-env-<name>`.
 pub fn env_dir(project: &Path, name: &str) -> PathBuf {
     project.join(format!(".claude-env-{name}"))
@@ -124,6 +163,24 @@ fn scaffold_project(project: &Path, caps: &Capabilities) -> Result<()> {
     if caps.github {
         // Keep env dirs (and the credentials inside them) out of the repo.
         ensure_gitignore_entry(project, ".claude-env-*")?;
+        // Normalize line endings so multi-OS blueprints sharing a repo don't
+        // churn CRLF/LF on every commit.
+        let ga = project.join(".gitattributes");
+        if !ga.exists() {
+            std::fs::write(&ga, "* text=auto\n").context("could not write .gitattributes")?;
+        }
+        // Seed a stack-agnostic VERSION + patch-bump CI workflow for the target
+        // project (mirrors aello's own release machinery, build-system agnostic).
+        let ver = project.join("VERSION");
+        if !ver.exists() {
+            std::fs::write(&ver, "0.1.0\n").context("could not write VERSION")?;
+        }
+        let wf = project.join(".github").join("workflows").join("version.yml");
+        if !wf.exists() {
+            std::fs::create_dir_all(wf.parent().unwrap())
+                .context("could not create .github/workflows dir")?;
+            std::fs::write(&wf, VERSION_WORKFLOW).context("could not write version.yml")?;
+        }
     }
     Ok(())
 }
@@ -248,6 +305,36 @@ mod tests {
         place(&env, &inst, None, &caps).unwrap();
         let after_second = std::fs::read_to_string(&gi).unwrap();
         assert_eq!(after_second.matches(".claude-env-*").count(), 1);
+    }
+
+    #[test]
+    fn github_cap_scaffolds_release_hygiene() {
+        let proj = tempfile::tempdir().unwrap();
+        let env = env_dir(proj.path(), "demo");
+        let inst = Instance { name: "demo".into(), model: "haiku".into() };
+        let caps = Capabilities { github: true, ..Default::default() };
+
+        place(&env, &inst, None, &caps).unwrap();
+
+        let ga = std::fs::read_to_string(proj.path().join(".gitattributes")).unwrap();
+        assert!(ga.contains("text=auto"));
+        let ver = std::fs::read_to_string(proj.path().join("VERSION")).unwrap();
+        assert_eq!(ver.trim(), "0.1.0");
+        let wf = std::fs::read_to_string(
+            proj.path().join(".github/workflows/version.yml"),
+        )
+        .unwrap();
+        assert!(wf.contains("bump patch in VERSION"));
+        assert!(wf.contains("[skip ci]"));
+
+        // A no-github blueprint seeds none of these in a fresh project.
+        let fresh = tempfile::tempdir().unwrap();
+        let fenv = env_dir(fresh.path(), "bare");
+        place(&fenv, &Instance { name: "bare".into(), model: "haiku".into() }, None,
+              &Capabilities { changelog: true, ..Default::default() }).unwrap();
+        assert!(!fresh.path().join(".gitattributes").exists());
+        assert!(!fresh.path().join("VERSION").exists());
+        assert!(!fresh.path().join(".github").exists());
     }
 
     #[test]

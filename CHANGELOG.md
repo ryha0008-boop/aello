@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- The `github` capability now also scaffolds `.gitattributes` (`* text=auto`,
+  CRLF normalization), a generic `VERSION` file, and a stack-agnostic
+  `.github/workflows/version.yml` that patch-bumps `VERSION` on every push to
+  `main` and commits it back with `[skip ci]`. All seeded only if absent.
+
 ## [0.1.23]
 
 ### Added

@@ -9,7 +9,7 @@ Each enabled capability does two things on placement:
 | Capability | Scaffolds (if absent) | `/sync` section |
 |---|---|---|
 | `project_md` | project-root `CLAUDE.md` | reconcile the project CLAUDE.md |
-| `github` | `.gitignore` line `.claude-env-*` | repo health checks; commit + push; `Env:` trailer |
+| `github` | `.gitignore` line `.claude-env-*`, `.gitattributes` (CRLF normalize), `VERSION` + `.github/workflows/version.yml` (patch-bump CI) | repo health checks; commit + push; `Env:` trailer |
 | `changelog` | `CHANGELOG.md` (`## [Unreleased]`) | keep CHANGELOG current |
 | `docs` | `docs/` directory | reconcile `docs/` |
 | `readme` | `README.md` | keep README current |
@@ -50,12 +50,12 @@ git log --format='%(trailers:key=Env)'
 
 This is the point of running several blueprints in one repo: when something breaks, `git blame` tells you which agent did it.
 
+The seeded `VERSION` + `.github/workflows/version.yml` are **generic and stack-agnostic** — meant for *target* projects. The workflow patch-bumps `VERSION` on every push to `main` and commits it back with `[skip ci]` (a `GITHUB_TOKEN` push doesn't re-trigger CI). Bump minor/major by hand. Delete either file if a project manages versions another way.
+
 ## Still deferred
 
-Not yet automated by aello (the `github` capability adds the `/sync` sections, attribution, and `.gitignore` entry, but does not run the setup itself):
+Not yet automated by aello:
 
 - `gh` auth precheck → `gh repo create` → set remote → initial push, driven by aello.
-- A seeded generic `VERSION` file + CI auto-bump workflow for the target project.
-- A seeded `.gitattributes` (CRLF normalization).
 
 `/sync` *offers* to create the repo at runtime; the rest is future work.
