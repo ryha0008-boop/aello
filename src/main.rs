@@ -318,16 +318,24 @@ fn cmd_init() -> Result<()> {
         templates::resolve(p)?; // fail now on a bad name/path, not on first run
     }
 
+    println!("\nCapabilities — what /sync maintains (Enter accepts the default):");
+    let caps = Capabilities {
+        github: prompt_bool("  github (commit + push, repo scaffolding)", true)?,
+        project_md: prompt_bool("  project CLAUDE.md", false)?,
+        changelog: prompt_bool("  CHANGELOG.md", false)?,
+        docs: prompt_bool("  docs/ directory", false)?,
+        readme: prompt_bool("  README.md", false)?,
+    };
+
     cfg.blueprints.push(Blueprint {
         name: name.clone(),
         model,
         claude_md: persona,
-        caps: Capabilities::default(),
+        caps,
     });
     config::save(&cfg)?;
     println!(
-        "\nCreated blueprint '{name}' (no capabilities yet — add them in the TUI or with \
-         `aello add`). Launch it in a project with:\n    aello run {name}"
+        "\nCreated blueprint '{name}'. Launch it in a project with:\n    aello run {name}"
     );
     Ok(())
 }
@@ -341,6 +349,21 @@ fn prompt(label: &str, default: &str) -> Result<String> {
     std::io::stdin().read_line(&mut line).context("could not read input")?;
     let v = line.trim();
     Ok(if v.is_empty() { default.to_string() } else { v.to_string() })
+}
+
+/// Yes/No prompt on stdin; blank or anything unrecognized → `default`.
+fn prompt_bool(label: &str, default: bool) -> Result<bool> {
+    use std::io::Write;
+    let hint = if default { "Y/n" } else { "y/N" };
+    print!("{label} [{hint}]: ");
+    std::io::stdout().flush().ok();
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line).context("could not read input")?;
+    Ok(match line.trim().to_lowercase().as_str() {
+        "y" | "yes" => true,
+        "n" | "no" => false,
+        _ => default,
+    })
 }
 
 /// Read an optional line from stdin; blank → None.

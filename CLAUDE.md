@@ -27,7 +27,7 @@ Isolated Claude Code environments — like Python venvs, but for AI agents. Clau
 
 ## Module map (`src/`)
 
-- `main.rs` — clap CLI + dispatch (`add`/`list`/`remove`/`run`/`init`/`login`/`github-setup`/`update`); `run_blueprint` (shared by CLI `run` and the TUI); `cmd_init` (first-run wizard) + `prompt`/`prompt_optional`; `validate_name`/`validate_model`; Windows `aello.exe.old*` startup sweep.
+- `main.rs` — clap CLI + dispatch (`add`/`list`/`remove`/`run`/`init`/`login`/`github-setup`/`update`); `run_blueprint` (shared by CLI `run` and the TUI); `cmd_init` (first-run wizard) + `prompt`/`prompt_bool`/`prompt_optional`; `validate_name`/`validate_model`; Windows `aello.exe.old*` startup sweep.
 - `models.rs` — `Blueprint`, `Capabilities`, `Instance`, `Config`.
 - `config.rs` — `config.toml` load/save; `contextdb_dir`; `expand_home` (splits on `/` and `\`); `home_dir`.
 - `project.rs` — `env_dir`; `place` (writes `.aello.toml`/settings/persona/hook, regenerates `/sync`, scaffolds); `settings_json`; `mark_onboarded`; `scaffold_project` (incl. github's `.gitattributes`/`VERSION`/`version.yml`); `ensure_gitignore_entry` (idempotent); `VERSION_WORKFLOW`.
@@ -71,6 +71,5 @@ cargo install --path . --force # replace ~/.cargo/bin/aello with the local build
 ## Deferred
 
 - Phase 4 "instance edit / hook toggles" — largely moot (one hook; model lives in the blueprint).
-- Capability selection in the `aello init` wizard — today it creates the first blueprint with no caps (set them via the TUI or `aello add`).
 
-Shipped since the original roadmap: aello-driven GitHub setup is now the `aello github-setup` command (`github.rs`); the `github` cap now also scaffolds `.gitattributes` and a generic `VERSION` + `version.yml` patch-bump CI for target projects; `aello init` is the first-run wizard. CI already runs Node-20 actions (`@v4`), so no deprecation bump is pending.
+Shipped since the original roadmap: aello-driven GitHub setup is now the `aello github-setup` command (`github.rs`); the `github` cap now also scaffolds `.gitattributes` and a generic `VERSION` + `version.yml` patch-bump CI for target projects; `aello init` is the first-run wizard (login + first blueprint, capabilities included). CI already runs Node-20 actions (`@v4`), so no deprecation bump is pending.

@@ -11,7 +11,7 @@
   prechecks `gh` auth, makes an initial commit if needed, then `gh repo create`
   (private by default; `--public`), sets `origin`, and pushes. `--name`, `--yes`.
 - `aello init` — first-run wizard: logs in if there's no shared token, then walks
-  you through creating your first blueprint (name, model, persona).
+  you through creating your first blueprint (name, model, persona, capabilities).
 
 ## [0.1.23]
 
