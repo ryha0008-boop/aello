@@ -13,7 +13,7 @@ Isolated Claude Code environments — like Python venvs, but for AI agents. Clau
 
 **Blueprint** — a reusable agent identity in `config.toml`: `name`, `model`, optional `claude_md` (global persona), and `caps` (Capabilities). Reusable across projects.
 
-**Capabilities** (`models.rs::Capabilities`) — five bools chosen at `add` time: `project_md`, `github`, `changelog`, `docs`, `readme`. `#[serde(default)]` so old configs load all-false. Each enabled cap, on placement, scaffolds its file (only if missing) and contributes a section to a generated `/sync` skill.
+**Capabilities** (`models.rs::Capabilities`) — five bools chosen at `add` time: `project_md`, `github`, `changelog`, `docs`, `readme`. `#[serde(default)]` so old configs load all-false. Each enabled cap, on placement, scaffolds its file (only if missing) and contributes a section to a generated `/sync` skill. `github` scaffolds the most: the `.claude-env-*` gitignore line, `.gitattributes` (CRLF normalize), and a generic `VERSION` + stack-agnostic `.github/workflows/version.yml` patch-bump CI.
 
 **Env dir** — `<project>/.claude-env-<name>/`, the blueprint's `CLAUDE_CONFIG_DIR`. Holds `settings.json`, the global persona `CLAUDE.md`, `.aello.toml` (the placed Instance), `hooks/post-compact.py`, and the generated `skills/sync/SKILL.md`. Gitignored by convention (the `github` cap seeds the `.claude-env-*` ignore line).
 
@@ -27,10 +27,11 @@ Isolated Claude Code environments — like Python venvs, but for AI agents. Clau
 
 ## Module map (`src/`)
 
-- `main.rs` — clap CLI + dispatch (`add`/`list`/`remove`/`run`/`login`/`update`); `run_blueprint` (shared by CLI `run` and the TUI); `validate_name`/`validate_model`; Windows `aello.exe.old*` startup sweep.
+- `main.rs` — clap CLI + dispatch (`add`/`list`/`remove`/`run`/`init`/`login`/`github-setup`/`update`); `run_blueprint` (shared by CLI `run` and the TUI); `cmd_init` (first-run wizard) + `prompt`/`prompt_optional`; `validate_name`/`validate_model`; Windows `aello.exe.old*` startup sweep.
 - `models.rs` — `Blueprint`, `Capabilities`, `Instance`, `Config`.
 - `config.rs` — `config.toml` load/save; `contextdb_dir`; `expand_home` (splits on `/` and `\`); `home_dir`.
-- `project.rs` — `env_dir`; `place` (writes `.aello.toml`/settings/persona/hook, regenerates `/sync`, scaffolds); `settings_json`; `mark_onboarded`; `scaffold_project`; `ensure_gitignore_entry` (idempotent).
+- `project.rs` — `env_dir`; `place` (writes `.aello.toml`/settings/persona/hook, regenerates `/sync`, scaffolds); `settings_json`; `mark_onboarded`; `scaffold_project` (incl. github's `.gitattributes`/`VERSION`/`version.yml`); `ensure_gitignore_entry` (idempotent); `VERSION_WORKFLOW`.
+- `github.rs` — `aello github-setup`: `gh` auth precheck → ensure git repo + initial commit → `gh repo create --source=. --remote=origin --push`; pure `repo_create_args`.
 - `templates.rs` — bundled personas (`coder`, `sysadmin` via `include_str!`), `resolve` (builtin name or path), `render_sync_skill(caps, name)`, `BUILTINS`.
 - `launch.rs` — `launch` (sets `CLAUDE_CONFIG_DIR`, `AELLO_CONTEXTDB`, git attribution env, `CLAUDE_CODE_OAUTH_TOKEN`); `git_identity`.
 - `auth.rs` — `capture_setup_token` (tees `claude setup-token` stdout so the auth URL shows on headless machines); `extract_token`.
@@ -69,4 +70,7 @@ cargo install --path . --force # replace ~/.cargo/bin/aello with the local build
 
 ## Deferred
 
-aello-driven GitHub setup automation (`gh` auth precheck → `gh repo create` → remote → initial push), seeded generic `VERSION` + CI bump workflow for target projects, and seeded `.gitattributes`. Today the `github` cap adds the `/sync` git sections, attribution, and the `.gitignore` entry; `/sync` *offers* `gh repo create` at runtime but aello doesn't run the setup itself.
+- Phase 4 "instance edit / hook toggles" — largely moot (one hook; model lives in the blueprint).
+- Capability selection in the `aello init` wizard — today it creates the first blueprint with no caps (set them via the TUI or `aello add`).
+
+Shipped since the original roadmap: aello-driven GitHub setup is now the `aello github-setup` command (`github.rs`); the `github` cap now also scaffolds `.gitattributes` and a generic `VERSION` + `version.yml` patch-bump CI for target projects; `aello init` is the first-run wizard. CI already runs Node-20 actions (`@v4`), so no deprecation bump is pending.
