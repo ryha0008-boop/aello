@@ -71,6 +71,8 @@ enum Commands {
         #[arg(last = true)]
         extra: Vec<String>,
     },
+    /// First-run setup: log in (if needed) and create your first blueprint.
+    Init,
     /// Generate + store a shared Claude login token (runs `claude setup-token`).
     Login,
     /// Create a GitHub repo for the current project and push (needs `gh`).
@@ -119,6 +121,7 @@ fn main() {
         Some(Commands::List { json }) => cmd_list(json),
         Some(Commands::Remove { name }) => cmd_remove(name),
         Some(Commands::Run { name, resume, prompt, extra }) => cmd_run(name, resume, prompt, extra),
+        Some(Commands::Init) => cmd_init(),
         Some(Commands::Login) => cmd_login(),
         Some(Commands::GithubSetup { name, public, yes }) => github::run(name, public, yes),
         Some(Commands::Update) => update::run(),
@@ -277,6 +280,78 @@ fn cmd_login() -> Result<()> {
         None => println!("Cancelled — no token saved."),
     }
     Ok(())
+}
+
+/// First-run wizard: ensure a shared login token exists, then walk the user
+/// through creating their first blueprint. Idempotent — re-running it with a
+/// token and blueprints already present just reports and exits.
+fn cmd_init() -> Result<()> {
+    let mut cfg = config::load()?;
+
+    if cfg.oauth_token.is_none() {
+        println!("No shared login token yet — let's create one.");
+        cmd_login()?;
+        cfg = config::load()?; // reload to pick up the saved token
+        if cfg.oauth_token.is_none() {
+            println!("\nSkipped login — re-run `aello init` or `aello login` when ready.");
+            return Ok(());
+        }
+    } else {
+        println!("Shared login token already set.");
+    }
+
+    if !cfg.blueprints.is_empty() {
+        println!(
+            "\nYou already have {} blueprint(s). Launch one with `aello run <name>`.",
+            cfg.blueprints.len()
+        );
+        return Ok(());
+    }
+
+    println!("\nNow let's create your first blueprint.");
+    let name = prompt("Blueprint name", "coder")?;
+    validate_name(&name)?;
+    let model = prompt("Model (opus/sonnet/haiku or a claude-* id)", "sonnet")?;
+    validate_model(&model)?;
+    let persona = prompt_optional("Persona (coder/sysadmin/path, blank for none)")?;
+    if let Some(p) = &persona {
+        templates::resolve(p)?; // fail now on a bad name/path, not on first run
+    }
+
+    cfg.blueprints.push(Blueprint {
+        name: name.clone(),
+        model,
+        claude_md: persona,
+        caps: Capabilities::default(),
+    });
+    config::save(&cfg)?;
+    println!(
+        "\nCreated blueprint '{name}' (no capabilities yet — add them in the TUI or with \
+         `aello add`). Launch it in a project with:\n    aello run {name}"
+    );
+    Ok(())
+}
+
+/// Read a line from stdin, returning `default` if the user just hits Enter.
+fn prompt(label: &str, default: &str) -> Result<String> {
+    use std::io::Write;
+    print!("{label} [{default}]: ");
+    std::io::stdout().flush().ok();
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line).context("could not read input")?;
+    let v = line.trim();
+    Ok(if v.is_empty() { default.to_string() } else { v.to_string() })
+}
+
+/// Read an optional line from stdin; blank → None.
+fn prompt_optional(label: &str) -> Result<Option<String>> {
+    use std::io::Write;
+    print!("{label}: ");
+    std::io::stdout().flush().ok();
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line).context("could not read input")?;
+    let v = line.trim();
+    Ok((!v.is_empty()).then(|| v.to_string()))
 }
 
 fn cmd_list(json: bool) -> Result<()> {

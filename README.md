@@ -73,6 +73,7 @@ See [`docs/concepts.md`](docs/concepts.md) and [`docs/capabilities.md`](docs/cap
 ```
 aello                                          # interactive TUI (no args)
 aello --version
+aello init                                     # first-run: login + first blueprint
 aello add <name> --model <m> [--claude-md <coder|sysadmin|path>]
         [--project-md] [--github] [--changelog] [--docs] [--readme]
 aello list [--json]
