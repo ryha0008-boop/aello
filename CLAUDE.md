@@ -72,4 +72,4 @@ cargo install --path . --force # replace ~/.cargo/bin/aello with the local build
 
 - Phase 4 "instance edit / hook toggles" — largely moot (one hook; model lives in the blueprint).
 
-Shipped since the original roadmap: aello-driven GitHub setup is now the `aello github-setup` command (`github.rs`); the `github` cap now also scaffolds `.gitattributes` and a generic `VERSION` + `version.yml` patch-bump CI for target projects; `aello init` is the first-run wizard (login + first blueprint, capabilities included). CI actions are on `@v5` (`checkout`/`upload-artifact`/`download-artifact`, Node 24); the earlier Node-20 deprecation is resolved.
+Shipped since the original roadmap: aello-driven GitHub setup is now the `aello github-setup` command (`github.rs`); the `github` cap now also scaffolds `.gitattributes` and a generic `VERSION` + `version.yml` patch-bump CI for target projects; `aello init` is the first-run wizard (login + first blueprint, capabilities included). CI actions all target Node 24 (`checkout@v5`, `upload-artifact@v7`, `download-artifact@v8` — the artifact repos jumped majors faster than checkout); the Node-20 deprecation is resolved.
