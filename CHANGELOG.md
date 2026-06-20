@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.1.26]
 
 ### Added
 - The `github` capability now also scaffolds `.gitattributes` (`* text=auto`,
