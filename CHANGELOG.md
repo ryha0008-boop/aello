@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- `aello edit <name>` — change an existing blueprint's model, persona, or
+  capabilities in place. Capability flags are tri-state: `--github` enables,
+  `--no-github` disables, omitting both leaves it unchanged. Changes apply on
+  the next `aello run`; the global persona in an already-placed env is never
+  re-clobbered.
+
 ## [0.1.26]
 
 ### Added

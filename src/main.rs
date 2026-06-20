@@ -57,6 +57,8 @@ enum Commands {
     },
     /// Remove a blueprint by name.
     Remove { name: String },
+    /// Edit an existing blueprint's model, persona, or capabilities.
+    Edit(EditArgs),
     /// Place a blueprint in the current directory and launch it.
     Run {
         /// Blueprint name (optional if you have exactly one).
@@ -89,7 +91,52 @@ enum Commands {
     },
     /// Update aello to the latest build from GitHub.
     Update,
-    // More subcommands land here in later phases (edit, sessions, ...).
+    // More subcommands land here in later phases (sessions, ...).
+}
+
+/// Flags for `aello edit`. Capability flags are tri-state: `--github` enables,
+/// `--no-github` disables, omitting both leaves it unchanged. Changes take
+/// effect on the next `aello run` (the global persona is never re-clobbered).
+#[derive(clap::Args)]
+struct EditArgs {
+    /// Blueprint to edit.
+    name: String,
+    /// New model (alias like opus/sonnet/haiku or a full claude-* id).
+    #[arg(long)]
+    model: Option<String>,
+    /// New global persona (built-in name or path to a CLAUDE.md file).
+    #[arg(long)]
+    claude_md: Option<String>,
+    /// Enable the project-CLAUDE.md capability.
+    #[arg(long)]
+    project_md: bool,
+    /// Disable the project-CLAUDE.md capability.
+    #[arg(long)]
+    no_project_md: bool,
+    /// Enable the GitHub capability (attribution, scaffolds, /sync commit+push).
+    #[arg(long)]
+    github: bool,
+    /// Disable the GitHub capability.
+    #[arg(long)]
+    no_github: bool,
+    /// Enable the CHANGELOG.md capability.
+    #[arg(long)]
+    changelog: bool,
+    /// Disable the CHANGELOG.md capability.
+    #[arg(long)]
+    no_changelog: bool,
+    /// Enable the docs/ capability.
+    #[arg(long)]
+    docs: bool,
+    /// Disable the docs/ capability.
+    #[arg(long)]
+    no_docs: bool,
+    /// Enable the README.md capability.
+    #[arg(long)]
+    readme: bool,
+    /// Disable the README.md capability.
+    #[arg(long)]
+    no_readme: bool,
 }
 
 fn main() {
@@ -120,6 +167,7 @@ fn main() {
         }
         Some(Commands::List { json }) => cmd_list(json),
         Some(Commands::Remove { name }) => cmd_remove(name),
+        Some(Commands::Edit(args)) => cmd_edit(args),
         Some(Commands::Run { name, resume, prompt, extra }) => cmd_run(name, resume, prompt, extra),
         Some(Commands::Init) => cmd_init(),
         Some(Commands::Login) => cmd_login(),
@@ -195,6 +243,52 @@ fn cmd_remove(name: String) -> Result<()> {
     }
     config::save(&cfg)?;
     println!("Removed blueprint '{name}'.");
+    Ok(())
+}
+
+/// Resolve a tri-state capability flag: `on` wins, then `off`, else keep
+/// `current`. Setting both is a usage error.
+fn tri(on: bool, off: bool, current: bool, flag: &str) -> Result<bool> {
+    if on && off {
+        bail!("--{flag} and --no-{flag} cannot be used together");
+    }
+    Ok(if on { true } else if off { false } else { current })
+}
+
+fn cmd_edit(args: EditArgs) -> Result<()> {
+    let mut cfg = config::load()?;
+    let Some(idx) = cfg.blueprints.iter().position(|b| b.name == args.name) else {
+        bail!("no blueprint named '{}'", args.name);
+    };
+    let bp = &mut cfg.blueprints[idx];
+    let mut changed = false;
+
+    if let Some(model) = args.model {
+        validate_model(&model)?;
+        bp.model = model;
+        changed = true;
+    }
+    if let Some(cm) = args.claude_md {
+        templates::resolve(&cm)?; // reject a typo'd built-in / missing path now
+        bp.claude_md = Some(cm);
+        changed = true;
+    }
+
+    let before = bp.caps.clone();
+    bp.caps.project_md = tri(args.project_md, args.no_project_md, bp.caps.project_md, "project-md")?;
+    bp.caps.github = tri(args.github, args.no_github, bp.caps.github, "github")?;
+    bp.caps.changelog = tri(args.changelog, args.no_changelog, bp.caps.changelog, "changelog")?;
+    bp.caps.docs = tri(args.docs, args.no_docs, bp.caps.docs, "docs")?;
+    bp.caps.readme = tri(args.readme, args.no_readme, bp.caps.readme, "readme")?;
+    changed |= bp.caps != before;
+
+    if !changed {
+        bail!("nothing to change — pass --model, --claude-md, or a capability flag");
+    }
+
+    let name = bp.name.clone();
+    config::save(&cfg)?;
+    println!("Updated blueprint '{name}'. Changes apply on the next `aello run {name}`.");
     Ok(())
 }
 
@@ -464,5 +558,14 @@ mod tests {
         for m in ["", "opu", "sonnett", "gpt-4", "opus4"] {
             assert!(validate_model(m).is_err(), "{m:?} should be rejected");
         }
+    }
+
+    #[test]
+    fn tri_state_resolves() {
+        assert!(tri(false, false, true, "x").unwrap()); // omitted keeps current (true)
+        assert!(!tri(false, false, false, "x").unwrap()); // omitted keeps current (false)
+        assert!(tri(true, false, false, "x").unwrap()); // --x turns on
+        assert!(!tri(false, true, true, "x").unwrap()); // --no-x turns off
+        assert!(tri(true, true, false, "x").is_err()); // both = error
     }
 }

@@ -78,12 +78,16 @@ aello add <name> --model <m> [--claude-md <coder|sysadmin|path>]
         [--project-md] [--github] [--changelog] [--docs] [--readme]
 aello list [--json]
 aello remove <name>
+aello edit <name> [--model <m>] [--claude-md <coder|sysadmin|path>]
+        [--project-md|--no-project-md] [--github|--no-github]
+        [--changelog|--no-changelog] [--docs|--no-docs] [--readme|--no-readme]
 aello run [name] [--resume [id]] [-p <prompt>] [-- <extra args for claude>]
 aello login                                    # store the shared Claude token
 aello github-setup [--name <repo>] [--public] [--yes]   # create + push the repo via gh
 aello update                                   # self-update to the latest release
 ```
 
+- `edit` changes a blueprint in place. Capability flags are tri-state: `--github` enables, `--no-github` disables, omitting both leaves it as-is. Changes apply on the next `run`; the global persona in an already-placed env is never re-clobbered.
 - `run` with no name uses the sole blueprint (errors if there are several).
 - `--resume` with no value continues the most recent session; `--resume <id>` resumes a specific one. The TUI (`S`) browses sessions to resume.
 - `-p "<prompt>"` runs headless and exits. Anything after `--` is passed straight to `claude`.
