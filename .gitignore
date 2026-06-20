@@ -3,3 +3,7 @@
 # Local-only development handoff (contains machine paths; never commit)
 migrate.md
 .claude-env-*
+# github-cap scaffolds aello its own dogfooding can re-create; aello versions
+# itself via Cargo.toml + release.yml, not VERSION/version.yml
+/VERSION
+/.github/workflows/version.yml
