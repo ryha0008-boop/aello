@@ -1,6 +1,6 @@
 # Capabilities & `/sync`
 
-Capabilities are chosen per blueprint at creation — via flags on `aello add` or the checklist in the TUI add flow (name → model → persona → **capabilities**). They're stored on the blueprint and applied every time it's placed with `aello run`.
+Capabilities are chosen per blueprint at creation — via flags on `aello add` or the checklist in the TUI add flow (name → model → persona → **capabilities**) — and can be changed later with `aello edit <name>` (tri-state flags: `--github` / `--no-github`) or the TUI's guided edit (`E`). They're stored on the blueprint and applied every time it's placed with `aello run`.
 
 Each enabled capability does two things on placement:
 1. **Scaffolds** its file in the project, only if missing (never overwrites your content).

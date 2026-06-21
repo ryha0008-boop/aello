@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.1.30]
 
 ### Added
 - `aello edit <name>` — change an existing blueprint's model, persona, or
