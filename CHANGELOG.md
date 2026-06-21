@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- `/sync` skill: the commit step now stages **only the files the blueprint
+  created or modified this session** (by explicit path) instead of `git add -A`.
+  A blanket stage swept unrelated untracked files — other tooling's scaffolding
+  or another env's in-flight work — into a blueprint's commit. Re-place a
+  blueprint (`aello run`) to regenerate its `SKILL.md` from the new template.
+
 ## [0.1.30]
 
 ### Added
