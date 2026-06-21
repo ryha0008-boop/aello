@@ -52,7 +52,7 @@ cd ~/my-project
 aello run coder                               # places an isolated env + launches Claude
 ```
 
-Inside that project, `aello run coder` creates `.claude-env-coder/`, scaffolds `CHANGELOG.md` / `README.md` / `docs/` / a project `CLAUDE.md` (only the ones you enabled, only if missing), adds `.claude-env-*` to `.gitignore`, and seeds a `/sync` skill tailored to the enabled capabilities. Type `/sync` inside Claude to reconcile those docs and commit + push.
+Inside that project, `aello run coder` creates `.claude-env-coder/`, scaffolds `CHANGELOG.md` / `README.md` / `docs/` / a project `CLAUDE.md` (only the ones you enabled, only if missing), adds `.claude-env-*` to `.gitignore`, seeds a `/sync` skill tailored to the enabled capabilities, and (on first placement) seeds a starter working-style memory so the env boots with it in `/context`. Type `/sync` inside Claude to reconcile those docs and commit + push.
 
 Run `aello` with no arguments for the full-screen TUI (browse, add via a guided checklist, resume sessions, manage the token, self-update).
 
@@ -60,7 +60,7 @@ Run `aello` with no arguments for the full-screen TUI (browse, add via a guided 
 
 - **Blueprint** — a reusable agent identity stored in aello's config: `name`, `model`, an optional global persona, and its capabilities. Reusable across many projects.
 - **Env dir** — `<project>/.claude-env-<name>/`. This is the blueprint's `CLAUDE_CONFIG_DIR`: settings, the global persona `CLAUDE.md`, the PostCompact hook, and the generated `/sync` skill live here. Gitignored by convention.
-- **Global persona vs project CLAUDE.md** — the *global* `CLAUDE.md` (in the env dir) is the agent's persona, set once. The *project* `CLAUDE.md` (in the repo root, enabled by `--project-md`) holds project-specific facts. Memory is separate and automatic.
+- **Global persona vs project CLAUDE.md** — the *global* `CLAUDE.md` (in the env dir) is the agent's persona, set once. The *project* `CLAUDE.md` (in the repo root, enabled by `--project-md`) holds project-specific facts. Memory is separate: a starter working-style memory is seeded on first placement (never clobbered after), then maintained automatically.
 - **Capabilities** — what a blueprint maintains. Each one scaffolds its file and adds a section to the generated `/sync` skill. See the table below.
 - **`/sync`** — a manually-invoked skill (no auto-commit hooks). Generated per blueprint, so it only covers what that blueprint has — a no-GitHub blueprint gets no git talk at all.
 - **Shared auth** — `aello login` runs `claude setup-token` and stores a long-lived `CLAUDE_CODE_OAUTH_TOKEN`. It doesn't rotate, so any number of concurrent envs share it safely.

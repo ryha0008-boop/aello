@@ -17,7 +17,7 @@ Isolated Claude Code environments — like Python venvs, but for AI agents. Clau
 
 **Env dir** — `<project>/.claude-env-<name>/`, the blueprint's `CLAUDE_CONFIG_DIR`. Holds `settings.json`, the global persona `CLAUDE.md`, `.aello.toml` (the placed Instance), `hooks/post-compact.py`, and the generated `skills/sync/SKILL.md`. Gitignored by convention (the `github` cap seeds the `.claude-env-*` ignore line).
 
-**Two CLAUDE.md layers** — global persona (`<env>/CLAUDE.md`, set once, never clobbered) vs project (`<project>/CLAUDE.md`, `--project-md`, maintained by `/sync`). Memory is separate/automatic (PostCompact hook).
+**Two CLAUDE.md layers** — global persona (`<env>/CLAUDE.md`, set once, never clobbered) vs project (`<project>/CLAUDE.md`, `--project-md`, maintained by `/sync`). Memory is separate: `place` seeds a starter working-style memory under `<env>/projects/<encoded-cwd>/memory/` on first placement (gated on `MEMORY.md` absence, never clobbered), then it's automatic (PostCompact hook).
 
 **Auth** — `aello login` runs `claude setup-token`, stores a long-lived non-rotating `CLAUDE_CODE_OAUTH_TOKEN` in `config.toml`; every env exports it. Concurrency-safe across many parallel envs (the reason credential-copy was abandoned). On fresh envs, `mark_onboarded` seeds `hasCompletedOnboarding` so Claude skips its first-run wizard.
 
@@ -30,7 +30,7 @@ Isolated Claude Code environments — like Python venvs, but for AI agents. Clau
 - `main.rs` — clap CLI + dispatch (`add`/`list`/`remove`/`edit`/`run`/`init`/`login`/`github-setup`/`update`); `cmd_edit` (in-place blueprint edit; `EditArgs` + tri-state `tri` cap flags); `run_blueprint` (shared by CLI `run` and the TUI); `cmd_init` (first-run wizard) + `prompt`/`prompt_bool`/`prompt_optional`; `validate_name`/`validate_model`; Windows `aello.exe.old*` startup sweep.
 - `models.rs` — `Blueprint`, `Capabilities`, `Instance`, `Config`.
 - `config.rs` — `config.toml` load/save; `contextdb_dir`; `expand_home` (splits on `/` and `\`); `home_dir`.
-- `project.rs` — `env_dir`; `place` (writes `.aello.toml`/settings/persona/hook, regenerates `/sync`, scaffolds); `settings_json`; `mark_onboarded`; `scaffold_project` (incl. github's `.gitattributes`/`VERSION`/`version.yml`); `ensure_gitignore_entry` (idempotent); `VERSION_WORKFLOW`.
+- `project.rs` — `env_dir`; `place` (writes `.aello.toml`/settings/persona/hook, regenerates `/sync`, scaffolds, seeds starter memory); `settings_json`; `mark_onboarded`; `scaffold_project` (incl. github's `.gitattributes`/`VERSION`/`version.yml`); `seed_memory` (bundled working-style memory + `MEMORY.md` index, only when no `MEMORY.md` yet); `ensure_gitignore_entry` (idempotent); `VERSION_WORKFLOW`.
 - `github.rs` — `aello github-setup`: `gh` auth precheck → ensure git repo + initial commit → `gh repo create --source=. --remote=origin --push`; pure `repo_create_args`.
 - `templates.rs` — bundled personas (`coder`, `sysadmin` via `include_str!`), `resolve` (builtin name or path), `render_sync_skill(caps, name)`, `BUILTINS`.
 - `launch.rs` — `launch` (sets `CLAUDE_CONFIG_DIR`, `AELLO_CONTEXTDB`, git attribution env, `CLAUDE_CODE_OAUTH_TOKEN`); `git_identity`.
@@ -38,7 +38,7 @@ Isolated Claude Code environments — like Python venvs, but for AI agents. Clau
 - `sessions.rs` — session listing for resume.
 - `tui.rs` — Kinetic Command TUI; add flow is name → model → persona → caps checklist; `E` reuses the model→persona→caps steps in edit mode (an `edit` flag on those modes; name fixed, steps pre-seeded via `model_index`/`persona_index`, final step updates in place). Guard test keeps `PERSONAS` in sync with `templates::BUILTINS`.
 - `update.rs` — self-update from the rolling `latest` release.
-- `templates/coder.md`, `templates/sysadmin.md` — bundled personas. `src/hooks_post_compact.py` — the PostCompact hook.
+- `templates/coder.md`, `templates/sysadmin.md` — bundled personas. `templates/memory-working-style.md` — bundled starter memory (`MEMORY_WORKING_STYLE` in `project.rs`). `src/hooks_post_compact.py` — the PostCompact hook.
 
 ## `/sync`
 

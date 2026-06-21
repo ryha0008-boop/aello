@@ -11,7 +11,8 @@ my-project/
 │   ├── settings.json         #   bypass-permissions + PostCompact hook
 │   ├── CLAUDE.md             #   global persona (set once)
 │   ├── hooks/post-compact.py
-│   └── skills/sync/SKILL.md  #   generated from this blueprint's capabilities
+│   ├── skills/sync/SKILL.md  #   generated from this blueprint's capabilities
+│   └── projects/<cwd>/memory/  # starter working-style memory, seeded once
 ├── .claude-env-reviewer/     # a second blueprint, fully isolated
 ├── CLAUDE.md                 # project-level instructions (--project-md)
 ├── README.md  CHANGELOG.md  docs/   # scaffolded by capabilities
@@ -21,14 +22,14 @@ my-project/
 ## Blueprint vs instance
 
 - A **blueprint** is global, stored in aello's `config.toml`: `name`, `model`, optional persona (`claude_md`), and `capabilities`. It's reusable across any number of projects.
-- An **instance** is a blueprint placed into a project — recorded as `.aello.toml` inside the env dir. Placement is idempotent: `aello run` re-seeds the generated skill and refreshes the hook each time, but never clobbers your edited persona or scaffolded files.
+- An **instance** is a blueprint placed into a project — recorded as `.aello.toml` inside the env dir. Placement is idempotent: `aello run` re-seeds the generated skill and refreshes the hook each time, but never clobbers your edited persona, scaffolded files, or memory.
 
 ## Two CLAUDE.md layers
 
 - **Global / persona** — `<env>/CLAUDE.md`. The agent's identity ("you are a coding agent…"). Chosen with `--claude-md` (a built-in `coder`/`sysadmin` template, or a path). Written once; never overwritten on later runs.
 - **Project** — `<project>/CLAUDE.md`. Project-specific facts and instructions, enabled with `--project-md`. Maintained over time by `/sync`.
 
-Memory is a third, separate channel — automatic, written by the PostCompact hook; not a capability.
+Memory is a third, separate channel — not a capability. On first placement aello seeds a starter working-style memory under `<env>/projects/<encoded-cwd>/memory/` (a `working-style.md` note plus a one-line `MEMORY.md` index), so a fresh env boots with it already in `/context`. It's seeded only when no `MEMORY.md` exists yet, so a re-place never clobbers memory you've accumulated. Thereafter memory is maintained automatically (the PostCompact hook writes transcript summaries).
 
 ## Authentication
 

@@ -25,7 +25,7 @@ Crucially, the skill is **generated from the blueprint's capabilities**, not a o
 What `/sync` does when invoked (only the enabled parts):
 - **Repo health** (github) — confirm it's a git repo, check for an `origin` remote (offer `gh repo create` if missing, with confirmation), report branch / ahead-behind / status.
 - **Reconcile docs** — for each enabled, existing doc, a two-way staleness pass: add what's missing, fix what's wrong, delete what no longer applies. Reports per file: updated / fresh / skipped.
-- **Commit + push** (github) — stage, commit with a clear message ending in an `Env: <blueprint>` trailer, push to `origin`.
+- **Commit + push** (github) — stage **only the files touched this session** (by explicit path, never `git add -A`), commit with a clear message ending in an `Env: <blueprint>` trailer, push to `origin`.
 
 The skill is re-generated on every `aello run`, so changing a blueprint's capabilities updates its `/sync` on the next placement. If all capabilities are disabled, no `/sync` skill is seeded.
 
