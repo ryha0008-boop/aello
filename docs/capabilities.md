@@ -66,6 +66,19 @@ This is the point of running several blueprints in one repo: when something brea
 
 The seeded `VERSION` + `.github/workflows/version.yml` are **generic and stack-agnostic** — meant for *target* projects. The workflow patch-bumps `VERSION` on every push to `main` and commits it back with `[skip ci]` (a `GITHUB_TOKEN` push doesn't re-trigger CI). Bump minor/major by hand. Delete either file if a project manages versions another way.
 
+### Convention: `VERSION` is the single source of truth — derive, don't duplicate
+
+In a `github`-cap project, **`VERSION` is the one tracked place the version lives.** Any other version stamp a project needs — a README badge, `package.json`'s `version` field, a generated `version.ts`/`__version__`, etc. — must be **derived from `VERSION` at build time and the derived artifact gitignored.** Never write a version stamp into a second *tracked* file.
+
+Why this is a hard rule and not a style preference: the github cap auto-bumps `VERSION` on every push (`version.yml`). If a project also stamps the version into a tracked file, that file goes stale the instant CI bumps `VERSION` — it now disagrees with `VERSION` and shows up as a dirty working-tree change. And the generated `/sync` **cannot** rescue it: `/sync` stages **only the files the agent actually touched this session** (never `git add -A`), by design, so a build-regenerated stamp the agent never edited is never staged. The drifted artifact strands dirty forever — every build re-dirties it, every `/sync` correctly leaves it alone.
+
+So the fix is structural, not a `/sync` carve-out (auto-staging build output would quietly weaken that staging guarantee). Keep the derived stamp **out of git**:
+
+- ✅ `VERSION` (tracked) → build reads it → writes `version.ts` / badge / `package.json` field → **`version.ts` etc. is gitignored**.
+- ❌ `VERSION` (tracked) **and** `lib/version.ts` (tracked) both holding the version → drifts on every CI bump, never reconcilable by `/sync`.
+
+**Precedent:** the `env-console` project did exactly the ❌ form (a tracked `lib/version.ts` plus `package.json`'s `version`), drifted on every build, and was fixed by gitignoring the derived `version.ts` (the "Option A" fix) so `VERSION` stayed the only tracked source.
+
 ## GitHub setup — `aello github-setup`
 
 `aello github-setup` creates the GitHub repo for the current project and pushes it, so you don't have to do it by hand before a blueprint can `/sync`:

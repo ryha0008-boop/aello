@@ -13,6 +13,17 @@
   already-placed envs adopt it, mirrors the env into it, and stages it by
   explicit path before committing. Re-place a blueprint (`aello run`) to pick it up.
 
+### Documentation
+- Documented the **`VERSION` single-source-of-truth** convention for `github`-cap
+  projects: derive any other version stamp (badge, `package.json` field,
+  `version.ts`, …) from `VERSION` at build time and **gitignore the derived
+  artifact** — never stamp a version into a second tracked file. Because the
+  github cap auto-bumps `VERSION` on every push and `/sync` correctly stages only
+  what the agent touched (never `git add -A`), a duplicated stamp drifts on every
+  CI bump and strands dirty forever. The fix is structural (derive + gitignore),
+  not a `/sync` carve-out. Added to `docs/capabilities.md` and `docs/concepts.md`
+  with the `env-console` precedent. Docs only — no code change.
+
 ### Changed
 - `/sync` reconcile order: memory is now refreshed **first**, before the other
   docs, so the checkpoint (and the new `claude-internal/` mirror) captures what
