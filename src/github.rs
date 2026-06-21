@@ -90,12 +90,49 @@ fn ensure_git_repo(project: &Path) -> Result<()> {
         println!("No commits yet — creating an initial commit.");
         git(project, &["add", "-A"])?;
         if !ok(project, "git", &["diff", "--cached", "--quiet"]) {
-            git(project, &["commit", "-m", "Initial commit"])?;
+            let args = initial_commit_args(has_git_identity(project));
+            let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+            git(project, &refs)?;
         } else {
             bail!("nothing to commit — add at least one file before setting up the repo");
         }
     }
     Ok(())
+}
+
+/// True when git has a usable author identity (`user.name` AND `user.email`
+/// set, in any scope). Decides whether the bootstrap commit needs a fallback.
+fn has_git_identity(project: &Path) -> bool {
+    nonempty_config(project, "user.name") && nonempty_config(project, "user.email")
+}
+
+/// True when `git config --get <key>` resolves to a non-empty value.
+fn nonempty_config(project: &Path, key: &str) -> bool {
+    Command::new("git")
+        .args(["config", "--get", key])
+        .current_dir(project)
+        .output()
+        .map(|o| o.status.success() && !String::from_utf8_lossy(&o.stdout).trim().is_empty())
+        .unwrap_or(false)
+}
+
+/// Args for the bootstrap `git commit`. With no machine identity, inject a
+/// synthetic `aello` author/committer (mirroring aello's per-env `@aello.local`
+/// attribution) via per-invocation `-c` flags so the commit always lands,
+/// without writing anything to the user's git config. When an identity already
+/// exists, it's used unchanged.
+fn initial_commit_args(has_identity: bool) -> Vec<String> {
+    let mut args: Vec<String> = Vec::new();
+    if !has_identity {
+        args.extend([
+            "-c".into(),
+            "user.name=aello".into(),
+            "-c".into(),
+            "user.email=aello@aello.local".into(),
+        ]);
+    }
+    args.extend(["commit".into(), "-m".into(), "Initial commit".into()]);
+    args
 }
 
 /// Run a command in `project`, returning true only on a successful exit, with
@@ -169,5 +206,22 @@ mod tests {
         let a = repo_create_args("my-proj", true);
         assert!(a.contains(&"--public".to_string()));
         assert!(!a.contains(&"--private".to_string()));
+    }
+
+    #[test]
+    fn initial_commit_uses_config_identity_when_present() {
+        let a = initial_commit_args(true);
+        assert_eq!(a, ["commit", "-m", "Initial commit"]);
+        assert!(!a.contains(&"-c".to_string()));
+    }
+
+    #[test]
+    fn initial_commit_injects_fallback_identity_when_absent() {
+        let a = initial_commit_args(false);
+        assert_eq!(a[a.len() - 3..], ["commit", "-m", "Initial commit"]);
+        assert!(a.contains(&"user.name=aello".to_string()));
+        assert!(a.contains(&"user.email=aello@aello.local".to_string()));
+        // `-c` precedes each override so git applies them for this invocation only.
+        assert_eq!(a.iter().filter(|s| *s == "-c").count(), 2);
     }
 }

@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed
+- `aello github-setup` now always lands its bootstrap "Initial commit" even on a
+  machine with no global git `user.name`/`user.email`. Previously `git commit`
+  aborted with *"Author identity unknown"* on a fresh repo. The bootstrap commit
+  now falls back to a synthetic `aello <aello@aello.local>` identity (injected
+  per-invocation via `git -c`, mirroring aello's per-env attribution) only when
+  no identity is configured — an existing git identity is used unchanged and
+  nothing is written to the user's git config.
+
 ### Added
 - `/handoff` — a new **universal** skill (seeded for every blueprint regardless
   of capabilities, unlike `/sync`). At session end it writes a self-contained

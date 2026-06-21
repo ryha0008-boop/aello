@@ -85,7 +85,7 @@ So the fix is structural, not a `/sync` carve-out (auto-staging build output wou
 `aello github-setup` creates the GitHub repo for the current project and pushes it, so you don't have to do it by hand before a blueprint can `/sync`:
 
 1. Prechecks `gh` is installed and authenticated (`gh auth status`).
-2. Initializes a git repo and an initial commit if the directory has none.
+2. Initializes a git repo and an initial commit if the directory has none. The bootstrap commit falls back to a synthetic `aello <aello@aello.local>` identity when the machine has no git `user.name`/`user.email`, so it lands even on a freshly configured box (an existing git identity is used unchanged).
 3. If an `origin` remote already exists, reports it and stops.
 4. Otherwise creates the repo with `gh repo create` (private by default; `--public` for public), sets `origin`, and pushes `main`.
 
