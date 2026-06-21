@@ -12,7 +12,7 @@ const POST_COMPACT_SCRIPT: &str = include_str!("hooks_post_compact.py");
 /// `MEMORY.md` is a one-line index pointing at it.
 const MEMORY_WORKING_STYLE: &str = include_str!("../templates/memory-working-style.md");
 const MEMORY_INDEX: &str =
-    "- [working style](working-style.md) — go slow, verify each feature for real, don't rebuild what works\n";
+    "- [working style](working-style.md) — user does not read plans, give decisions to choose from\n";
 
 /// Stack-agnostic CI workflow seeded for `github` blueprints. On every push to
 /// `main` it bumps the patch in a plain `VERSION` file and commits it back with
@@ -401,7 +401,7 @@ mod tests {
         assert!(index.exists());
         assert!(ws.exists());
         assert!(std::fs::read_to_string(&index).unwrap().contains("working-style.md"));
-        assert!(std::fs::read_to_string(&ws).unwrap().contains("Go slow"));
+        assert!(std::fs::read_to_string(&ws).unwrap().contains("does not read plans"));
 
         // A re-place over a user-edited MEMORY.md leaves it (and memory) untouched.
         std::fs::write(&index, "- my own memory\n").unwrap();

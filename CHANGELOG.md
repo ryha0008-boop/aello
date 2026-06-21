@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+- Reworked the bundled starter working-style memory: it now captures that the
+  user doesn't read plans — surface concrete decisions to choose from ("which
+  of these?") and ask short, ask often — replacing the old go-slow / verify
+  wording. Affects newly placed envs (existing memories are never clobbered).
+
+## [0.1.33]
+
 ### Added
 - Fresh placements now seed a starter memory so a new env boots with the
   user's working-style note already loaded in `/context`: a bundled
