@@ -7,6 +7,13 @@ use std::path::{Path, PathBuf};
 
 const POST_COMPACT_SCRIPT: &str = include_str!("hooks_post_compact.py");
 
+/// Starter memory seeded on first placement so a fresh env boots with the
+/// user's working-style note already loaded in `/context`. The body is bundled;
+/// `MEMORY.md` is a one-line index pointing at it.
+const MEMORY_WORKING_STYLE: &str = include_str!("../templates/memory-working-style.md");
+const MEMORY_INDEX: &str =
+    "- [working style](working-style.md) — go slow, verify each feature for real, don't rebuild what works\n";
+
 /// Stack-agnostic CI workflow seeded for `github` blueprints. On every push to
 /// `main` it bumps the patch in a plain `VERSION` file and commits it back with
 /// `[skip ci]` — a `GITHUB_TOKEN` push does not re-trigger workflows, so there's
@@ -124,6 +131,33 @@ pub fn place(
     let project = env_dir.parent().unwrap_or(env_dir);
     scaffold_project(project, caps)?;
 
+    // Seed a starter memory on first placement (never clobbers existing memory).
+    seed_memory(env_dir, project)?;
+
+    Ok(())
+}
+
+/// Seed the env's starter memory so a freshly placed env loads the user's
+/// working-style note into `/context` from the first run. Claude reads memory
+/// from `<CLAUDE_CONFIG_DIR>/projects/<encoded-cwd>/memory/`, the same path
+/// encoding `sessions` uses. Written only when there is no `MEMORY.md` yet, so
+/// a re-place over an established memory leaves the user's notes untouched.
+fn seed_memory(env_dir: &Path, project: &Path) -> Result<()> {
+    let mem = env_dir
+        .join("projects")
+        .join(crate::sessions::encode_project_path(project))
+        .join("memory");
+    let index = mem.join("MEMORY.md");
+    if index.exists() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(&mem).context("could not create memory dir")?;
+    let ws = mem.join("working-style.md");
+    if !ws.exists() {
+        std::fs::write(&ws, MEMORY_WORKING_STYLE)
+            .context("could not write working-style memory")?;
+    }
+    std::fs::write(&index, MEMORY_INDEX).context("could not write MEMORY.md")?;
     Ok(())
 }
 
@@ -346,6 +380,35 @@ mod tests {
 
         place(&env, &inst, None, &caps).unwrap();
         assert!(!proj.path().join(".gitignore").exists());
+    }
+
+    #[test]
+    fn place_seeds_starter_memory_and_never_clobbers_it() {
+        let proj = tempfile::tempdir().unwrap();
+        let env = env_dir(proj.path(), "coder");
+        let inst = Instance { name: "coder".into(), model: "opus".into() };
+
+        place(&env, &inst, None, &Capabilities::default()).unwrap();
+
+        let mem = env
+            .join("projects")
+            .join(crate::sessions::encode_project_path(proj.path()))
+            .join("memory");
+        let index = mem.join("MEMORY.md");
+        let ws = mem.join("working-style.md");
+
+        // Fresh placement seeds the index + the bundled working-style memory.
+        assert!(index.exists());
+        assert!(ws.exists());
+        assert!(std::fs::read_to_string(&index).unwrap().contains("working-style.md"));
+        assert!(std::fs::read_to_string(&ws).unwrap().contains("Go slow"));
+
+        // A re-place over a user-edited MEMORY.md leaves it (and memory) untouched.
+        std::fs::write(&index, "- my own memory\n").unwrap();
+        std::fs::remove_file(&ws).unwrap();
+        place(&env, &inst, None, &Capabilities::default()).unwrap();
+        assert_eq!(std::fs::read_to_string(&index).unwrap(), "- my own memory\n");
+        assert!(!ws.exists()); // not re-seeded while a MEMORY.md exists
     }
 
     #[test]

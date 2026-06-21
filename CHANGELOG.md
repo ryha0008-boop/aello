@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+- Fresh placements now seed a starter memory so a new env boots with the
+  user's working-style note already loaded in `/context`: a bundled
+  `working-style.md` memory plus a one-line `MEMORY.md` index pointing at it,
+  under `projects/<encoded-cwd>/memory/`. Seeded only when there is no
+  `MEMORY.md` yet — a re-place over an established memory leaves it untouched.
+
+## [0.1.32]
+
 ### Changed
 - `/sync` skill: the commit step now stages **only the files the blueprint
   created or modified this session** (by explicit path) instead of `git add -A`.
