@@ -9,7 +9,7 @@ Each enabled capability does two things on placement:
 | Capability | Scaffolds (if absent) | `/sync` section |
 |---|---|---|
 | `project_md` | project-root `CLAUDE.md` | reconcile the project CLAUDE.md |
-| `github` | `.gitignore` line `.claude-env-*`, `.gitattributes` (CRLF normalize), `VERSION` + `.github/workflows/version.yml` (patch-bump CI), tracked `claude-internal/` mirror | repo health checks; mirror env config into `claude-internal/`; commit + push; `Env:` trailer |
+| `github` | `.gitignore` line `.claude-env-*`, `.gitattributes` (CRLF normalize), `VERSION` + `.github/workflows/version.yml` (patch-bump CI), tracked `claude-internal/<name>/` mirror | repo health checks; mirror env config into `claude-internal/<name>/`; commit + push; `Env:` trailer |
 | `changelog` | `CHANGELOG.md` (`## [Unreleased]`) | keep CHANGELOG current |
 | `docs` | `docs/` directory | reconcile `docs/` |
 | `readme` | `README.md` | keep README current |
@@ -25,7 +25,7 @@ Crucially, the skill is **generated from the blueprint's capabilities**, not a o
 What `/sync` does when invoked (only the enabled parts):
 - **Repo health** (github) — confirm it's a git repo, check for an `origin` remote (offer `gh repo create` if missing, with confirmation), report branch / ahead-behind / status.
 - **Reconcile memory, then docs** — memory is refreshed **first** (its `MEMORY.md` index and per-fact files), then each enabled, existing doc gets a two-way staleness pass: add what's missing, fix what's wrong, delete what no longer applies. Reports per file: updated / fresh / skipped.
-- **Mirror env config** (github) — one-way copy of the env's `skills/`, `memory/`, and persona into the tracked `claude-internal/` folder (see below), staged by explicit path. Self-heals the folder (`mkdir -p`) so already-placed envs adopt it.
+- **Mirror env config** (github) — one-way copy of the env's `skills/`, `memory/`, and persona into the tracked per-blueprint `claude-internal/<name>/` folder (see below), staged by explicit path. Self-heals the folder (`mkdir -p`) so already-placed envs adopt it.
 - **Commit + push** (github) — stage **only the files touched this session** (by explicit path, never `git add -A`), commit with a clear message ending in an `Env: <blueprint>` trailer, then `git pull --rebase origin <branch>` (absorbs the release CI's auto-bump so the push fast-forwards) and push to `origin`.
 
 ### `claude-internal/` — version-controlling the env
@@ -34,12 +34,13 @@ The env dir (`.claude-env-<name>/`) is gitignored — it holds credentials and p
 
 ```
 claude-internal/
-├── skills/            # mirror of <env>/skills/
-├── memory/            # mirror of <env>/projects/<cwd>/memory/
-└── persona.CLAUDE.md  # snapshot of <env>/CLAUDE.md, renamed so it never auto-loads
+└── <name>/            # one namespace per blueprint sharing the repo
+    ├── skills/            # mirror of <env>/skills/
+    ├── memory/            # mirror of <env>/projects/<cwd>/memory/
+    └── persona.CLAUDE.md  # snapshot of <env>/CLAUDE.md, renamed so it never auto-loads
 ```
 
-The live env dir stays the **single source of truth** — `claude-internal/` is only ever written *from* it, never read back into it. The persona snapshot is deliberately **not** named `CLAUDE.md` (which Claude Code would auto-load as a second persona). The folder is seeded at placement and refreshed by every `/sync`; it is **not** covered by the `.claude-env-*` gitignore line, so it commits normally.
+The live env dir stays the **single source of truth** — `claude-internal/<name>/` is only ever written *from* it, never read back into it. It is **namespaced per blueprint** so multiple blueprints sharing one repo don't clobber each other's mirror. The persona snapshot is deliberately **not** named `CLAUDE.md` (which Claude Code would auto-load as a second persona). The folder is seeded at placement and refreshed by every `/sync`; it is **not** covered by the `.claude-env-*` gitignore line, so it commits normally.
 
 The skill is re-generated on every `aello run`, so changing a blueprint's capabilities updates its `/sync` on the next placement. If all capabilities are disabled, no `/sync` skill is seeded.
 

@@ -108,12 +108,12 @@ Then, for each doc file below that exists, compare it against the current code a
         s.push_str(&format!(
             "
 ## Mirror this env's internal config (tracked)
-Version-control this env's internal config by mirroring it into the tracked `claude-internal/` folder at the repo root, so the skills, memory, and persona that live in the gitignored `.claude-env-{name}/` dir are captured in git. The live env dir stays the **single source of truth** — this is a **one-way copy** from it, refreshing only what changed.
-- Self-heal first: `mkdir -p claude-internal/skills claude-internal/memory` — an env placed before this step won't have the folder yet, so create it.
-- Mirror `.claude-env-{name}/skills/` → `claude-internal/skills/`.
-- Mirror this env's memory dir (`.claude-env-{name}/projects/<this-project>/memory/`) → `claude-internal/memory/`.
-- Snapshot `.claude-env-{name}/CLAUDE.md` → `claude-internal/persona.CLAUDE.md` — **keep this exact name**, never `CLAUDE.md`, so Claude Code does not auto-load the snapshot as a second persona.
-- Stage it by explicit path: `git add claude-internal`. This folder is tracked on purpose — it is *not* covered by the `.claude-env-*` gitignore line.
+Version-control this env's internal config by mirroring it into the tracked `claude-internal/{name}/` folder at the repo root, so the skills, memory, and persona that live in the gitignored `.claude-env-{name}/` dir are captured in git. The folder is **namespaced per blueprint** (`claude-internal/{name}/`) so multiple blueprints sharing this repo don't clobber each other's mirror. The live env dir stays the **single source of truth** — this is a **one-way copy** from it, refreshing only what changed.
+- Self-heal first: `mkdir -p claude-internal/{name}/skills claude-internal/{name}/memory` — an env placed before this step won't have the folder yet, so create it.
+- Mirror `.claude-env-{name}/skills/` → `claude-internal/{name}/skills/`.
+- Mirror this env's memory dir (`.claude-env-{name}/projects/<this-project>/memory/`) → `claude-internal/{name}/memory/`.
+- Snapshot `.claude-env-{name}/CLAUDE.md` → `claude-internal/{name}/persona.CLAUDE.md` — **keep this exact name**, never `CLAUDE.md`, so Claude Code does not auto-load the snapshot as a second persona.
+- Stage it by explicit path: `git add claude-internal/{name}`. This folder is tracked on purpose — it is *not* covered by the `.claude-env-*` gitignore line.
 "
         ));
         s.push_str(&format!(
@@ -187,12 +187,12 @@ mod tests {
     fn sync_skill_mirrors_internal_before_commit() {
         let caps = Capabilities { github: true, ..Default::default() };
         let s = render_sync_skill(&caps, "reviewer");
-        // Mirror step names the tracked folder, the env source, the renamed
-        // persona snapshot, and self-heals the folder.
-        assert!(s.contains("claude-internal"));
-        assert!(s.contains("persona.CLAUDE.md"));
+        // Mirror step names the per-blueprint tracked folder, the env source,
+        // the renamed persona snapshot, and self-heals the folder.
+        assert!(s.contains("claude-internal/reviewer/")); // namespaced per blueprint
+        assert!(s.contains("claude-internal/reviewer/persona.CLAUDE.md"));
         assert!(s.contains(".claude-env-reviewer/skills/")); // env dir is source of truth
-        assert!(s.contains("mkdir -p claude-internal")); // self-heal already-placed envs
+        assert!(s.contains("mkdir -p claude-internal/reviewer")); // self-heal already-placed envs
         // The mirror is staged before the commit step runs.
         let mirror = s.find("Mirror this env's internal config").expect("mirror step");
         let commit = s.find("## Commit + push").expect("commit step");

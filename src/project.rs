@@ -135,7 +135,7 @@ pub fn place(
 
     // Scaffold the project-dir files this blueprint maintains (only if missing),
     // and mirror this env's internal config into the tracked claude-internal/.
-    scaffold_project(project, env_dir, caps)?;
+    scaffold_project(project, env_dir, &inst.name, caps)?;
 
     Ok(())
 }
@@ -168,7 +168,12 @@ fn seed_memory(env_dir: &Path, project: &Path) -> Result<()> {
 /// fresh project gets its CHANGELOG/README/docs/CLAUDE.md, and existing files
 /// are left untouched. The `github` cap additionally seeds release hygiene and
 /// the tracked `claude-internal/` mirror of this env's internal config.
-fn scaffold_project(project: &Path, env_dir: &Path, caps: &Capabilities) -> Result<()> {
+fn scaffold_project(
+    project: &Path,
+    env_dir: &Path,
+    blueprint: &str,
+    caps: &Capabilities,
+) -> Result<()> {
     let name = project
         .file_name()
         .and_then(|n| n.to_str())
@@ -221,18 +226,20 @@ fn scaffold_project(project: &Path, env_dir: &Path, caps: &Capabilities) -> Resu
         // Seed the tracked claude-internal/ mirror so the env's skills, memory,
         // and persona are version-controlled from the first commit. Deliberately
         // NOT added to the .claude-env-* gitignore line — this folder is tracked.
-        mirror_env_internal(project, env_dir)?;
+        mirror_env_internal(project, env_dir, blueprint)?;
     }
     Ok(())
 }
 
 /// One-way mirror of this env's internal config into the project-tracked
-/// `claude-internal/` folder, so the skills, memory, and persona that live in
-/// the gitignored env dir are captured in git. The live env dir stays the single
-/// source of truth; this only copies from it. The persona snapshot is renamed to
-/// `persona.CLAUDE.md` so Claude Code never auto-loads it as a second persona.
-fn mirror_env_internal(project: &Path, env_dir: &Path) -> Result<()> {
-    let dest = project.join("claude-internal");
+/// `claude-internal/<blueprint>/` folder, so the skills, memory, and persona
+/// that live in the gitignored env dir are captured in git. The live env dir
+/// stays the single source of truth; this only copies from it. The persona
+/// snapshot is renamed to `persona.CLAUDE.md` so Claude Code never auto-loads it
+/// as a second persona. Namespacing per blueprint keeps multi-blueprint repos
+/// from clobbering each other's mirror.
+fn mirror_env_internal(project: &Path, env_dir: &Path, blueprint: &str) -> Result<()> {
+    let dest = project.join("claude-internal").join(blueprint);
     copy_dir_all(&env_dir.join("skills"), &dest.join("skills"))
         .context("could not mirror skills into claude-internal")?;
     let mem = env_dir
@@ -432,7 +439,8 @@ mod tests {
 
         place(&env, &inst, Some("# persona snapshot"), &caps).unwrap();
 
-        let ci = proj.path().join("claude-internal");
+        // Mirror is namespaced per blueprint: claude-internal/<name>/...
+        let ci = proj.path().join("claude-internal").join("demo");
         // Persona snapshot is renamed so it never auto-loads as a second CLAUDE.md.
         let persona = std::fs::read_to_string(ci.join("persona.CLAUDE.md")).unwrap();
         assert!(persona.contains("persona snapshot"));
@@ -450,6 +458,35 @@ mod tests {
         place(&fenv, &Instance { name: "bare".into(), model: "haiku".into() }, Some("# p"),
               &Capabilities { changelog: true, ..Default::default() }).unwrap();
         assert!(!fresh.path().join("claude-internal").exists());
+    }
+
+    #[test]
+    fn two_blueprints_in_one_repo_keep_separate_mirrors() {
+        // Regression: a flat claude-internal/ let the 2nd placement clobber the
+        // 1st's persona + sync skill and merge-corrupt memory. Per-blueprint
+        // namespacing keeps both mirrors intact.
+        let proj = tempfile::tempdir().unwrap();
+        let caps = Capabilities { github: true, ..Default::default() };
+
+        let env_a = env_dir(proj.path(), "core");
+        place(&env_a, &Instance { name: "core".into(), model: "opus".into() },
+              Some("# core persona"), &caps).unwrap();
+        let env_b = env_dir(proj.path(), "frontend");
+        place(&env_b, &Instance { name: "frontend".into(), model: "sonnet".into() },
+              Some("# frontend persona"), &caps).unwrap();
+
+        // Both mirrors coexist under their own namespace.
+        let a = proj.path().join("claude-internal").join("core");
+        let b = proj.path().join("claude-internal").join("frontend");
+        let pa = std::fs::read_to_string(a.join("persona.CLAUDE.md")).unwrap();
+        let pb = std::fs::read_to_string(b.join("persona.CLAUDE.md")).unwrap();
+        assert!(pa.contains("core persona")); // not clobbered by frontend
+        assert!(pb.contains("frontend persona"));
+        // Each keeps its own sync skill + memory.
+        assert!(a.join("skills/sync/SKILL.md").exists());
+        assert!(b.join("skills/sync/SKILL.md").exists());
+        assert!(a.join("memory/MEMORY.md").exists());
+        assert!(b.join("memory/MEMORY.md").exists());
     }
 
     #[test]

@@ -4,14 +4,17 @@
 
 ### Added
 - `/sync` now version-controls each env's **internal config**, not just project
-  docs. A tracked `claude-internal/` folder at the repo root is a one-way mirror
-  of the gitignored `.claude-env-<name>/` dir: `claude-internal/skills/`,
-  `claude-internal/memory/`, and `claude-internal/persona.CLAUDE.md` (a snapshot
-  of the env persona, renamed so Claude Code never auto-loads it). The live env
-  dir stays the single source of truth. Placement seeds the folder (tracked —
-  not gitignored), and the github `/sync` step self-heals it (`mkdir -p`) so
-  already-placed envs adopt it, mirrors the env into it, and stages it by
-  explicit path before committing. Re-place a blueprint (`aello run`) to pick it up.
+  docs. A tracked `claude-internal/<blueprint>/` folder at the repo root is a
+  one-way mirror of the gitignored `.claude-env-<name>/` dir:
+  `claude-internal/<name>/skills/`, `claude-internal/<name>/memory/`, and
+  `claude-internal/<name>/persona.CLAUDE.md` (a snapshot of the env persona,
+  renamed so Claude Code never auto-loads it). The mirror is **namespaced per
+  blueprint** so multiple blueprints sharing one repo don't clobber each other's
+  config. The live env dir stays the single source of truth. Placement seeds the
+  folder (tracked — not gitignored), and the github `/sync` step self-heals it
+  (`mkdir -p`) so already-placed envs adopt it, mirrors the env into it, and
+  stages it by explicit path before committing. Re-place a blueprint
+  (`aello run`) to pick it up.
 
 ### Documentation
 - Documented the **`VERSION` single-source-of-truth** convention for `github`-cap
