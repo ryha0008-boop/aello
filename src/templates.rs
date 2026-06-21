@@ -85,11 +85,18 @@ When invoked, reconcile the docs this project maintains so they match the curren
     if caps.docs {
         roles.push("- **docs/** — deeper, topic-by-topic reference docs. Keep each page consistent with actual behavior; don't just duplicate the README.");
     }
+    // Memory is reconciled before any doc (and before the github mirror below)
+    // so the checkpoint captures what this env learned this session.
+    s.push_str(
+        "
+## Reconcile memory, then docs
+**Memory first** — before any doc, refresh this env's memory so the checkpoint (and the mirror below, if any) captures what you've learned this session. Review `MEMORY.md` and the per-fact files under `$CLAUDE_CONFIG_DIR/projects/<this-project>/memory/`: add new facts, correct stale ones, prune what's wrong, and keep the one-line `MEMORY.md` index in sync. Report: memory updated / already-fresh.
+",
+    );
     if !roles.is_empty() {
         s.push_str(
             "
-## Reconcile the docs (only files that exist)
-For each file below that exists, compare it against the current code and recent commits, then make it accurate. This is a **two-way reconcile, not append-only**: add what's missing, **correct what's now wrong**, and **delete what no longer applies**. Report per file: updated / already-fresh / skipped (absent).
+Then, for each doc file below that exists, compare it against the current code and recent commits, then make it accurate. This is a **two-way reconcile, not append-only**: add what's missing, **correct what's now wrong**, and **delete what no longer applies**. Report per file: updated / already-fresh / skipped (absent).
 
 ",
         );
@@ -98,6 +105,17 @@ For each file below that exists, compare it against the current code and recent 
     }
 
     if caps.github {
+        s.push_str(&format!(
+            "
+## Mirror this env's internal config (tracked)
+Version-control this env's internal config by mirroring it into the tracked `claude-internal/` folder at the repo root, so the skills, memory, and persona that live in the gitignored `.claude-env-{name}/` dir are captured in git. The live env dir stays the **single source of truth** — this is a **one-way copy** from it, refreshing only what changed.
+- Self-heal first: `mkdir -p claude-internal/skills claude-internal/memory` — an env placed before this step won't have the folder yet, so create it.
+- Mirror `.claude-env-{name}/skills/` → `claude-internal/skills/`.
+- Mirror this env's memory dir (`.claude-env-{name}/projects/<this-project>/memory/`) → `claude-internal/memory/`.
+- Snapshot `.claude-env-{name}/CLAUDE.md` → `claude-internal/persona.CLAUDE.md` — **keep this exact name**, never `CLAUDE.md`, so Claude Code does not auto-load the snapshot as a second persona.
+- Stage it by explicit path: `git add claude-internal`. This folder is tracked on purpose — it is *not* covered by the `.claude-env-*` gitignore line.
+"
+        ));
         s.push_str(&format!(
             "
 ## Commit + push
@@ -138,6 +156,8 @@ mod tests {
         assert!(!s.contains("git "));
         assert!(!s.contains("commit and push"));
         assert!(!s.contains("Env: coder")); // no commit trailer without github
+        assert!(s.contains("Memory first")); // memory reconcile renders for every blueprint
+        assert!(!s.contains("claude-internal")); // mirror is github-only
         assert!(s.contains("allowed-tools: Read, Edit, Write, Grep, Glob"));
     }
 
@@ -152,5 +172,30 @@ mod tests {
         assert!(s.contains("CHANGELOG.md"));
         assert!(!s.contains("README.md"));
         assert!(s.contains("allowed-tools: Bash,"));
+    }
+
+    #[test]
+    fn sync_skill_reconciles_memory_before_docs() {
+        let caps = Capabilities { changelog: true, ..Default::default() };
+        let s = render_sync_skill(&caps, "coder");
+        let mem = s.find("Memory first").expect("memory step present");
+        let doc = s.find("CHANGELOG.md").expect("doc role present");
+        assert!(mem < doc, "memory must be reconciled before the docs");
+    }
+
+    #[test]
+    fn sync_skill_mirrors_internal_before_commit() {
+        let caps = Capabilities { github: true, ..Default::default() };
+        let s = render_sync_skill(&caps, "reviewer");
+        // Mirror step names the tracked folder, the env source, the renamed
+        // persona snapshot, and self-heals the folder.
+        assert!(s.contains("claude-internal"));
+        assert!(s.contains("persona.CLAUDE.md"));
+        assert!(s.contains(".claude-env-reviewer/skills/")); // env dir is source of truth
+        assert!(s.contains("mkdir -p claude-internal")); // self-heal already-placed envs
+        // The mirror is staged before the commit step runs.
+        let mirror = s.find("Mirror this env's internal config").expect("mirror step");
+        let commit = s.find("## Commit + push").expect("commit step");
+        assert!(mirror < commit, "mirror must be staged before commit");
     }
 }

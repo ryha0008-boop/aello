@@ -14,10 +14,16 @@ my-project/
 │   ├── skills/sync/SKILL.md  #   generated from this blueprint's capabilities
 │   └── projects/<cwd>/memory/  # starter working-style memory, seeded once
 ├── .claude-env-reviewer/     # a second blueprint, fully isolated
+├── claude-internal/          # TRACKED one-way mirror of the env's internal config
+│   ├── skills/               #   mirror of <env>/skills/
+│   ├── memory/               #   mirror of <env>/projects/<cwd>/memory/
+│   └── persona.CLAUDE.md     #   snapshot of <env>/CLAUDE.md (renamed; never auto-loads)
 ├── CLAUDE.md                 # project-level instructions (--project-md)
 ├── README.md  CHANGELOG.md  docs/   # scaffolded by capabilities
-└── .gitignore                # contains ".claude-env-*"
+└── .gitignore                # contains ".claude-env-*" (but NOT claude-internal/)
 ```
+
+The env dir is gitignored, so the skills, memory, and persona that define a blueprint would never reach git. With the `github` cap, `claude-internal/` (a tracked folder at the repo root) is a **one-way mirror** of that internal config — written *from* the env dir, never back into it, so the live env stays the single source of truth. It's seeded at placement and refreshed by `/sync`. The persona snapshot is renamed (`persona.CLAUDE.md`) so Claude Code never auto-loads it as a second persona.
 
 ## Blueprint vs instance
 

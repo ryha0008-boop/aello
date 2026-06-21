@@ -2,7 +2,21 @@
 
 ## [Unreleased]
 
+### Added
+- `/sync` now version-controls each env's **internal config**, not just project
+  docs. A tracked `claude-internal/` folder at the repo root is a one-way mirror
+  of the gitignored `.claude-env-<name>/` dir: `claude-internal/skills/`,
+  `claude-internal/memory/`, and `claude-internal/persona.CLAUDE.md` (a snapshot
+  of the env persona, renamed so Claude Code never auto-loads it). The live env
+  dir stays the single source of truth. Placement seeds the folder (tracked —
+  not gitignored), and the github `/sync` step self-heals it (`mkdir -p`) so
+  already-placed envs adopt it, mirrors the env into it, and stages it by
+  explicit path before committing. Re-place a blueprint (`aello run`) to pick it up.
+
 ### Changed
+- `/sync` reconcile order: memory is now refreshed **first**, before the other
+  docs, so the checkpoint (and the new `claude-internal/` mirror) captures what
+  the env learned this session.
 - `/sync` skill (github blueprints): the commit step now runs
   `git pull --rebase origin <branch>` **after committing, before pushing**, so
   it integrates the release CI's auto-bump commit and the push fast-forwards.

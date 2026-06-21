@@ -127,12 +127,15 @@ pub fn place(
         let _ = std::fs::remove_file(&skill);
     }
 
-    // Scaffold the project-dir files this blueprint maintains (only if missing).
     let project = env_dir.parent().unwrap_or(env_dir);
-    scaffold_project(project, caps)?;
 
     // Seed a starter memory on first placement (never clobbers existing memory).
+    // Done before scaffolding so the claude-internal mirror captures it.
     seed_memory(env_dir, project)?;
+
+    // Scaffold the project-dir files this blueprint maintains (only if missing),
+    // and mirror this env's internal config into the tracked claude-internal/.
+    scaffold_project(project, env_dir, caps)?;
 
     Ok(())
 }
@@ -163,9 +166,9 @@ fn seed_memory(env_dir: &Path, project: &Path) -> Result<()> {
 
 /// Create the docs the enabled capabilities expect, only when absent — so a
 /// fresh project gets its CHANGELOG/README/docs/CLAUDE.md, and existing files
-/// are left untouched. GitHub has no file to scaffold (the repo/remote is
-/// handled interactively by `/sync`).
-fn scaffold_project(project: &Path, caps: &Capabilities) -> Result<()> {
+/// are left untouched. The `github` cap additionally seeds release hygiene and
+/// the tracked `claude-internal/` mirror of this env's internal config.
+fn scaffold_project(project: &Path, env_dir: &Path, caps: &Capabilities) -> Result<()> {
     let name = project
         .file_name()
         .and_then(|n| n.to_str())
@@ -214,6 +217,55 @@ fn scaffold_project(project: &Path, caps: &Capabilities) -> Result<()> {
             std::fs::create_dir_all(wf.parent().unwrap())
                 .context("could not create .github/workflows dir")?;
             std::fs::write(&wf, VERSION_WORKFLOW).context("could not write version.yml")?;
+        }
+        // Seed the tracked claude-internal/ mirror so the env's skills, memory,
+        // and persona are version-controlled from the first commit. Deliberately
+        // NOT added to the .claude-env-* gitignore line — this folder is tracked.
+        mirror_env_internal(project, env_dir)?;
+    }
+    Ok(())
+}
+
+/// One-way mirror of this env's internal config into the project-tracked
+/// `claude-internal/` folder, so the skills, memory, and persona that live in
+/// the gitignored env dir are captured in git. The live env dir stays the single
+/// source of truth; this only copies from it. The persona snapshot is renamed to
+/// `persona.CLAUDE.md` so Claude Code never auto-loads it as a second persona.
+fn mirror_env_internal(project: &Path, env_dir: &Path) -> Result<()> {
+    let dest = project.join("claude-internal");
+    copy_dir_all(&env_dir.join("skills"), &dest.join("skills"))
+        .context("could not mirror skills into claude-internal")?;
+    let mem = env_dir
+        .join("projects")
+        .join(crate::sessions::encode_project_path(project))
+        .join("memory");
+    copy_dir_all(&mem, &dest.join("memory"))
+        .context("could not mirror memory into claude-internal")?;
+    let persona = env_dir.join("CLAUDE.md");
+    if persona.exists() {
+        std::fs::create_dir_all(&dest).context("could not create claude-internal dir")?;
+        std::fs::copy(&persona, dest.join("persona.CLAUDE.md"))
+            .context("could not snapshot persona into claude-internal")?;
+    }
+    Ok(())
+}
+
+/// Recursively copy `src` into `dst`, creating `dst` and any subdirectories.
+/// A missing `src` is a no-op (nothing to mirror yet). Existing files at the
+/// destination are overwritten — the mirror is one-way from the env dir.
+fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
+    if !src.exists() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(dst).context("could not create mirror destination dir")?;
+    for entry in std::fs::read_dir(src).context("could not read mirror source dir")? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_all(&from, &to)?;
+        } else {
+            std::fs::copy(&from, &to).context("could not copy mirror file")?;
         }
     }
     Ok(())
@@ -369,6 +421,35 @@ mod tests {
         assert!(!fresh.path().join(".gitattributes").exists());
         assert!(!fresh.path().join("VERSION").exists());
         assert!(!fresh.path().join(".github").exists());
+    }
+
+    #[test]
+    fn github_cap_seeds_tracked_claude_internal_mirror() {
+        let proj = tempfile::tempdir().unwrap();
+        let env = env_dir(proj.path(), "demo");
+        let inst = Instance { name: "demo".into(), model: "haiku".into() };
+        let caps = Capabilities { github: true, ..Default::default() };
+
+        place(&env, &inst, Some("# persona snapshot"), &caps).unwrap();
+
+        let ci = proj.path().join("claude-internal");
+        // Persona snapshot is renamed so it never auto-loads as a second CLAUDE.md.
+        let persona = std::fs::read_to_string(ci.join("persona.CLAUDE.md")).unwrap();
+        assert!(persona.contains("persona snapshot"));
+        assert!(!ci.join("CLAUDE.md").exists());
+        // Skills + memory mirrored one-way from the live env dir.
+        assert!(ci.join("skills/sync/SKILL.md").exists());
+        assert!(ci.join("memory/MEMORY.md").exists());
+        // Tracked: the mirror is NOT covered by the .claude-env-* gitignore line.
+        let gi = std::fs::read_to_string(proj.path().join(".gitignore")).unwrap();
+        assert!(gi.lines().all(|l| !l.contains("claude-internal")));
+
+        // A no-github blueprint seeds no claude-internal mirror.
+        let fresh = tempfile::tempdir().unwrap();
+        let fenv = env_dir(fresh.path(), "bare");
+        place(&fenv, &Instance { name: "bare".into(), model: "haiku".into() }, Some("# p"),
+              &Capabilities { changelog: true, ..Default::default() }).unwrap();
+        assert!(!fresh.path().join("claude-internal").exists());
     }
 
     #[test]

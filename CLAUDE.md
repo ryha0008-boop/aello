@@ -13,7 +13,9 @@ Isolated Claude Code environments — like Python venvs, but for AI agents. Clau
 
 **Blueprint** — a reusable agent identity in `config.toml`: `name`, `model`, optional `claude_md` (global persona), and `caps` (Capabilities). Reusable across projects.
 
-**Capabilities** (`models.rs::Capabilities`) — five bools chosen at `add` time: `project_md`, `github`, `changelog`, `docs`, `readme`. `#[serde(default)]` so old configs load all-false. Each enabled cap, on placement, scaffolds its file (only if missing) and contributes a section to a generated `/sync` skill. `github` scaffolds the most: the `.claude-env-*` gitignore line, `.gitattributes` (CRLF normalize), and a generic `VERSION` + stack-agnostic `.github/workflows/version.yml` patch-bump CI.
+**Capabilities** (`models.rs::Capabilities`) — five bools chosen at `add` time: `project_md`, `github`, `changelog`, `docs`, `readme`. `#[serde(default)]` so old configs load all-false. Each enabled cap, on placement, scaffolds its file (only if missing) and contributes a section to a generated `/sync` skill. `github` scaffolds the most: the `.claude-env-*` gitignore line, `.gitattributes` (CRLF normalize), a generic `VERSION` + stack-agnostic `.github/workflows/version.yml` patch-bump CI, and the tracked `claude-internal/` mirror (see below).
+
+**`claude-internal/`** — a TRACKED folder at the project root, one-way mirror of the gitignored env dir, so a blueprint's skills/memory/persona reach git. Three parts: `claude-internal/skills/` ← `<env>/skills/`, `claude-internal/memory/` ← `<env>/projects/<encoded-cwd>/memory/`, and `claude-internal/persona.CLAUDE.md` ← `<env>/CLAUDE.md` (renamed so Claude Code never auto-loads the snapshot). The live env dir stays the single source of truth; the mirror is written one-way from it (never read back). Seeded at placement (`scaffold_project` → `mirror_env_internal`, github only, NOT added to the `.claude-env-*` gitignore) and refreshed + staged by the github `/sync` step, which self-heals the folder (`mkdir -p`) so already-placed envs adopt it.
 
 **Env dir** — `<project>/.claude-env-<name>/`, the blueprint's `CLAUDE_CONFIG_DIR`. Holds `settings.json`, the global persona `CLAUDE.md`, `.aello.toml` (the placed Instance), `hooks/post-compact.py`, and the generated `skills/sync/SKILL.md`. Gitignored by convention (the `github` cap seeds the `.claude-env-*` ignore line).
 
@@ -30,7 +32,7 @@ Isolated Claude Code environments — like Python venvs, but for AI agents. Clau
 - `main.rs` — clap CLI + dispatch (`add`/`list`/`remove`/`edit`/`run`/`init`/`login`/`github-setup`/`update`); `cmd_edit` (in-place blueprint edit; `EditArgs` + tri-state `tri` cap flags); `run_blueprint` (shared by CLI `run` and the TUI); `cmd_init` (first-run wizard) + `prompt`/`prompt_bool`/`prompt_optional`; `validate_name`/`validate_model`; Windows `aello.exe.old*` startup sweep.
 - `models.rs` — `Blueprint`, `Capabilities`, `Instance`, `Config`.
 - `config.rs` — `config.toml` load/save; `contextdb_dir`; `expand_home` (splits on `/` and `\`); `home_dir`.
-- `project.rs` — `env_dir`; `place` (writes `.aello.toml`/settings/persona/hook, regenerates `/sync`, scaffolds, seeds starter memory); `settings_json`; `mark_onboarded`; `scaffold_project` (incl. github's `.gitattributes`/`VERSION`/`version.yml`); `seed_memory` (bundled working-style memory + `MEMORY.md` index, only when no `MEMORY.md` yet); `ensure_gitignore_entry` (idempotent); `VERSION_WORKFLOW`.
+- `project.rs` — `env_dir`; `place` (writes `.aello.toml`/settings/persona/hook, regenerates `/sync`, seeds starter memory, then scaffolds — memory before scaffold so the mirror captures it); `settings_json`; `mark_onboarded`; `scaffold_project(project, env_dir, caps)` (incl. github's `.gitattributes`/`VERSION`/`version.yml` and the `claude-internal/` mirror); `mirror_env_internal` + `copy_dir_all` (one-way env → `claude-internal/`); `seed_memory` (bundled working-style memory + `MEMORY.md` index, only when no `MEMORY.md` yet); `ensure_gitignore_entry` (idempotent); `VERSION_WORKFLOW`.
 - `github.rs` — `aello github-setup`: `gh` auth precheck → ensure git repo + initial commit → `gh repo create --source=. --remote=origin --push`; pure `repo_create_args`.
 - `templates.rs` — bundled personas (`coder`, `sysadmin` via `include_str!`), `resolve` (builtin name or path), `render_sync_skill(caps, name)`, `BUILTINS`.
 - `launch.rs` — `launch` (sets `CLAUDE_CONFIG_DIR`, `AELLO_CONTEXTDB`, git attribution env, `CLAUDE_CODE_OAUTH_TOKEN`); `git_identity`.
@@ -42,7 +44,7 @@ Isolated Claude Code environments — like Python venvs, but for AI agents. Clau
 
 ## `/sync`
 
-Generated per blueprint from its caps (`templates::render_sync_skill`), seeded to `<env>/skills/sync/SKILL.md` when `caps.any()`. Manual-only (`disable-model-invocation: true`) — replaces the old auto-commit hooks. A no-`github` blueprint gets no git/commit/push sections and no `Bash` tool. Sections: repo health (github), two-way doc reconcile (per enabled doc), commit + rebase-before-push with `Env:` trailer (github).
+Generated per blueprint from its caps (`templates::render_sync_skill`), seeded to `<env>/skills/sync/SKILL.md` when `caps.any()`. Manual-only (`disable-model-invocation: true`) — replaces the old auto-commit hooks. A no-`github` blueprint gets no git/commit/push sections and no `Bash` tool. Sections, in order: repo health (github), reconcile **memory first** then the enabled docs (two-way), mirror env config into `claude-internal/` + stage by path (github), commit + rebase-before-push with `Env:` trailer (github).
 
 ## Development rules
 
