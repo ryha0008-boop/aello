@@ -32,9 +32,9 @@ Isolated Claude Code environments — like Python venvs, but for AI agents. Clau
 - `main.rs` — clap CLI + dispatch (`add`/`list`/`remove`/`edit`/`run`/`init`/`login`/`github-setup`/`update`); `cmd_edit` (in-place blueprint edit; `EditArgs` + tri-state `tri` cap flags); `run_blueprint` (shared by CLI `run` and the TUI); `cmd_init` (first-run wizard) + `prompt`/`prompt_bool`/`prompt_optional`; `validate_name`/`validate_model`; Windows `aello.exe.old*` startup sweep.
 - `models.rs` — `Blueprint`, `Capabilities`, `Instance`, `Config`.
 - `config.rs` — `config.toml` load/save; `contextdb_dir`; `expand_home` (splits on `/` and `\`); `home_dir`.
-- `project.rs` — `env_dir`; `place` (writes `.aello.toml`/settings/persona/hook, regenerates `/sync`, seeds starter memory, then scaffolds — memory before scaffold so the mirror captures it); `settings_json`; `mark_onboarded`; `scaffold_project(project, env_dir, blueprint, caps)` (incl. github's `.gitattributes`/`VERSION`/`version.yml` and the `claude-internal/<name>/` mirror); `mirror_env_internal` (takes the blueprint name) + `copy_dir_all` (one-way env → `claude-internal/<name>/`); `seed_memory` (bundled working-style memory + `MEMORY.md` index, only when no `MEMORY.md` yet); `ensure_gitignore_entry` (idempotent); `VERSION_WORKFLOW`.
+- `project.rs` — `env_dir`; `place` (writes `.aello.toml`/settings/persona/hook, regenerates `/sync`, always seeds the universal `/handoff` skill, seeds starter memory, then scaffolds — memory before scaffold so the mirror captures it); `settings_json`; `mark_onboarded`; `scaffold_project(project, env_dir, blueprint, caps)` (incl. github's `.gitattributes`/`VERSION`/`version.yml` and the `claude-internal/<name>/` mirror); `mirror_env_internal` (takes the blueprint name) + `copy_dir_all` (one-way env → `claude-internal/<name>/`); `seed_memory` (bundled working-style memory + `MEMORY.md` index, only when no `MEMORY.md` yet); `ensure_gitignore_entry` (idempotent); `VERSION_WORKFLOW`.
 - `github.rs` — `aello github-setup`: `gh` auth precheck → ensure git repo + initial commit → `gh repo create --source=. --remote=origin --push`; pure `repo_create_args`.
-- `templates.rs` — bundled personas (`coder`, `sysadmin` via `include_str!`), `resolve` (builtin name or path), `render_sync_skill(caps, name)`, `BUILTINS`.
+- `templates.rs` — bundled personas (`coder`, `sysadmin` via `include_str!`), `resolve` (builtin name or path), `render_sync_skill(caps, name)`, `render_handoff_skill(name)` (universal `/handoff` skill), `BUILTINS`.
 - `launch.rs` — `launch` (sets `CLAUDE_CONFIG_DIR`, `AELLO_CONTEXTDB`, git attribution env, `CLAUDE_CODE_OAUTH_TOKEN`); `git_identity`.
 - `auth.rs` — `capture_setup_token` (tees `claude setup-token` stdout so the auth URL shows on headless machines); `extract_token`.
 - `sessions.rs` — session listing for resume.
@@ -45,6 +45,10 @@ Isolated Claude Code environments — like Python venvs, but for AI agents. Clau
 ## `/sync`
 
 Generated per blueprint from its caps (`templates::render_sync_skill`), seeded to `<env>/skills/sync/SKILL.md` when `caps.any()`. Manual-only (`disable-model-invocation: true`) — replaces the old auto-commit hooks. A no-`github` blueprint gets no git/commit/push sections and no `Bash` tool. Sections, in order: repo health (github), reconcile **memory first** then the enabled docs (two-way), mirror env config into `claude-internal/<name>/` + stage by path (github), commit + rebase-before-push with `Env:` trailer (github).
+
+## `/handoff`
+
+Universal counterpart to `/sync` (`templates::render_handoff_skill`), seeded **unconditionally** for every blueprint at `<env>/skills/handoff/SKILL.md` (no caps gate — even a bare blueprint gets it). Manual-only (`disable-model-invocation: true`), tools `Write, Read, Bash`. At session end it writes a transient, untracked `HANDOFF.md` at the project root so the next session resumes after a full `/clear` (not a compact — a clear leaves no summary, so the note is fully self-contained: read-first pointers, what shipped + commit shas, open threads/next steps, gotchas). Read on boot, then deleted.
 
 ## Development rules
 

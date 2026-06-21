@@ -3,6 +3,14 @@
 ## [Unreleased]
 
 ### Added
+- `/handoff` — a new **universal** skill (seeded for every blueprint regardless
+  of capabilities, unlike `/sync`). At session end it writes a self-contained
+  `HANDOFF.md` resume note at the project root so the next session continues
+  seamlessly after a full `/clear` (which, unlike a compact, leaves no summary).
+  The note captures read-first pointers (env persona + memory), what shipped
+  this session with commit shas, open threads / next steps, and gotchas —
+  assuming the next session boots with zero prior context. Transient and
+  untracked: read on boot, then deleted. Manual-only (`disable-model-invocation`).
 - `/sync` now version-controls each env's **internal config**, not just project
   docs. A tracked `claude-internal/<blueprint>/` folder at the repo root is a
   one-way mirror of the gitignored `.claude-env-<name>/` dir:

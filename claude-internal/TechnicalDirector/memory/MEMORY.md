@@ -1,0 +1,7 @@
+- [aello overview](aello-overview.md) — what aello is, current state, repo, install
+- [aello architecture decisions](aello-architecture-decisions.md) — the non-obvious WHYs (auth, /sync, attribution)
+- [aello CI + release](aello-ci-release.md) — rolling latest, auto patch-bump, never draft the release
+- [aello TUI design](aello-tui-design.md) — "Kinetic Command" palette + conventions
+- [working style](working-style.md) — user does not read plans, give decisions to choose from
+- [aello dev gotchas](aello-dev-gotchas.md) — Windows locked-exe install fix; print mode doesn't load memory
+- [▶ TODO: migration help page](aello-migration-help-todo.md) — build a docs page for migrating an EXISTING repo onto aello; validated flow + the gotchas (/sync won't bootstrap CI scaffolding, attribution needs the env session, CI bump loop, review-first /sync)

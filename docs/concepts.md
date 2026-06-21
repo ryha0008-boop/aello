@@ -12,6 +12,7 @@ my-project/
 │   ├── CLAUDE.md             #   global persona (set once)
 │   ├── hooks/post-compact.py
 │   ├── skills/sync/SKILL.md  #   generated from this blueprint's capabilities
+│   ├── skills/handoff/SKILL.md  # universal — seeded for every blueprint
 │   └── projects/<cwd>/memory/  # starter working-style memory, seeded once
 ├── .claude-env-reviewer/     # a second blueprint, fully isolated
 ├── claude-internal/          # TRACKED one-way mirror, namespaced per blueprint

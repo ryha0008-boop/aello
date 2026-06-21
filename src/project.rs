@@ -127,6 +127,15 @@ pub fn place(
         let _ = std::fs::remove_file(&skill);
     }
 
+    // Always seed the /handoff skill — unlike /sync it is universal (every
+    // blueprint, regardless of caps), since a clean resume note helps even a
+    // blueprint that maintains no docs.
+    let handoff = env_dir.join("skills").join("handoff").join("SKILL.md");
+    std::fs::create_dir_all(handoff.parent().unwrap())
+        .context("could not create handoff skills dir")?;
+    std::fs::write(&handoff, crate::templates::render_handoff_skill(&inst.name))
+        .context("could not write handoff SKILL.md")?;
+
     let project = env_dir.parent().unwrap_or(env_dir);
 
     // Seed a starter memory on first placement (never clobbers existing memory).
@@ -539,5 +548,21 @@ mod tests {
 
         assert!(!env.join("skills/sync/SKILL.md").exists());
         assert!(!proj.path().join("CHANGELOG.md").exists());
+    }
+
+    #[test]
+    fn place_always_seeds_handoff_skill_even_with_no_caps() {
+        let proj = tempfile::tempdir().unwrap();
+        let env = env_dir(proj.path(), "bare");
+        let inst = Instance { name: "bare".into(), model: "sonnet".into() };
+
+        // No caps at all — /sync is skipped, but /handoff is universal.
+        place(&env, &inst, None, &Capabilities::default()).unwrap();
+
+        let handoff = env.join("skills/handoff/SKILL.md");
+        assert!(handoff.exists());
+        let s = std::fs::read_to_string(&handoff).unwrap();
+        assert!(s.contains("name: handoff"));
+        assert!(s.contains("HANDOFF.md"));
     }
 }

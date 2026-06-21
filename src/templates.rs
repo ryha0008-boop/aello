@@ -133,6 +133,55 @@ Use normal prose for commit messages. Don't skip hooks or force-push unless the 
     s
 }
 
+/// Generate the `/handoff` SKILL.md. Unlike `/sync`, this is **universal** —
+/// seeded for every blueprint regardless of capabilities — because a clean
+/// session handoff is useful even for a blueprint that maintains no docs. At
+/// session end it writes a self-contained `HANDOFF.md` resume note so the next
+/// session picks up seamlessly after a full `/clear` (which, unlike a compact,
+/// leaves no summary behind). `name` is the blueprint name, for context.
+pub fn render_handoff_skill(name: &str) -> String {
+    format!(
+        "---
+name: handoff
+description: Write a self-contained HANDOFF.md resume note so the next session continues seamlessly after a /clear. Invoke manually with /handoff.
+disable-model-invocation: true
+allowed-tools: Write, Read, Bash
+---
+
+# /handoff — session resume note
+
+When invoked, write a `HANDOFF.md` at the project root that lets the **next**
+session resume this work with **zero prior context**. Invoking this skill is
+your authorization to do so.
+
+A handoff is not a compact: after a `/clear` there is no conversation summary to
+fall back on, so `HANDOFF.md` must be **fully self-contained**. Assume the reader
+boots fresh, has never seen this conversation, and reads only this file plus the
+pointers it names.
+
+`HANDOFF.md` is **transient and untracked** — it is read on boot, then deleted.
+Begin the file with a one-line banner: `> Transient resume note ({name}). Read on boot, then delete.`
+
+Write these sections, in order:
+
+1. **Read first** — point the next session at its durable context before
+   anything else: the env persona (`$CLAUDE_CONFIG_DIR/CLAUDE.md`) and the
+   memory index (`$CLAUDE_CONFIG_DIR/projects/<this-project>/memory/MEMORY.md`).
+   Tell it to read those before acting on this note.
+2. **Shipped this session** — what actually changed, with commit shas (run
+   `git log --oneline` for the recent ones) and a one-line summary each. Note
+   anything committed-but-not-pushed or staged-but-not-committed.
+3. **Open threads / next steps** — what is in flight, what was deferred, and the
+   concrete next action. Be specific enough to act on without re-deriving it.
+4. **Gotchas** — traps the next session would otherwise hit: failing/flaky
+   tests, environment quirks, decisions made and why, paths that matter.
+
+Keep it tight and skimmable. Then tell the user the note is written and remind
+them it is deleted on next boot.
+"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,6 +230,19 @@ mod tests {
         let mem = s.find("Memory first").expect("memory step present");
         let doc = s.find("CHANGELOG.md").expect("doc role present");
         assert!(mem < doc, "memory must be reconciled before the docs");
+    }
+
+    #[test]
+    fn handoff_skill_is_self_contained_and_manual() {
+        let s = render_handoff_skill("coder");
+        assert!(s.contains("name: handoff"));
+        assert!(s.contains("disable-model-invocation: true"));
+        assert!(s.contains("allowed-tools: Write, Read, Bash"));
+        assert!(s.contains("HANDOFF.md"));
+        assert!(s.contains("zero prior context")); // self-contained, no compact summary
+        assert!(s.contains("Read on boot, then delete")); // transient
+        assert!(s.contains("commit shas"));
+        assert!(s.contains("coder")); // blueprint name woven in
     }
 
     #[test]
