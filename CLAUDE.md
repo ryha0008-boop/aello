@@ -36,7 +36,7 @@ Isolated Claude Code environments — like Python venvs, but for AI agents. Clau
 - `launch.rs` — `launch` (sets `CLAUDE_CONFIG_DIR`, `AELLO_CONTEXTDB`, git attribution env, `CLAUDE_CODE_OAUTH_TOKEN`); `git_identity`.
 - `auth.rs` — `capture_setup_token` (tees `claude setup-token` stdout so the auth URL shows on headless machines); `extract_token`.
 - `sessions.rs` — session listing for resume.
-- `tui.rs` — Kinetic Command TUI; add flow is name → model → persona → caps checklist; guard test keeps `PERSONAS` in sync with `templates::BUILTINS`.
+- `tui.rs` — Kinetic Command TUI; add flow is name → model → persona → caps checklist; `E` reuses the model→persona→caps steps in edit mode (an `edit` flag on those modes; name fixed, steps pre-seeded via `model_index`/`persona_index`, final step updates in place). Guard test keeps `PERSONAS` in sync with `templates::BUILTINS`.
 - `update.rs` — self-update from the rolling `latest` release.
 - `templates/coder.md`, `templates/sysadmin.md` — bundled personas. `src/hooks_post_compact.py` — the PostCompact hook.
 
@@ -70,6 +70,6 @@ cargo install --path . --force # replace ~/.cargo/bin/aello with the local build
 
 ## Deferred
 
-- Phase 4 hook toggles — moot (one hook). Blueprint edit shipped as `aello edit` (model/persona/caps in place; tri-state cap flags). The TUI add flow still has no edit counterpart — editing is CLI-only for now.
+- Phase 4 hook toggles — moot (one hook). Blueprint edit shipped both as `aello edit` (CLI; model/persona/caps in place, tri-state cap flags) and in the TUI (`E`, guided edit). Editing a blueprint's *name* (a rename) is still unsupported in both — it would require moving the placed env dir.
 
 Shipped since the original roadmap: aello-driven GitHub setup is now the `aello github-setup` command (`github.rs`); the `github` cap now also scaffolds `.gitattributes` and a generic `VERSION` + `version.yml` patch-bump CI for target projects; `aello init` is the first-run wizard (login + first blueprint, capabilities included). CI actions all target Node 24 (`checkout@v5`, `upload-artifact@v7`, `download-artifact@v8` — the artifact repos jumped majors faster than checkout); the Node-20 deprecation is resolved.

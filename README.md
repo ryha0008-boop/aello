@@ -94,7 +94,9 @@ aello update                                   # self-update to the latest relea
 
 ### TUI keys
 
-`↑/↓` move · `↵` run · `S` sessions · `A` add (guided) · `D` delete · `C` contextdb folder · `L` login · `U` update · `Q` quit.
+`↑/↓` move · `↵` run · `S` sessions · `A` add (guided) · `E` edit (guided) · `D` delete · `C` contextdb folder · `L` login · `U` update · `Q` quit.
+
+`E` edits the selected blueprint through the same guided steps as add, pre-filled with its current model, persona, and capabilities (the name isn't editable). Changes apply on the next `run`.
 
 ## Capabilities
 

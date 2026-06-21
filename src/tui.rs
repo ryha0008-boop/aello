@@ -1,7 +1,7 @@
 //! Minimal full-screen TUI — `aello` with no args lands here.
 //!
-//! Browse blueprints, add, delete, self-update, quit. Run/edit/etc. fill in as
-//! later phases land. Built on ratatui + crossterm (cross-platform).
+//! Browse blueprints, add, edit, delete, self-update, quit. Built on ratatui +
+//! crossterm (cross-platform).
 //!
 //! Visual style: "Kinetic Command" — inky black, kinetic-orange/amber accents,
 //! uppercase monospace labels, sharp bordered modules, centered modal dialogs,
@@ -101,14 +101,32 @@ fn cap_enabled(caps: &Capabilities, i: usize) -> bool {
     }
 }
 
+/// Picker index for a blueprint's model (for edit pre-selection); 0 if the
+/// stored model isn't one of the curated aliases (e.g. a full claude-* id).
+fn model_index(model: &str) -> usize {
+    MODELS.iter().position(|(id, _)| *id == model).unwrap_or(0)
+}
+
+/// Picker index for a blueprint's persona: 0 ("none") if unset or not a
+/// built-in (e.g. a custom path).
+fn persona_index(claude_md: Option<&str>) -> usize {
+    match claude_md {
+        None => 0,
+        Some(p) => PERSONAS.iter().position(|(id, _)| *id == p).unwrap_or(0),
+    }
+}
+
 enum Mode {
     Normal,
     AddName { buf: String },
-    AddModel { name: String, sel: usize },
+    /// `edit` true means we're editing an existing blueprint, not adding one:
+    /// the name step is skipped and each step is pre-seeded from the original,
+    /// and the final step updates in place instead of pushing a new blueprint.
+    AddModel { name: String, sel: usize, edit: bool },
     /// Pick the global persona (none / built-in template).
-    AddPersona { name: String, model: String, sel: usize },
-    /// Toggle the capabilities, then create. `persona` is the chosen template.
-    AddCaps { name: String, model: String, persona: Option<String>, sel: usize, caps: Capabilities },
+    AddPersona { name: String, model: String, sel: usize, edit: bool },
+    /// Toggle the capabilities, then create/save. `persona` is the chosen template.
+    AddCaps { name: String, model: String, persona: Option<String>, sel: usize, caps: Capabilities, edit: bool },
     ConfirmDelete,
     /// Picking a past session to resume for blueprint `name`.
     Sessions { name: String, items: Vec<sessions::Session>, sel: usize },
@@ -310,6 +328,18 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                     app.status.clear();
                     app.mode = Mode::AddName { buf: String::new() };
                 }
+                KeyCode::Char('e') => {
+                    if let Some(b) = app.blueprints.get(app.selected) {
+                        app.status.clear();
+                        app.mode = Mode::AddModel {
+                            name: b.name.clone(),
+                            sel: model_index(&b.model),
+                            edit: true,
+                        };
+                    } else {
+                        app.status = "NO BLUEPRINTS TO EDIT".into();
+                    }
+                }
                 KeyCode::Char('d') | KeyCode::Char('x') => {
                     if app.blueprints.is_empty() {
                         app.status = "NO BLUEPRINTS TO DELETE".into();
@@ -334,13 +364,13 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                         Ok(()) if config::load()?.blueprints.iter().any(|b| b.name == name) => {
                             app.status = format!("'{name}' ALREADY EXISTS");
                         }
-                        Ok(()) => app.mode = Mode::AddModel { name, sel: 0 },
+                        Ok(()) => app.mode = Mode::AddModel { name, sel: 0, edit: false },
                         Err(e) => app.status = e.to_string().to_uppercase(),
                     }
                 }
                 _ => {}
             },
-            Mode::AddModel { name, sel } => match key.code {
+            Mode::AddModel { name, sel, edit } => match key.code {
                 KeyCode::Esc => {
                     app.mode = Mode::Normal;
                     app.status = "CANCELLED".into();
@@ -348,15 +378,21 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                 KeyCode::Down | KeyCode::Char('j') => *sel = (*sel + 1).min(MODELS.len() - 1),
                 KeyCode::Up | KeyCode::Char('k') => *sel = sel.saturating_sub(1),
                 KeyCode::Enter => {
-                    app.mode = Mode::AddPersona {
-                        name: name.clone(),
-                        model: MODELS[*sel].0.to_string(),
-                        sel: 0,
+                    let edit = *edit;
+                    let name = name.clone();
+                    let model = MODELS[*sel].0.to_string();
+                    // On edit, pre-select the blueprint's current persona.
+                    let sel = if edit {
+                        let cfg = config::load()?;
+                        cfg.find(&name).map_or(0, |b| persona_index(b.claude_md.as_deref()))
+                    } else {
+                        0
                     };
+                    app.mode = Mode::AddPersona { name, model, sel, edit };
                 }
                 _ => {}
             },
-            Mode::AddPersona { name, model, sel } => match key.code {
+            Mode::AddPersona { name, model, sel, edit } => match key.code {
                 KeyCode::Esc => {
                     app.mode = Mode::Normal;
                     app.status = "CANCELLED".into();
@@ -364,19 +400,23 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                 KeyCode::Down | KeyCode::Char('j') => *sel = (*sel + 1).min(PERSONAS.len() - 1),
                 KeyCode::Up | KeyCode::Char('k') => *sel = sel.saturating_sub(1),
                 KeyCode::Enter => {
+                    let edit = *edit;
+                    let name = name.clone();
+                    let model = model.clone();
                     // Index 0 is "none"; others are built-in template names.
                     let persona = (*sel != 0).then(|| PERSONAS[*sel].0.to_string());
-                    app.mode = Mode::AddCaps {
-                        name: name.clone(),
-                        model: model.clone(),
-                        persona,
-                        sel: 0,
-                        caps: Capabilities::default(),
+                    // On edit, start from the blueprint's current capabilities.
+                    let caps = if edit {
+                        let cfg = config::load()?;
+                        cfg.find(&name).map(|b| b.caps.clone()).unwrap_or_default()
+                    } else {
+                        Capabilities::default()
                     };
+                    app.mode = Mode::AddCaps { name, model, persona, sel: 0, caps, edit };
                 }
                 _ => {}
             },
-            Mode::AddCaps { name, model, persona, sel, caps } => match key.code {
+            Mode::AddCaps { name, model, persona, sel, caps, edit } => match key.code {
                 KeyCode::Esc => {
                     app.mode = Mode::Normal;
                     app.status = "CANCELLED".into();
@@ -386,14 +426,24 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                 KeyCode::Char(' ') => cap_toggle(caps, *sel),
                 KeyCode::Enter => {
                     let mut cfg = config::load()?;
-                    cfg.blueprints.push(Blueprint {
-                        name: name.clone(),
-                        model: model.clone(),
-                        claude_md: persona.clone(),
-                        caps: caps.clone(),
-                    });
-                    config::save(&cfg)?;
-                    app.status = format!("ADDED '{name}'");
+                    if *edit {
+                        if let Some(b) = cfg.blueprints.iter_mut().find(|b| b.name == *name) {
+                            b.model = model.clone();
+                            b.claude_md = persona.clone();
+                            b.caps = caps.clone();
+                        }
+                        config::save(&cfg)?;
+                        app.status = format!("UPDATED '{name}'");
+                    } else {
+                        cfg.blueprints.push(Blueprint {
+                            name: name.clone(),
+                            model: model.clone(),
+                            claude_md: persona.clone(),
+                            caps: caps.clone(),
+                        });
+                        config::save(&cfg)?;
+                        app.status = format!("ADDED '{name}'");
+                    }
                     app.mode = Mode::Normal;
                     app.reload()?;
                 }
@@ -516,10 +566,10 @@ fn draw(f: &mut Frame, app: &App) {
     match &app.mode {
         Mode::Normal => {}
         Mode::AddName { buf } => draw_add_name(f, buf),
-        Mode::AddModel { name, sel } => draw_add_model(f, name, *sel),
-        Mode::AddPersona { name, sel, .. } => draw_add_persona(f, name, *sel),
-        Mode::AddCaps { name, persona, sel, caps, .. } => {
-            draw_add_caps(f, name, persona.as_deref(), *sel, caps)
+        Mode::AddModel { name, sel, edit } => draw_add_model(f, name, *sel, *edit),
+        Mode::AddPersona { name, sel, edit, .. } => draw_add_persona(f, name, *sel, *edit),
+        Mode::AddCaps { name, persona, sel, caps, edit, .. } => {
+            draw_add_caps(f, name, persona.as_deref(), *sel, caps, *edit)
         }
         Mode::ConfirmDelete => draw_confirm_delete(f, &app.blueprints[app.selected].name),
         Mode::Sessions { name, items, sel } => draw_sessions(f, name, items, *sel),
@@ -599,6 +649,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         Span::styled(" [↵] RUN  ", Style::default().fg(ORANGE_HOT).add_modifier(Modifier::BOLD)),
         keyhint("S", "SESSIONS"),
         keyhint("A", "ADD"),
+        keyhint("E", "EDIT"),
         keyhint("D", "DELETE"),
         keyhint("C", "CONTEXTDB"),
         keyhint("L", "LOGIN"),
@@ -671,9 +722,10 @@ fn draw_add_name(f: &mut Frame, buf: &str) {
     f.render_widget(Paragraph::new(body).style(Style::default().bg(SURFACE_HI)), inner);
 }
 
-fn draw_add_model(f: &mut Frame, name: &str, sel: usize) {
+fn draw_add_model(f: &mut Frame, name: &str, sel: usize, edit: bool) {
     let h = MODELS.len() as u16 + 6;
-    let inner = modal(f, "NEW_BLUEPRINT // SELECT_MODEL", 56, h);
+    let title = if edit { "EDIT_BLUEPRINT // SELECT_MODEL" } else { "NEW_BLUEPRINT // SELECT_MODEL" };
+    let inner = modal(f, title, 56, h);
 
     let mut lines = vec![
         Line::from(Span::styled(format!("  NAME = {name}"), Style::default().fg(MUTED))),
@@ -693,14 +745,15 @@ fn draw_add_model(f: &mut Frame, name: &str, sel: usize) {
         }
     }
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled("  [↑/↓] SELECT · [ENTER] CREATE · [ESC] CANCEL", Style::default().fg(DIM))));
+    lines.push(Line::from(Span::styled("  [↑/↓] SELECT · [ENTER] NEXT · [ESC] CANCEL", Style::default().fg(DIM))));
 
     f.render_widget(Paragraph::new(lines).style(Style::default().bg(SURFACE_HI)), inner);
 }
 
-fn draw_add_persona(f: &mut Frame, name: &str, sel: usize) {
+fn draw_add_persona(f: &mut Frame, name: &str, sel: usize, edit: bool) {
     let h = PERSONAS.len() as u16 + 6;
-    let inner = modal(f, "NEW_BLUEPRINT // GLOBAL_PERSONA", 60, h);
+    let title = if edit { "EDIT_BLUEPRINT // GLOBAL_PERSONA" } else { "NEW_BLUEPRINT // GLOBAL_PERSONA" };
+    let inner = modal(f, title, 60, h);
 
     let mut lines = vec![
         Line::from(Span::styled(format!("  NAME = {name}"), Style::default().fg(MUTED))),
@@ -725,9 +778,10 @@ fn draw_add_persona(f: &mut Frame, name: &str, sel: usize) {
     f.render_widget(Paragraph::new(lines).style(Style::default().bg(SURFACE_HI)), inner);
 }
 
-fn draw_add_caps(f: &mut Frame, name: &str, persona: Option<&str>, sel: usize, caps: &Capabilities) {
+fn draw_add_caps(f: &mut Frame, name: &str, persona: Option<&str>, sel: usize, caps: &Capabilities, edit: bool) {
     let h = CAP_ROWS.len() as u16 + 7;
-    let inner = modal(f, "NEW_BLUEPRINT // SYNC_CAPABILITIES", 64, h);
+    let title = if edit { "EDIT_BLUEPRINT // SYNC_CAPABILITIES" } else { "NEW_BLUEPRINT // SYNC_CAPABILITIES" };
+    let inner = modal(f, title, 64, h);
 
     let mut lines = vec![
         Line::from(Span::styled(
@@ -753,7 +807,8 @@ fn draw_add_caps(f: &mut Frame, name: &str, persona: Option<&str>, sel: usize, c
         }
     }
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled("  [SPACE] TOGGLE · [ENTER] CREATE · [ESC] CANCEL", Style::default().fg(DIM))));
+    let verb = if edit { "SAVE" } else { "CREATE" };
+    lines.push(Line::from(Span::styled(format!("  [SPACE] TOGGLE · [ENTER] {verb} · [ESC] CANCEL"), Style::default().fg(DIM))));
 
     f.render_widget(Paragraph::new(lines).style(Style::default().bg(SURFACE_HI)), inner);
 }
@@ -845,6 +900,18 @@ mod tests {
             cap_toggle(&mut c, i);
             assert!(cap_enabled(&c, i), "row {i} did not toggle on");
         }
+    }
+
+    #[test]
+    fn edit_preselect_indices() {
+        // Known aliases / built-ins map to their picker row.
+        assert_eq!(model_index("opus"), 0);
+        assert_eq!(model_index("haiku"), 2);
+        assert_eq!(persona_index(Some("sysadmin")), 2);
+        // Unknown values fall back to index 0 (opus / "none").
+        assert_eq!(model_index("claude-opus-4-8"), 0);
+        assert_eq!(persona_index(None), 0);
+        assert_eq!(persona_index(Some("/custom/path.md")), 0);
     }
 }
 

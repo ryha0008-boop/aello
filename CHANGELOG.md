@@ -8,6 +8,8 @@
   `--no-github` disables, omitting both leaves it unchanged. Changes apply on
   the next `aello run`; the global persona in an already-placed env is never
   re-clobbered.
+- TUI: `E` edits the selected blueprint through the same guided steps as add,
+  pre-filled with its current model, persona, and capabilities (name fixed).
 
 ## [0.1.26]
 
