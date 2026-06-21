@@ -101,9 +101,10 @@ For each file below that exists, compare it against the current code and recent 
         s.push_str(&format!(
             "
 ## Commit + push
-- Stage **only the files you created or modified in this session**, plus any docs you reconciled above — by explicit path (e.g. `git add path/a path/b`). **Never `git add -A` / `git add .`** — a blanket stage sweeps unrelated untracked files (other tooling's scaffolding, another env's in-flight work) into your commit. Run `git status` first; unstage anything you didn't touch. Then commit with a clear message summarizing what changed, and push to `origin` on the current branch.
+- Stage **only the files you created or modified in this session**, plus any docs you reconciled above — by explicit path (e.g. `git add path/a path/b`). **Never `git add -A` / `git add .`** — a blanket stage sweeps unrelated untracked files (other tooling's scaffolding, another env's in-flight work) into your commit. Run `git status` first; unstage anything you didn't touch. Then commit with a clear message summarizing what changed.
 - **End every commit message with a trailer line `Env: {name}`** (after a blank line) so the commit records which aello blueprint made it. Your git author identity is already set to this blueprint; the trailer makes it visible in the message body too.
-- If the push fails for a missing upstream, set it: `git push -u origin <branch>`.
+- **After committing, before pushing, run `git pull --rebase origin <current-branch>`** to integrate any commits the remote gained since you last fetched (e.g. a release CI's `release: vX [skip ci]` auto-bump). This replays your commit on top so the push is a fast-forward — skipping it leaves you a commit behind and the *next* `/sync` push gets rejected.
+- Push to `origin` on the current branch. If the push fails for a missing upstream, set it: `git push -u origin <branch>`.
 - Report the final state: branch, commit sha, push result, and the remote URL.
 
 Use normal prose for commit messages. Don't skip hooks or force-push unless the user explicitly asks.
@@ -146,6 +147,7 @@ mod tests {
         let s = render_sync_skill(&caps, "coder");
         assert!(s.contains("Repo health"));
         assert!(s.contains("Commit + push"));
+        assert!(s.contains("git pull --rebase origin")); // rebase before push, so the next push fast-forwards
         assert!(s.contains("Env: coder")); // per-blueprint commit trailer
         assert!(s.contains("CHANGELOG.md"));
         assert!(!s.contains("README.md"));

@@ -3,6 +3,16 @@
 ## [Unreleased]
 
 ### Changed
+- `/sync` skill (github blueprints): the commit step now runs
+  `git pull --rebase origin <branch>` **after committing, before pushing**, so
+  it integrates the release CI's auto-bump commit and the push fast-forwards.
+  Previously each `/sync` left local one commit behind, and the next push was
+  rejected until a manual rebase. Re-place a blueprint (`aello run`) to pick up
+  the new skill text.
+
+## [0.1.34]
+
+### Changed
 - Reworked the bundled starter working-style memory: it now captures that the
   user doesn't read plans — surface concrete decisions to choose from ("which
   of these?") and ask short, ask often — replacing the old go-slow / verify
