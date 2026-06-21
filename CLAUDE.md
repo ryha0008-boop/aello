@@ -42,7 +42,7 @@ Isolated Claude Code environments — like Python venvs, but for AI agents. Clau
 
 ## `/sync`
 
-Generated per blueprint from its caps (`templates::render_sync_skill`), seeded to `<env>/skills/sync/SKILL.md` when `caps.any()`. Manual-only (`disable-model-invocation: true`) — replaces the old auto-commit hooks. A no-`github` blueprint gets no git/commit/push sections and no `Bash` tool. Sections: repo health (github), two-way doc reconcile (per enabled doc), commit + push with `Env:` trailer (github).
+Generated per blueprint from its caps (`templates::render_sync_skill`), seeded to `<env>/skills/sync/SKILL.md` when `caps.any()`. Manual-only (`disable-model-invocation: true`) — replaces the old auto-commit hooks. A no-`github` blueprint gets no git/commit/push sections and no `Bash` tool. Sections: repo health (github), two-way doc reconcile (per enabled doc), commit + rebase-before-push with `Env:` trailer (github).
 
 ## Development rules
 
