@@ -12,6 +12,19 @@
   nothing is written to the user's git config.
 
 ### Added
+- `/twosentences` — a new **universal** skill (seeded for every blueprint, like
+  `/handoff`, regardless of capabilities). Invoke it manually to condense your
+  previous response into exactly two sentences. Lands in every env on the next
+  `aello run`.
+- **In-app docs reader.** Press `?` in the TUI for a full-screen reference
+  reader, or run `aello docs` (lists the docs) / `aello docs <name>` (prints one)
+  from the CLI. The reader renders the repo's `docs/` (lightly styled markdown:
+  headings, bullets, code, inline `code`/**bold**/links) with `↑/↓` to scroll and
+  `Tab`/`←→` to switch docs. The docs are embedded into the binary at compile
+  time, so `docs/` is the single source of truth — adding a `.md` there makes it
+  appear in the reader with no code change. Ships a new user-facing
+  `docs/migrate.md` (migrating an existing repo onto aello: the validated flow +
+  the gotchas, chiefly that `/sync` won't bootstrap the CI scaffolding for you).
 - `/handoff` — a new **universal** skill (seeded for every blueprint regardless
   of capabilities, unlike `/sync`). At session end it writes a self-contained
   `HANDOFF.md` resume note at the project root so the next session continues

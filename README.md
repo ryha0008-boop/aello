@@ -64,6 +64,7 @@ Run `aello` with no arguments for the full-screen TUI (browse, add via a guided 
 - **Capabilities** — what a blueprint maintains. Each one scaffolds its file and adds a section to the generated `/sync` skill. See the table below.
 - **`/sync`** — a manually-invoked skill (no auto-commit hooks). Generated per blueprint, so it only covers what that blueprint has — a no-GitHub blueprint gets no git talk at all.
 - **`/handoff`** — a manually-invoked skill seeded for *every* blueprint (regardless of capabilities). At session end it writes a self-contained `HANDOFF.md` resume note at the repo root so the next session continues seamlessly after a full `/clear`. Transient: read on boot, then deleted.
+- **`/twosentences`** — a manually-invoked skill seeded for *every* blueprint. Condenses your previous response into exactly two sentences.
 - **Shared auth** — `aello login` runs `claude setup-token` and stores a long-lived `CLAUDE_CODE_OAUTH_TOKEN`. It doesn't rotate, so any number of concurrent envs share it safely.
 - **contextdb** — PostCompact transcripts are written to a unified tree, `<contextdb>/<project>/<blueprint>/<ts>_<session>.jsonl`. Configurable (TUI → `C`).
 
@@ -85,6 +86,7 @@ aello edit <name> [--model <m>] [--claude-md <coder|sysadmin|path>]
 aello run [name] [--resume [id]] [-p <prompt>] [-- <extra args for claude>]
 aello login                                    # store the shared Claude token
 aello github-setup [--name <repo>] [--public] [--yes]   # create + push the repo via gh
+aello docs [name]                              # print bundled reference docs (no name lists them)
 aello update                                   # self-update to the latest release
 ```
 
@@ -95,9 +97,11 @@ aello update                                   # self-update to the latest relea
 
 ### TUI keys
 
-`↑/↓` move · `↵` run · `S` sessions · `A` add (guided) · `E` edit (guided) · `D` delete · `C` contextdb folder · `L` login · `U` update · `Q` quit.
+`↑/↓` move · `↵` run · `S` sessions · `A` add (guided) · `E` edit (guided) · `D` delete · `C` contextdb folder · `L` login · `U` update · `?` docs · `Q` quit.
 
 `E` edits the selected blueprint through the same guided steps as add, pre-filled with its current model, persona, and capabilities (the name isn't editable). Changes apply on the next `run`.
+
+`?` opens a full-screen docs reader over the repo's `docs/` (`↑/↓` scroll, `Tab`/`←→` switch doc, `Esc` close). The same content is available from the CLI via `aello docs`.
 
 ## Capabilities
 

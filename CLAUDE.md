@@ -6,7 +6,7 @@ Isolated Claude Code environments — like Python venvs, but for AI agents. Clau
 
 - `README.md` — user-facing: install, concepts, quick start, command + capability reference. Update when commands or capabilities change.
 - `CHANGELOG.md` — version history of user-facing changes. Every user-facing change gets an entry, in the same commit as the code.
-- `docs/` — deeper reference: `concepts.md` (isolation model, auth, contextdb), `capabilities.md` (capability → scaffold/`/sync` mapping, git attribution, deferred work).
+- `docs/` — deeper reference: `concepts.md` (isolation model, auth, contextdb), `capabilities.md` (capability → scaffold/`/sync` mapping, git attribution, deferred work), `migrate.md` (migrating an existing repo onto aello: validated flow + gotchas). **`docs/` is also the in-app help**: it's embedded into the binary (`docs.rs`) and rendered by `aello docs` (CLI) and the TUI reader (`?`), so `docs/` is the single source of truth — add a `.md` and it appears with no code change. Keep these in sync with behavior.
 - This file (`CLAUDE.md`) — agent/architecture notes. Maintain as the design evolves.
 
 ## Architecture
@@ -29,16 +29,17 @@ Isolated Claude Code environments — like Python venvs, but for AI agents. Clau
 
 ## Module map (`src/`)
 
-- `main.rs` — clap CLI + dispatch (`add`/`list`/`remove`/`edit`/`run`/`init`/`login`/`github-setup`/`update`); `cmd_edit` (in-place blueprint edit; `EditArgs` + tri-state `tri` cap flags); `run_blueprint` (shared by CLI `run` and the TUI); `cmd_init` (first-run wizard) + `prompt`/`prompt_bool`/`prompt_optional`; `validate_name`/`validate_model`; Windows `aello.exe.old*` startup sweep.
+- `main.rs` — clap CLI + dispatch (`add`/`list`/`remove`/`edit`/`run`/`init`/`login`/`github-setup`/`update`/`docs`); `cmd_docs` (prints a bundled doc, or lists them); `cmd_edit` (in-place blueprint edit; `EditArgs` + tri-state `tri` cap flags); `run_blueprint` (shared by CLI `run` and the TUI); `cmd_init` (first-run wizard) + `prompt`/`prompt_bool`/`prompt_optional`; `validate_name`/`validate_model`; Windows `aello.exe.old*` startup sweep.
 - `models.rs` — `Blueprint`, `Capabilities`, `Instance`, `Config`.
 - `config.rs` — `config.toml` load/save; `contextdb_dir`; `expand_home` (splits on `/` and `\`); `home_dir`.
-- `project.rs` — `env_dir`; `place` (writes `.aello.toml`/settings/persona/hook, regenerates `/sync`, always seeds the universal `/handoff` skill, seeds starter memory, then scaffolds — memory before scaffold so the mirror captures it); `settings_json`; `mark_onboarded`; `scaffold_project(project, env_dir, blueprint, caps)` (incl. github's `.gitattributes`/`VERSION`/`version.yml` and the `claude-internal/<name>/` mirror); `mirror_env_internal` (takes the blueprint name) + `copy_dir_all` (one-way env → `claude-internal/<name>/`); `seed_memory` (bundled working-style memory + `MEMORY.md` index, only when no `MEMORY.md` yet); `ensure_gitignore_entry` (idempotent); `VERSION_WORKFLOW`.
+- `project.rs` — `env_dir`; `place` (writes `.aello.toml`/settings/persona/hook, regenerates `/sync`, always seeds the universal `/handoff` and `/twosentences` skills, seeds starter memory, then scaffolds — memory before scaffold so the mirror captures it); `settings_json`; `mark_onboarded`; `scaffold_project(project, env_dir, blueprint, caps)` (incl. github's `.gitattributes`/`VERSION`/`version.yml` and the `claude-internal/<name>/` mirror); `mirror_env_internal` (takes the blueprint name) + `copy_dir_all` (one-way env → `claude-internal/<name>/`); `seed_memory` (bundled working-style memory + `MEMORY.md` index, only when no `MEMORY.md` yet); `ensure_gitignore_entry` (idempotent); `VERSION_WORKFLOW`.
 - `github.rs` — `aello github-setup`: `gh` auth precheck → ensure git repo + initial commit → `gh repo create --source=. --remote=origin --push`; pure `repo_create_args`. The bootstrap commit injects a synthetic `aello <aello@aello.local>` identity via per-invocation `git -c` (`initial_commit_args` + `has_git_identity`) when the machine has no git identity, so it lands on a fresh box; an existing identity is used unchanged.
-- `templates.rs` — bundled personas (`coder`, `sysadmin` via `include_str!`), `resolve` (builtin name or path), `render_sync_skill(caps, name)`, `render_handoff_skill(name)` (universal `/handoff` skill), `BUILTINS`.
+- `templates.rs` — bundled personas (`coder`, `sysadmin` via `include_str!`), `resolve` (builtin name or path), `render_sync_skill(caps, name)`, `render_handoff_skill(name)` (universal `/handoff` skill), `render_twosentences_skill()` (universal `/twosentences` skill), `BUILTINS`.
+- `docs.rs` — embeds the repo's `docs/` at compile time (`include_dir!`); `all()` (docs in reading order, title from first H1), `get(slug)`. Backs both `aello docs` and the TUI reader. New `.md` files appear automatically (no per-file code).
 - `launch.rs` — `launch` (sets `CLAUDE_CONFIG_DIR`, `AELLO_CONTEXTDB`, git attribution env, `CLAUDE_CODE_OAUTH_TOKEN`); `git_identity`.
 - `auth.rs` — `capture_setup_token` (tees `claude setup-token` stdout so the auth URL shows on headless machines); `extract_token`.
 - `sessions.rs` — session listing for resume.
-- `tui.rs` — Kinetic Command TUI; add flow is name → model → persona → caps checklist; `E` reuses the model→persona→caps steps in edit mode (an `edit` flag on those modes; name fixed, steps pre-seeded via `model_index`/`persona_index`, final step updates in place). Guard test keeps `PERSONAS` in sync with `templates::BUILTINS`.
+- `tui.rs` — Kinetic Command TUI; add flow is name → model → persona → caps checklist; `E` reuses the model→persona→caps steps in edit mode (an `edit` flag on those modes; name fixed, steps pre-seeded via `model_index`/`persona_index`, final step updates in place). Guard test keeps `PERSONAS` in sync with `templates::BUILTINS`. `?` opens `Mode::Help`, a full-screen reader over `docs.rs` (left doc list, right scrollable content via `render_markdown` — a light markdown→ratatui renderer for headings/bullets/code/inline).
 - `update.rs` — self-update from the rolling `latest` release.
 - `templates/coder.md`, `templates/sysadmin.md` — bundled personas. `templates/memory-working-style.md` — bundled starter memory (`MEMORY_WORKING_STYLE` in `project.rs`). `src/hooks_post_compact.py` — the PostCompact hook.
 
@@ -49,6 +50,10 @@ Generated per blueprint from its caps (`templates::render_sync_skill`), seeded t
 ## `/handoff`
 
 Universal counterpart to `/sync` (`templates::render_handoff_skill`), seeded **unconditionally** for every blueprint at `<env>/skills/handoff/SKILL.md` (no caps gate — even a bare blueprint gets it). Manual-only (`disable-model-invocation: true`), tools `Write, Read, Bash`. At session end it writes a transient, untracked `HANDOFF.md` at the project root so the next session resumes after a full `/clear` (not a compact — a clear leaves no summary, so the note is fully self-contained: read-first pointers, what shipped + commit shas, open threads/next steps, gotchas). Read on boot, then deleted.
+
+## `/twosentences`
+
+Also universal (`templates::render_twosentences_skill`), seeded **unconditionally** for every blueprint at `<env>/skills/twosentences/SKILL.md` alongside `/handoff`. Manual-only (`disable-model-invocation: true`), no tools (empty `allowed-tools` — it's a pure text task). Condenses the previous assistant response into exactly two sentences, output with no other text.
 
 ## Development rules
 

@@ -182,6 +182,30 @@ them it is deleted on next boot.
     )
 }
 
+/// Generate the `/twosentences` SKILL.md. Like `/handoff` this is **universal**
+/// — seeded for every blueprint regardless of capabilities. It condenses the
+/// previous assistant response into exactly two sentences; a pure text task, so
+/// it needs no tools.
+pub fn render_twosentences_skill() -> String {
+    "---
+name: twosentences
+description: Summarize your previous response in exactly two sentences. Invoke manually with /twosentences.
+disable-model-invocation: true
+allowed-tools:
+---
+
+# /twosentences — two-sentence summary
+
+When invoked, condense your **previous response** (the most recent assistant
+message before this invocation) into **exactly two sentences**.
+
+Output only those two sentences — no preamble, no heading, no bullets, no code,
+nothing else. Keep the key facts and the outcome; drop detail, caveats, and
+step-by-step explanation.
+"
+    .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -243,6 +267,15 @@ mod tests {
         assert!(s.contains("Read on boot, then delete")); // transient
         assert!(s.contains("commit shas"));
         assert!(s.contains("coder")); // blueprint name woven in
+    }
+
+    #[test]
+    fn twosentences_skill_is_universal_and_manual() {
+        let s = render_twosentences_skill();
+        assert!(s.contains("name: twosentences"));
+        assert!(s.contains("disable-model-invocation: true"));
+        assert!(s.contains("exactly two sentences"));
+        assert!(s.contains("previous response"));
     }
 
     #[test]

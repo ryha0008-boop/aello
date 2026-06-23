@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 
 mod auth;
 mod config;
+mod docs;
 mod github;
 mod launch;
 mod models;
@@ -91,6 +92,11 @@ enum Commands {
     },
     /// Update aello to the latest build from GitHub.
     Update,
+    /// Show bundled reference docs (no name lists them).
+    Docs {
+        /// Doc to print (slug, e.g. `concepts`). Omit to list available docs.
+        name: Option<String>,
+    },
     // More subcommands land here in later phases (sessions, ...).
 }
 
@@ -173,6 +179,7 @@ fn main() {
         Some(Commands::Login) => cmd_login(),
         Some(Commands::GithubSetup { name, public, yes }) => github::run(name, public, yes),
         Some(Commands::Update) => update::run(),
+        Some(Commands::Docs { name }) => cmd_docs(name),
     };
 
     if let Err(e) = result {
@@ -469,6 +476,27 @@ fn prompt_optional(label: &str) -> Result<Option<String>> {
     std::io::stdin().read_line(&mut line).context("could not read input")?;
     let v = line.trim();
     Ok((!v.is_empty()).then(|| v.to_string()))
+}
+
+/// Print a bundled doc to stdout, or list them all when no name is given. The
+/// docs ship inside the binary (see `docs.rs`), so this works on any install.
+fn cmd_docs(name: Option<String>) -> Result<()> {
+    match name {
+        None => {
+            println!("Reference docs — print one with `aello docs <name>`:\n");
+            for d in docs::all() {
+                println!("  {:<14} {}", d.slug, d.title);
+            }
+        }
+        Some(slug) => match docs::get(&slug) {
+            Some(d) => print!("{}", d.body),
+            None => {
+                let avail: Vec<String> = docs::all().into_iter().map(|d| d.slug).collect();
+                bail!("no doc '{slug}'. Available: {}", avail.join(", "));
+            }
+        },
+    }
+    Ok(())
 }
 
 fn cmd_list(json: bool) -> Result<()> {

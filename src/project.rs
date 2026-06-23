@@ -136,6 +136,14 @@ pub fn place(
     std::fs::write(&handoff, crate::templates::render_handoff_skill(&inst.name))
         .context("could not write handoff SKILL.md")?;
 
+    // Always seed the /twosentences skill — also universal (capability-
+    // independent): condense the previous response into two sentences.
+    let twosentences = env_dir.join("skills").join("twosentences").join("SKILL.md");
+    std::fs::create_dir_all(twosentences.parent().unwrap())
+        .context("could not create twosentences skills dir")?;
+    std::fs::write(&twosentences, crate::templates::render_twosentences_skill())
+        .context("could not write twosentences SKILL.md")?;
+
     let project = env_dir.parent().unwrap_or(env_dir);
 
     // Seed a starter memory on first placement (never clobbers existing memory).
@@ -551,12 +559,13 @@ mod tests {
     }
 
     #[test]
-    fn place_always_seeds_handoff_skill_even_with_no_caps() {
+    fn place_always_seeds_universal_skills_even_with_no_caps() {
         let proj = tempfile::tempdir().unwrap();
         let env = env_dir(proj.path(), "bare");
         let inst = Instance { name: "bare".into(), model: "sonnet".into() };
 
-        // No caps at all — /sync is skipped, but /handoff is universal.
+        // No caps at all — /sync is skipped, but /handoff and /twosentences are
+        // universal.
         place(&env, &inst, None, &Capabilities::default()).unwrap();
 
         let handoff = env.join("skills/handoff/SKILL.md");
@@ -564,5 +573,11 @@ mod tests {
         let s = std::fs::read_to_string(&handoff).unwrap();
         assert!(s.contains("name: handoff"));
         assert!(s.contains("HANDOFF.md"));
+
+        let two = env.join("skills/twosentences/SKILL.md");
+        assert!(two.exists());
+        let t = std::fs::read_to_string(&two).unwrap();
+        assert!(t.contains("name: twosentences"));
+        assert!(t.contains("exactly two sentences"));
     }
 }

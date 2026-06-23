@@ -1,7 +1,9 @@
 /target
 *.zip
-# Local-only development handoff (contains machine paths; never commit)
-migrate.md
+# Local-only development handoff (contains machine paths; never commit).
+# Anchored to the root so it does NOT also ignore docs/migrate.md (the tracked
+# user-facing migration guide).
+/migrate.md
 .claude-env-*
 # github-cap scaffolds aello its own dogfooding can re-create; aello versions
 # itself via Cargo.toml + release.yml, not VERSION/version.yml

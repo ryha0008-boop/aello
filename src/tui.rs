@@ -16,13 +16,13 @@ use ratatui::crossterm::{
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState};
+use ratatui::widgets::{Block, Borders, Cell, Clear, Padding, Paragraph, Row, Table, TableState, Wrap};
 use ratatui::{backend::CrosstermBackend, Frame, Terminal};
 use std::io::{self, Stdout};
 use std::path::{Path, PathBuf};
 
 use crate::models::{Blueprint, Capabilities};
-use crate::{config, project, sessions};
+use crate::{config, docs, project, sessions};
 
 type Term = Terminal<CrosstermBackend<Stdout>>;
 
@@ -133,6 +133,9 @@ enum Mode {
     /// Folder picker for the unified contextdb path. `new` Some => typing a
     /// new folder name to create under `dir`.
     Config { dir: PathBuf, entries: Vec<String>, sel: usize, new: Option<String> },
+    /// Full-screen reader for the bundled `docs/`. `sel` is the current doc,
+    /// `scroll` the vertical line offset into it.
+    Help { docs: Vec<docs::Doc>, sel: usize, scroll: u16 },
 }
 
 /// Subdirectories of `dir` (sorted, dotfolders hidden), with ".." first if
@@ -316,6 +319,10 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                 }
                 KeyCode::Char('l') => return Ok(PostExit::Login),
                 KeyCode::Char('u') => return Ok(PostExit::Update),
+                KeyCode::Char('?') => {
+                    app.status.clear();
+                    app.mode = Mode::Help { docs: docs::all(), sel: 0, scroll: 0 };
+                }
                 KeyCode::Down | KeyCode::Char('j') => {
                     if !app.blueprints.is_empty() {
                         app.selected = (app.selected + 1).min(app.blueprints.len() - 1);
@@ -545,6 +552,34 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                     }
                 }
             }
+            Mode::Help { docs, sel, scroll } => match key.code {
+                KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => {
+                    app.mode = Mode::Normal;
+                }
+                KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => {
+                    if !docs.is_empty() {
+                        *sel = (*sel + 1) % docs.len();
+                        *scroll = 0;
+                    }
+                }
+                KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => {
+                    if !docs.is_empty() {
+                        *sel = (*sel + docs.len() - 1) % docs.len();
+                        *scroll = 0;
+                    }
+                }
+                KeyCode::Up | KeyCode::Char('k') => *scroll = scroll.saturating_sub(1),
+                KeyCode::PageUp => *scroll = scroll.saturating_sub(10),
+                KeyCode::Down | KeyCode::Char('j') => {
+                    let max = render_markdown(docs[*sel].body).len() as u16;
+                    *scroll = (*scroll + 1).min(max.saturating_sub(1));
+                }
+                KeyCode::PageDown | KeyCode::Char(' ') => {
+                    let max = render_markdown(docs[*sel].body).len() as u16;
+                    *scroll = (*scroll + 10).min(max.saturating_sub(1));
+                }
+                _ => {}
+            },
         }
     }
 }
@@ -574,6 +609,7 @@ fn draw(f: &mut Frame, app: &App) {
         Mode::ConfirmDelete => draw_confirm_delete(f, &app.blueprints[app.selected].name),
         Mode::Sessions { name, items, sel } => draw_sessions(f, name, items, *sel),
         Mode::Config { dir, entries, sel, new } => draw_config(f, dir, entries, *sel, new),
+        Mode::Help { docs, sel, scroll } => draw_help(f, docs, *sel, *scroll),
     }
 }
 
@@ -654,6 +690,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         keyhint("C", "CONTEXTDB"),
         keyhint("L", "LOGIN"),
         keyhint("U", "UPDATE"),
+        keyhint("?", "DOCS"),
         keyhint("Q", "QUIT"),
     ]);
     let status = Line::from(Span::styled(format!(" {}", app.status), Style::default().fg(ORANGE)));
@@ -903,6 +940,29 @@ mod tests {
     }
 
     #[test]
+    fn markdown_drops_code_fences_and_keeps_lines() {
+        // Two fence lines vanish; the code line + the line after remain.
+        let lines = render_markdown("```\nfn x() {}\n```\nafter");
+        assert_eq!(lines.len(), 2);
+    }
+
+    #[test]
+    fn inline_splits_bold_code_and_links() {
+        // "a **b** `c` [d](u)" → text, bold, text, code, text, link = 6 spans.
+        let spans = inline("a **b** `c` [d](u)");
+        assert_eq!(spans.len(), 6);
+        // The link renders its label, not the url.
+        assert_eq!(spans[5].content.as_ref(), "d");
+    }
+
+    #[test]
+    fn bullet_detects_markers() {
+        assert_eq!(bullet("- item"), Some("item"));
+        assert_eq!(bullet("  * nested"), Some("nested"));
+        assert_eq!(bullet("plain"), None);
+    }
+
+    #[test]
     fn edit_preselect_indices() {
         // Known aliases / built-ins map to their picker row.
         assert_eq!(model_index("opus"), 0);
@@ -942,4 +1002,177 @@ fn draw_sessions(f: &mut Frame, name: &str, items: &[sessions::Session], sel: us
     )));
 
     f.render_widget(Paragraph::new(lines).style(Style::default().bg(SURFACE_HI)), inner);
+}
+
+// ── Docs reader ──────────────────────────────────────────────────────────────
+
+/// Full-screen reader for the bundled docs: a list of docs on the left, the
+/// selected doc's rendered content (scrollable) on the right.
+fn draw_help(f: &mut Frame, docs: &[docs::Doc], sel: usize, scroll: u16) {
+    let area = f.area();
+    f.render_widget(Clear, area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(ORANGE_HOT))
+        .title(Span::styled(
+            " DOCS // REFERENCE ",
+            Style::default().fg(ORANGE_HOT).add_modifier(Modifier::BOLD),
+        ))
+        .title_bottom(
+            Line::from(Span::styled(
+                " [↑/↓] SCROLL · [TAB/←→] DOC · [ESC] CLOSE ",
+                Style::default().fg(DIM),
+            ))
+            .centered(),
+        )
+        .style(Style::default().bg(SURFACE));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(22), Constraint::Min(20)])
+        .split(inner);
+
+    // Left: doc list (titles), current highlighted.
+    let list: Vec<Line> = docs
+        .iter()
+        .enumerate()
+        .map(|(i, d)| {
+            if i == sel {
+                Line::from(Span::styled(
+                    format!(" › {} ", d.title),
+                    Style::default().bg(ORANGE_HOT).fg(Color::Black).add_modifier(Modifier::BOLD),
+                ))
+            } else {
+                Line::from(Span::styled(format!("   {}", d.title), Style::default().fg(TEXT)))
+            }
+        })
+        .collect();
+    f.render_widget(Paragraph::new(list).style(Style::default().bg(SURFACE_HI)), cols[0]);
+
+    // Right: rendered content, scrolled.
+    let content = docs.get(sel).map(|d| render_markdown(d.body)).unwrap_or_default();
+    let para = Paragraph::new(content)
+        .scroll((scroll, 0))
+        .wrap(Wrap { trim: false })
+        .block(Block::default().padding(Padding::horizontal(2)))
+        .style(Style::default().bg(SURFACE));
+    f.render_widget(para, cols[1]);
+}
+
+/// Render markdown into styled lines for the docs reader. Handles headings,
+/// bullets, fenced code blocks, and inline `code`/**bold**/[links]. Not a full
+/// markdown engine — just enough to read well in the kinetic style.
+fn render_markdown(body: &str) -> Vec<Line<'static>> {
+    let mut out = Vec::new();
+    let mut in_code = false;
+    for raw in body.lines() {
+        if raw.trim_start().starts_with("```") {
+            in_code = !in_code; // fence toggles a code block; the fence line is dropped
+            continue;
+        }
+        if in_code {
+            out.push(Line::from(Span::styled(format!("  {raw}"), Style::default().fg(GREEN))));
+        } else if let Some(h) = raw.strip_prefix("### ") {
+            out.push(Line::from(Span::styled(h.to_string(), Style::default().fg(AMBER).add_modifier(Modifier::BOLD))));
+        } else if let Some(h) = raw.strip_prefix("## ") {
+            out.push(Line::from(Span::styled(h.to_uppercase(), Style::default().fg(ORANGE).add_modifier(Modifier::BOLD))));
+        } else if let Some(h) = raw.strip_prefix("# ") {
+            out.push(Line::from(Span::styled(
+                h.to_uppercase(),
+                Style::default().fg(ORANGE_HOT).add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+            )));
+        } else if let Some(item) = bullet(raw) {
+            let mut spans = vec![Span::styled("  • ", Style::default().fg(AMBER))];
+            spans.extend(inline(item));
+            out.push(Line::from(spans));
+        } else {
+            out.push(Line::from(inline(raw)));
+        }
+    }
+    out
+}
+
+/// Text after a `- ` / `* ` list marker (leading indent ignored), else None.
+fn bullet(line: &str) -> Option<&str> {
+    let t = line.trim_start();
+    t.strip_prefix("- ").or_else(|| t.strip_prefix("* "))
+}
+
+/// Parse a single line of inline markdown into styled spans, handling
+/// `**bold**`, `` `code` ``, and `[label](url)` (label only). Everything else
+/// is plain text.
+fn inline(text: &str) -> Vec<Span<'static>> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut buf = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        // `code`
+        if chars[i] == '`' {
+            if let Some(end) = find(&chars, i + 1, &['`']) {
+                push_text(&mut spans, &mut buf);
+                spans.push(Span::styled(slice(&chars, i + 1, end), Style::default().fg(GREEN)));
+                i = end + 1;
+                continue;
+            }
+        }
+        // **bold**
+        if chars[i] == '*' && chars.get(i + 1) == Some(&'*') {
+            if let Some(end) = find(&chars, i + 2, &['*', '*']) {
+                push_text(&mut spans, &mut buf);
+                spans.push(Span::styled(
+                    slice(&chars, i + 2, end),
+                    Style::default().fg(TEXT).add_modifier(Modifier::BOLD),
+                ));
+                i = end + 2;
+                continue;
+            }
+        }
+        // [label](url) — render the label, drop the url
+        if chars[i] == '[' {
+            if let Some(close) = find(&chars, i + 1, &[']']) {
+                if chars.get(close + 1) == Some(&'(') {
+                    if let Some(paren) = find(&chars, close + 2, &[')']) {
+                        push_text(&mut spans, &mut buf);
+                        spans.push(Span::styled(
+                            slice(&chars, i + 1, close),
+                            Style::default().fg(AMBER).add_modifier(Modifier::UNDERLINED),
+                        ));
+                        i = paren + 1;
+                        continue;
+                    }
+                }
+            }
+        }
+        buf.push(chars[i]);
+        i += 1;
+    }
+    push_text(&mut spans, &mut buf);
+    if spans.is_empty() {
+        spans.push(Span::raw("")); // keep blank lines as real (empty) lines
+    }
+    spans
+}
+
+/// First index >= `from` where `chars` matches `pat`, else None.
+fn find(chars: &[char], from: usize, pat: &[char]) -> Option<usize> {
+    if pat.is_empty() || from + pat.len() > chars.len() {
+        return None;
+    }
+    (from..=chars.len() - pat.len()).find(|&j| chars[j..j + pat.len()] == *pat)
+}
+
+/// Owned String of `chars[start..end]`.
+fn slice(chars: &[char], start: usize, end: usize) -> String {
+    chars[start..end].iter().collect()
+}
+
+/// Flush the plain-text accumulator as a TEXT-styled span.
+fn push_text(spans: &mut Vec<Span<'static>>, buf: &mut String) {
+    if !buf.is_empty() {
+        spans.push(Span::styled(std::mem::take(buf), Style::default().fg(TEXT)));
+    }
 }
