@@ -17,13 +17,13 @@ Isolated Claude Code environments — like Python venvs, but for AI agents. Clau
 
 **`claude-internal/`** — a TRACKED folder at the project root, one-way mirror of the gitignored env dir, so a blueprint's skills/memory/persona reach git. **Namespaced per blueprint** (`claude-internal/<name>/...`) so multiple blueprints sharing one repo don't clobber each other's mirror. Three parts: `claude-internal/<name>/skills/` ← `<env>/skills/`, `claude-internal/<name>/memory/` ← `<env>/projects/<encoded-cwd>/memory/`, and `claude-internal/<name>/persona.CLAUDE.md` ← `<env>/CLAUDE.md` (renamed so Claude Code never auto-loads the snapshot). The live env dir stays the single source of truth; the mirror is written one-way from it (never read back). Seeded at placement (`scaffold_project` → `mirror_env_internal`, taking the blueprint name, github only, NOT added to the `.claude-env-*` gitignore) and refreshed + staged by the github `/sync` step, which self-heals the folder (`mkdir -p`) so already-placed envs adopt it.
 
-**Env dir** — `<project>/.claude-env-<name>/`, the blueprint's `CLAUDE_CONFIG_DIR`. Holds `settings.json`, the global persona `CLAUDE.md`, `.aello.toml` (the placed Instance), `hooks/post-compact.py`, and the generated `skills/sync/SKILL.md`. Gitignored by convention (the `github` cap seeds the `.claude-env-*` ignore line).
+**Env dir** — `<project>/.claude-env-<name>/`, the blueprint's `CLAUDE_CONFIG_DIR`. Holds `settings.json`, the global persona `CLAUDE.md`, `.aello.toml` (the placed Instance), `hooks/post-compact.py` + `hooks/session-end.py`, and the generated `skills/sync/SKILL.md`. Gitignored by convention (the `github` cap seeds the `.claude-env-*` ignore line).
 
 **Two CLAUDE.md layers** — global persona (`<env>/CLAUDE.md`, set once, never clobbered) vs project (`<project>/CLAUDE.md`, `--project-md`, maintained by `/sync`). Memory is separate: `place` seeds a starter working-style memory under `<env>/projects/<encoded-cwd>/memory/` on first placement (gated on `MEMORY.md` absence, never clobbered), then it's automatic (PostCompact hook).
 
 **Auth** — `aello login` runs `claude setup-token`, stores a long-lived non-rotating `CLAUDE_CODE_OAUTH_TOKEN` in `config.toml`; every env exports it. Concurrency-safe across many parallel envs (the reason credential-copy was abandoned). On fresh envs, `mark_onboarded` seeds `hasCompletedOnboarding` so Claude skips its first-run wizard.
 
-**contextdb** — only one hook (PostCompact). Transcripts → `<contextdb>/<project>/<blueprint>/<ts>_<session>.jsonl`. Root in `config.toml` (`contextdb`, default `~/aello/contextdb`), passed as `AELLO_CONTEXTDB`.
+**contextdb** — two transcript hooks. **PostCompact** saves each compaction summary; **SessionEnd** captures a session ended without compacting (`/clear`/exit), archiving the `/handoff` note + transcript pointer to `<ts>_<session>_end.jsonl` and skipping subagent sessions. Existing envs self-heal SessionEnd into `settings.json` on next `place` (`ensure_session_end_hook`, idempotent, never clobbers a user-edited file). Transcripts → `<contextdb>/<project>/<blueprint>/<ts>_<session>.jsonl`. Root in `config.toml` (`contextdb`, default `~/aello/contextdb`), passed as `AELLO_CONTEXTDB`.
 
 **Git attribution** — with `github`, `launch.rs` sets `GIT_AUTHOR_*`/`GIT_COMMITTER_*` to `<blueprint> <blueprint@aello.local>`, and the `/sync` github section appends an `Env: <blueprint>` commit trailer. Multi-blueprint repos stay traceable via `git blame` / `git log --author`.
 
@@ -41,7 +41,7 @@ Isolated Claude Code environments — like Python venvs, but for AI agents. Clau
 - `sessions.rs` — session listing for resume.
 - `tui.rs` — Kinetic Command TUI; add flow is name → model → persona → caps checklist; `E` reuses the model→persona→caps steps in edit mode (an `edit` flag on those modes; name fixed, steps pre-seeded via `model_index`/`persona_index`, final step updates in place). Guard test keeps `PERSONAS` in sync with `templates::BUILTINS`. The registry defaults to a **per-directory filter**: `App` tracks `local` (blueprints whose env dir exists in cwd, via `local_indices`) and a `view` (indices `selected` indexes into); `compute_view(show_all, local, total)` shows the local subset by default, all when `show_all` or nothing is placed here. `F` toggles (`set_show_all`, preserving the highlighted blueprint by name). `?` opens `Mode::Help`, a full-screen reader over `docs.rs` (left doc list, right scrollable content via `render_markdown` — a light markdown→ratatui renderer for headings/bullets/code/inline).
 - `update.rs` — self-update from the rolling `latest` release.
-- `templates/coder.md`, `templates/sysadmin.md` — bundled personas. `templates/memory-working-style.md` — bundled starter memory (`MEMORY_WORKING_STYLE` in `project.rs`). `src/hooks_post_compact.py` — the PostCompact hook.
+- `templates/coder.md`, `templates/sysadmin.md` — bundled personas. `templates/memory-working-style.md` — bundled starter memory (`MEMORY_WORKING_STYLE` in `project.rs`). `src/hooks_post_compact.py` — the PostCompact hook. `src/hooks_session_end.py` — the SessionEnd hook (`/clear`/exit capture).
 
 ## `/sync`
 
@@ -81,6 +81,6 @@ cargo install --path . --force # replace ~/.cargo/bin/aello with the local build
 
 ## Deferred
 
-- Phase 4 hook toggles — moot (one hook). Blueprint edit shipped both as `aello edit` (CLI; model/persona/caps in place, tri-state cap flags) and in the TUI (`E`, guided edit). Editing a blueprint's *name* (a rename) is still unsupported in both — it would require moving the placed env dir.
+- Phase 4 hook toggles — moot (the two transcript hooks are fixed, not user-toggleable). Blueprint edit shipped both as `aello edit` (CLI; model/persona/caps in place, tri-state cap flags) and in the TUI (`E`, guided edit). Editing a blueprint's *name* (a rename) is still unsupported in both — it would require moving the placed env dir.
 
 Shipped since the original roadmap: aello-driven GitHub setup is now the `aello github-setup` command (`github.rs`); the `github` cap now also scaffolds `.gitattributes` and a generic `VERSION` + `version.yml` patch-bump CI for target projects; `aello init` is the first-run wizard (login + first blueprint, capabilities included). CI actions all target Node 24 (`checkout@v5`, `upload-artifact@v7`, `download-artifact@v8` — the artifact repos jumped majors faster than checkout); the Node-20 deprecation is resolved.

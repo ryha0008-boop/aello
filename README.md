@@ -40,7 +40,7 @@ cargo install --path .   # installs to ~/.cargo/bin/aello
 ## Prerequisites
 
 - **Claude Code** on your `PATH` (`claude`). aello sets `CLAUDE_CONFIG_DIR` and launches it.
-- **Python** (`python3` on Linux/macOS, `python` on Windows) for the PostCompact transcript hook.
+- **Python** (`python3` on Linux/macOS, `python` on Windows) for the PostCompact and SessionEnd transcript hooks.
 - **git** / **gh** only if you use the `github` capability.
 
 ## Quick start
@@ -59,14 +59,14 @@ Run `aello` with no arguments for the full-screen TUI (browse, add via a guided 
 ## Concepts
 
 - **Blueprint** — a reusable agent identity stored in aello's config: `name`, `model`, an optional global persona, and its capabilities. Reusable across many projects.
-- **Env dir** — `<project>/.claude-env-<name>/`. This is the blueprint's `CLAUDE_CONFIG_DIR`: settings, the global persona `CLAUDE.md`, the PostCompact hook, and the generated `/sync` skill live here. Gitignored by convention.
+- **Env dir** — `<project>/.claude-env-<name>/`. This is the blueprint's `CLAUDE_CONFIG_DIR`: settings, the global persona `CLAUDE.md`, the PostCompact + SessionEnd hooks, and the generated `/sync` skill live here. Gitignored by convention.
 - **Global persona vs project CLAUDE.md** — the *global* `CLAUDE.md` (in the env dir) is the agent's persona, set once. The *project* `CLAUDE.md` (in the repo root, enabled by `--project-md`) holds project-specific facts. Memory is separate: a starter working-style memory is seeded on first placement (never clobbered after), then maintained automatically.
 - **Capabilities** — what a blueprint maintains. Each one scaffolds its file and adds a section to the generated `/sync` skill. See the table below.
 - **`/sync`** — a manually-invoked skill (no auto-commit hooks). Generated per blueprint, so it only covers what that blueprint has — a no-GitHub blueprint gets no git talk at all.
 - **`/handoff`** — a manually-invoked skill seeded for *every* blueprint (regardless of capabilities). At session end it writes a self-contained `HANDOFF.md` resume note at the repo root so the next session continues seamlessly after a full `/clear`. Transient: read on boot, then deleted.
 - **`/twosentences`** — a manually-invoked skill seeded for *every* blueprint. Condenses your previous response into exactly two sentences.
 - **Shared auth** — `aello login` runs `claude setup-token` and stores a long-lived `CLAUDE_CODE_OAUTH_TOKEN`. It doesn't rotate, so any number of concurrent envs share it safely.
-- **contextdb** — PostCompact transcripts are written to a unified tree, `<contextdb>/<project>/<blueprint>/<ts>_<session>.jsonl`. Configurable (TUI → `C`).
+- **contextdb** — transcripts are written to a unified tree, `<contextdb>/<project>/<blueprint>/<ts>_<session>.jsonl`. PostCompact saves compaction summaries; SessionEnd captures sessions ended with `/clear` or a plain exit (which never compact), archiving the `/handoff` note. Configurable (TUI → `C`).
 
 See [`docs/concepts.md`](docs/concepts.md) and [`docs/capabilities.md`](docs/capabilities.md) for detail.
 

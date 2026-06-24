@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
 const POST_COMPACT_SCRIPT: &str = include_str!("hooks_post_compact.py");
+const SESSION_END_SCRIPT: &str = include_str!("hooks_session_end.py");
 
 /// Starter memory seeded on first placement so a fresh env boots with the
 /// user's working-style note already loaded in `/context`. The body is bundled;
@@ -99,6 +100,11 @@ pub fn place(
     if !settings.exists() {
         std::fs::write(&settings, settings_json(&inst.model))
             .context("could not write settings.json")?;
+    } else {
+        // Existing env: never clobber a (possibly user-edited) settings.json, but
+        // self-heal the SessionEnd hook into it so envs placed before it existed
+        // start capturing /clear + exit sessions.
+        ensure_session_end_hook(&settings)?;
     }
 
     // Global persona — set once, never clobbered (the user may have edited it).
@@ -114,6 +120,8 @@ pub fn place(
     std::fs::create_dir_all(env_dir.join("hooks")).context("could not create hooks dir")?;
     std::fs::write(env_dir.join("hooks").join("post-compact.py"), POST_COMPACT_SCRIPT)
         .context("could not write post-compact.py")?;
+    std::fs::write(env_dir.join("hooks").join("session-end.py"), SESSION_END_SCRIPT)
+        .context("could not write session-end.py")?;
 
     // Regenerate the tailored /sync skill from current caps (or remove it if the
     // blueprint no longer maintains anything).
@@ -325,13 +333,45 @@ pub fn settings_json(model: &str) -> String {
     "defaultMode": "bypassPermissions"
   }},
   "hooks": {{
-    "PostCompact": [{{"hooks":[{{"type":"command","command":"{} \"$CLAUDE_CONFIG_DIR/hooks/post-compact.py\""}}]}}]
+    "PostCompact": [{{"hooks":[{{"type":"command","command":"{py} \"$CLAUDE_CONFIG_DIR/hooks/post-compact.py\""}}]}}],
+    "SessionEnd": [{{"hooks":[{{"type":"command","command":"{py} \"$CLAUDE_CONFIG_DIR/hooks/session-end.py\""}}]}}]
   }}
 }}
 "#,
         json_str(model),
-        py
     )
+}
+
+/// Self-heal: ensure an existing `settings.json` registers the SessionEnd hook.
+/// `settings.json` is written only once (never clobbered), so envs placed before
+/// SessionEnd existed would otherwise never pick it up. Idempotent — inserts the
+/// hook only when `hooks.SessionEnd` is absent, preserving everything else.
+fn ensure_session_end_hook(settings: &Path) -> Result<()> {
+    let Ok(text) = std::fs::read_to_string(settings) else {
+        return Ok(());
+    };
+    let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return Ok(());
+    };
+    let py = if cfg!(windows) { "python" } else { "python3" };
+    let hooks = v
+        .as_object_mut()
+        .and_then(|o| o.entry("hooks").or_insert_with(|| serde_json::json!({})).as_object_mut());
+    let Some(hooks) = hooks else { return Ok(()) };
+    if hooks.contains_key("SessionEnd") {
+        return Ok(());
+    }
+    hooks.insert(
+        "SessionEnd".into(),
+        serde_json::json!([{
+            "hooks": [{
+                "type": "command",
+                "command": format!("{py} \"$CLAUDE_CONFIG_DIR/hooks/session-end.py\""),
+            }]
+        }]),
+    );
+    std::fs::write(settings, serde_json::to_string_pretty(&v)?)
+        .context("could not update settings.json with SessionEnd hook")
 }
 
 /// Minimal JSON string encoder for the model value.
@@ -369,6 +409,48 @@ mod tests {
         assert_eq!(v["model"], "sonnet");
         assert_eq!(v["permissions"]["defaultMode"], "bypassPermissions");
         assert!(v["hooks"]["PostCompact"].is_array());
+        assert!(v["hooks"]["SessionEnd"].is_array());
+    }
+
+    #[test]
+    fn place_seeds_session_end_hook_and_script() {
+        let proj = tempfile::tempdir().unwrap();
+        let env = env_dir(proj.path(), "coder");
+        let inst = Instance { name: "coder".into(), model: "opus".into() };
+
+        place(&env, &inst, None, &Capabilities::default()).unwrap();
+
+        // Hook script lands in the env, alongside post-compact.py.
+        assert!(env.join("hooks/session-end.py").exists());
+        // settings.json registers it.
+        let s = std::fs::read_to_string(env.join("settings.json")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert!(v["hooks"]["SessionEnd"].is_array());
+    }
+
+    #[test]
+    fn ensure_session_end_hook_self_heals_old_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = dir.path().join("settings.json");
+        // An env placed before SessionEnd existed: PostCompact only.
+        std::fs::write(
+            &settings,
+            r#"{"model":"opus","hooks":{"PostCompact":[{"hooks":[]}]}}"#,
+        )
+        .unwrap();
+
+        ensure_session_end_hook(&settings).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        // SessionEnd inserted, PostCompact and model preserved.
+        assert!(v["hooks"]["SessionEnd"].is_array());
+        assert!(v["hooks"]["PostCompact"].is_array());
+        assert_eq!(v["model"], "opus");
+
+        // Idempotent: a second pass does not duplicate or alter it.
+        let before = std::fs::read_to_string(&settings).unwrap();
+        ensure_session_end_hook(&settings).unwrap();
+        assert_eq!(before, std::fs::read_to_string(&settings).unwrap());
     }
 
     #[test]

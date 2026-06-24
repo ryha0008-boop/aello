@@ -12,6 +12,17 @@
   nothing is written to the user's git config.
 
 ### Added
+- **SessionEnd hook — contextdb now captures `/clear` and plain-exit sessions.**
+  Previously the only transcript hook was PostCompact, which fires only on
+  compaction; a session ended with `/clear` (or a plain exit) never compacts, so
+  its context never reached contextdb — a `/clear`-heavy workflow recorded
+  nothing. aello now also seeds a **SessionEnd** hook that, on the main session
+  ending, archives the `/handoff` note (`HANDOFF.md`, otherwise deleted on next
+  boot) plus a pointer to the full transcript, to
+  `<contextdb>/<project>/<blueprint>/<ts>_<session>_end.jsonl`. It skips subagent
+  session-ends so the tree isn't flooded. Existing envs self-heal the hook into
+  their `settings.json` on the next `aello run` (a user-edited settings file is
+  preserved; the hook is only inserted when absent).
 - **TUI registry now filters to blueprints placed in the current directory.**
   Launch `aello` in a project and the list shows only the blueprints whose env
   is already placed there (`.claude-env-<name>/` exists) — so a per-project

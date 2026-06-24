@@ -8,9 +8,10 @@ A single Claude Code install reads its config from `CLAUDE_CONFIG_DIR`. aello ex
 my-project/
 ├── .git/
 ├── .claude-env-coder/        # CLAUDE_CONFIG_DIR for the "coder" blueprint
-│   ├── settings.json         #   bypass-permissions + PostCompact hook
+│   ├── settings.json         #   bypass-permissions + PostCompact/SessionEnd hooks
 │   ├── CLAUDE.md             #   global persona (set once)
 │   ├── hooks/post-compact.py
+│   ├── hooks/session-end.py
 │   ├── skills/sync/SKILL.md  #   generated from this blueprint's capabilities
 │   ├── skills/handoff/SKILL.md  # universal — seeded for every blueprint
 │   └── projects/<cwd>/memory/  # starter working-style memory, seeded once
@@ -53,10 +54,11 @@ On a fresh env, aello also marks onboarding complete (`hasCompletedOnboarding` i
 
 ## contextdb (transcripts)
 
-The only hook aello seeds is **PostCompact**, a Python script that saves each compaction summary. Transcripts land in a unified tree:
+aello seeds two transcript hooks. **PostCompact** saves each compaction summary; **SessionEnd** captures a session that ends without compacting — `/clear` or a plain exit — which PostCompact would otherwise miss entirely (a `/clear`-heavy workflow never compacts). The SessionEnd record archives the `/handoff` note (`HANDOFF.md`, otherwise deleted on next boot) plus a pointer to the full transcript; it skips subagent sessions so the tree isn't flooded. Both land in a unified tree:
 
 ```
-<contextdb>/<project>/<blueprint>/<timestamp>_<session>.jsonl
+<contextdb>/<project>/<blueprint>/<timestamp>_<session>.jsonl       # PostCompact
+<contextdb>/<project>/<blueprint>/<timestamp>_<session>_end.jsonl   # SessionEnd
 ```
 
-The root is per-machine, defaults to `~/aello/contextdb`, and is configurable from the TUI (`C`). aello passes it to Claude as `AELLO_CONTEXTDB`; if unset, the hook falls back to a local folder inside the env.
+The root is per-machine, defaults to `~/aello/contextdb`, and is configurable from the TUI (`C`). aello passes it to Claude as `AELLO_CONTEXTDB`; if unset, the hooks fall back to a local folder inside the env.
