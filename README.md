@@ -97,7 +97,9 @@ aello update                                   # self-update to the latest relea
 
 ### TUI keys
 
-`↑/↓` move · `↵` run · `S` sessions · `A` add (guided) · `E` edit (guided) · `D` delete · `C` contextdb folder · `L` login · `U` update · `?` docs · `Q` quit.
+`↑/↓` move · `↵` run · `F` filter · `S` sessions · `A` add (guided) · `E` edit (guided) · `D` delete · `C` contextdb folder · `L` login · `U` update · `?` docs · `Q` quit.
+
+By default the registry shows only blueprints already placed in the current directory (their `.claude-env-<name>/` exists), which keeps a per-project blueprint workflow tidy. `F` toggles between that local subset and all blueprints; when nothing is placed here yet, all are shown.
 
 `E` edits the selected blueprint through the same guided steps as add, pre-filled with its current model, persona, and capabilities (the name isn't editable). Changes apply on the next `run`.
 

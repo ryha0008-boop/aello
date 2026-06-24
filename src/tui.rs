@@ -183,8 +183,38 @@ enum PostExit {
     Run { name: String, session: Option<String> },
 }
 
+/// Indices of blueprints already placed in the current dir (their env dir
+/// exists). These are the ones the launch dir is actually "wearing".
+fn local_indices(blueprints: &[Blueprint]) -> Vec<usize> {
+    let cwd = std::env::current_dir().unwrap_or_default();
+    blueprints
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| project::env_dir(&cwd, &b.name).exists())
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// The visible blueprint indices for the current filter. Show everything when
+/// `show_all`, or when nothing is placed here (an empty registry would just be
+/// confusing); otherwise show only the local subset.
+fn compute_view(show_all: bool, local: &[usize], total: usize) -> Vec<usize> {
+    if show_all || local.is_empty() {
+        (0..total).collect()
+    } else {
+        local.to_vec()
+    }
+}
+
 struct App {
     blueprints: Vec<Blueprint>,
+    /// Indices into `blueprints` placed in the cwd (env dir present).
+    local: Vec<usize>,
+    /// Indices currently visible — what `selected` indexes into. Either the
+    /// local subset (default, when any are local) or every blueprint.
+    view: Vec<usize>,
+    /// false = show only blueprints placed here; true = show all. Toggled with F.
+    show_all: bool,
     selected: usize,
     mode: Mode,
     status: String,
@@ -196,20 +226,63 @@ struct App {
 impl App {
     fn load() -> Result<Self> {
         let cfg = config::load()?;
-        Ok(Self {
+        let blueprints = cfg.blueprints;
+        let local = local_indices(&blueprints);
+        let mut app = Self {
             has_token: cfg.oauth_token.is_some(),
-            blueprints: cfg.blueprints,
+            blueprints,
+            local,
+            view: Vec::new(),
+            show_all: false,
             selected: 0,
             mode: Mode::Normal,
             status: String::new(),
             dir: launch_dir_label(),
-        })
+        };
+        app.rebuild_view();
+        Ok(app)
     }
 
+    /// Recompute `view` from `show_all`/`local`, clamping `selected`.
+    fn rebuild_view(&mut self) {
+        self.view = compute_view(self.show_all, &self.local, self.blueprints.len());
+        if self.selected >= self.view.len() {
+            self.selected = self.view.len().saturating_sub(1);
+        }
+    }
+
+    /// The currently-highlighted blueprint, if any.
+    fn current(&self) -> Option<&Blueprint> {
+        self.view.get(self.selected).and_then(|&i| self.blueprints.get(i))
+    }
+
+    fn current_name(&self) -> Option<String> {
+        self.current().map(|b| b.name.clone())
+    }
+
+    /// Flip the filter, keeping the same blueprint highlighted across the toggle.
+    fn set_show_all(&mut self, show_all: bool) {
+        let prev = self.current_name();
+        self.show_all = show_all;
+        self.rebuild_view();
+        if let Some(name) = prev {
+            if let Some(pos) = self.view.iter().position(|&i| self.blueprints[i].name == name) {
+                self.selected = pos;
+            }
+        }
+    }
+
+    /// Reload blueprints from disk, recompute the view, and keep the same
+    /// blueprint highlighted (by name) when it still exists.
     fn reload(&mut self) -> Result<()> {
+        let prev = self.current_name();
         self.blueprints = config::load()?.blueprints;
-        if self.selected >= self.blueprints.len() {
-            self.selected = self.blueprints.len().saturating_sub(1);
+        self.local = local_indices(&self.blueprints);
+        self.rebuild_view();
+        if let Some(name) = prev {
+            if let Some(pos) = self.view.iter().position(|&i| self.blueprints[i].name == name) {
+                self.selected = pos;
+            }
         }
         Ok(())
     }
@@ -294,13 +367,13 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
             Mode::Normal => match key.code {
                 KeyCode::Char('q') | KeyCode::Esc => return Ok(PostExit::Quit),
                 KeyCode::Enter => {
-                    if let Some(b) = app.blueprints.get(app.selected) {
-                        return Ok(PostExit::Run { name: b.name.clone(), session: None });
+                    if let Some(&i) = app.view.get(app.selected) {
+                        return Ok(PostExit::Run { name: app.blueprints[i].name.clone(), session: None });
                     }
                 }
                 KeyCode::Char('s') => {
-                    if let Some(b) = app.blueprints.get(app.selected) {
-                        let name = b.name.clone();
+                    if let Some(&i) = app.view.get(app.selected) {
+                        let name = app.blueprints[i].name.clone();
                         let cwd = std::env::current_dir().unwrap_or_default();
                         let env = project::env_dir(&cwd, &name);
                         let items = sessions::list(&env, &cwd);
@@ -323,9 +396,18 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                     app.status.clear();
                     app.mode = Mode::Help { docs: docs::all(), sel: 0, scroll: 0 };
                 }
+                KeyCode::Char('f') => {
+                    // Only meaningful when filtering is actually hiding something.
+                    if app.local.is_empty() {
+                        app.status = "NONE PLACED HERE — SHOWING ALL".into();
+                    } else {
+                        app.set_show_all(!app.show_all);
+                        app.status = if app.show_all { "SHOWING ALL".into() } else { "SHOWING PLACED HERE".into() };
+                    }
+                }
                 KeyCode::Down | KeyCode::Char('j') => {
-                    if !app.blueprints.is_empty() {
-                        app.selected = (app.selected + 1).min(app.blueprints.len() - 1);
+                    if !app.view.is_empty() {
+                        app.selected = (app.selected + 1).min(app.view.len() - 1);
                     }
                 }
                 KeyCode::Up | KeyCode::Char('k') => {
@@ -336,19 +418,18 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                     app.mode = Mode::AddName { buf: String::new() };
                 }
                 KeyCode::Char('e') => {
-                    if let Some(b) = app.blueprints.get(app.selected) {
+                    if let Some(&i) = app.view.get(app.selected) {
+                        let b = &app.blueprints[i];
+                        let name = b.name.clone();
+                        let sel = model_index(&b.model);
                         app.status.clear();
-                        app.mode = Mode::AddModel {
-                            name: b.name.clone(),
-                            sel: model_index(&b.model),
-                            edit: true,
-                        };
+                        app.mode = Mode::AddModel { name, sel, edit: true };
                     } else {
                         app.status = "NO BLUEPRINTS TO EDIT".into();
                     }
                 }
                 KeyCode::Char('d') | KeyCode::Char('x') => {
-                    if app.blueprints.is_empty() {
+                    if app.view.is_empty() {
                         app.status = "NO BLUEPRINTS TO DELETE".into();
                     } else {
                         app.mode = Mode::ConfirmDelete;
@@ -433,6 +514,7 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                 KeyCode::Char(' ') => cap_toggle(caps, *sel),
                 KeyCode::Enter => {
                     let mut cfg = config::load()?;
+                    let mut added: Option<String> = None;
                     if *edit {
                         if let Some(b) = cfg.blueprints.iter_mut().find(|b| b.name == *name) {
                             b.model = model.clone();
@@ -450,19 +532,31 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                         });
                         config::save(&cfg)?;
                         app.status = format!("ADDED '{name}'");
+                        // A fresh blueprint isn't placed in this dir yet, so the
+                        // local filter would hide it — reveal all and select it.
+                        added = Some(name.clone());
                     }
                     app.mode = Mode::Normal;
+                    if added.is_some() {
+                        app.show_all = true;
+                    }
                     app.reload()?;
+                    if let Some(name) = added {
+                        if let Some(pos) = app.view.iter().position(|&i| app.blueprints[i].name == name) {
+                            app.selected = pos;
+                        }
+                    }
                 }
                 _ => {}
             },
             Mode::ConfirmDelete => match key.code {
                 KeyCode::Char('y') => {
-                    let target = app.blueprints[app.selected].name.clone();
-                    let mut cfg = config::load()?;
-                    cfg.blueprints.retain(|b| b.name != target);
-                    config::save(&cfg)?;
-                    app.status = format!("REMOVED '{target}'");
+                    if let Some(target) = app.current_name() {
+                        let mut cfg = config::load()?;
+                        cfg.blueprints.retain(|b| b.name != target);
+                        config::save(&cfg)?;
+                        app.status = format!("REMOVED '{target}'");
+                    }
                     app.mode = Mode::Normal;
                     app.reload()?;
                 }
@@ -606,7 +700,11 @@ fn draw(f: &mut Frame, app: &App) {
         Mode::AddCaps { name, persona, sel, caps, edit, .. } => {
             draw_add_caps(f, name, persona.as_deref(), *sel, caps, *edit)
         }
-        Mode::ConfirmDelete => draw_confirm_delete(f, &app.blueprints[app.selected].name),
+        Mode::ConfirmDelete => {
+            if let Some(b) = app.current() {
+                draw_confirm_delete(f, &b.name);
+            }
+        }
         Mode::Sessions { name, items, sel } => draw_sessions(f, name, items, *sel),
         Mode::Config { dir, entries, sel, new } => draw_config(f, dir, entries, *sel, new),
         Mode::Help { docs, sel, scroll } => draw_help(f, docs, *sel, *scroll),
@@ -634,9 +732,17 @@ fn draw_header(f: &mut Frame, area: Rect) {
 }
 
 fn draw_registry(f: &mut Frame, area: Rect, app: &App) {
+    // Left title reflects the filter: PLACED HERE (default subset) vs ALL.
+    let filtered = !app.show_all && !app.local.is_empty();
+    let scope = if filtered {
+        format!(" ▸ PLACED HERE · {} OF {} ", app.view.len(), app.blueprints.len())
+    } else {
+        format!(" ▸ ALL · {} ", app.blueprints.len())
+    };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(DIM))
+        .title_top(Line::from(Span::styled(scope, Style::default().fg(if filtered { AMBER } else { MUTED }))).left_aligned())
         .title_top(Line::from(Span::styled(format!(" {} ", app.dir), Style::default().fg(MUTED))).right_aligned())
         .style(Style::default().bg(SURFACE));
 
@@ -653,8 +759,9 @@ fn draw_registry(f: &mut Frame, area: Rect, app: &App) {
     }))
     .height(1);
 
-    let rows = app.blueprints.iter().enumerate().map(|(i, b)| {
-        let bg = if i % 2 == 0 { SURFACE } else { STRIPE };
+    let rows = app.view.iter().enumerate().map(|(row, &i)| {
+        let b = &app.blueprints[i];
+        let bg = if row % 2 == 0 { SURFACE } else { STRIPE };
         Row::new(vec![
             Cell::from(b.name.clone()).style(Style::default().fg(TEXT)),
             Cell::from(b.model.clone()).style(Style::default().fg(AMBER)),
@@ -680,9 +787,13 @@ fn draw_registry(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
+    // F switches to whichever set isn't shown. With nothing placed here, the
+    // filter can't hide anything, so the toggle is shown dimmed.
+    let f_label = if app.show_all || app.local.is_empty() { "PLACED" } else { "ALL" };
     let hints = Line::from(vec![
         keyhint("↑/↓", "MOVE"),
         Span::styled(" [↵] RUN  ", Style::default().fg(ORANGE_HOT).add_modifier(Modifier::BOLD)),
+        keyhint("F", f_label),
         keyhint("S", "SESSIONS"),
         keyhint("A", "ADD"),
         keyhint("E", "EDIT"),
@@ -699,9 +810,14 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
     } else {
         Span::styled("AUTH: NONE ✗ (press L)", Style::default().fg(ERR))
     };
+    let count = if !app.show_all && !app.local.is_empty() {
+        format!("{}/{} BLUEPRINT(S)", app.view.len(), app.blueprints.len())
+    } else {
+        format!("{} BLUEPRINT(S)", app.blueprints.len())
+    };
     let telemetry = Line::from(vec![
         Span::styled(
-            format!(" AELLO v{VERSION} · {} BLUEPRINT(S) · ", app.blueprints.len()),
+            format!(" AELLO v{VERSION} · {count} · "),
             Style::default().fg(DIM),
         ),
         auth_span,
@@ -953,6 +1069,18 @@ mod tests {
         assert_eq!(spans.len(), 6);
         // The link renders its label, not the url.
         assert_eq!(spans[5].content.as_ref(), "d");
+    }
+
+    #[test]
+    fn view_filters_to_local_then_shows_all() {
+        // Default (filtered): only the locally-placed subset is visible.
+        assert_eq!(compute_view(false, &[1, 3], 5), vec![1, 3]);
+        // Toggled to show-all: every blueprint, in order.
+        assert_eq!(compute_view(true, &[1, 3], 5), vec![0, 1, 2, 3, 4]);
+        // Nothing placed here → fall back to all even when not showing all.
+        assert_eq!(compute_view(false, &[], 5), vec![0, 1, 2, 3, 4]);
+        // No blueprints at all → empty view, no panic.
+        assert_eq!(compute_view(false, &[], 0), Vec::<usize>::new());
     }
 
     #[test]

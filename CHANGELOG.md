@@ -12,6 +12,12 @@
   nothing is written to the user's git config.
 
 ### Added
+- **TUI registry now filters to blueprints placed in the current directory.**
+  Launch `aello` in a project and the list shows only the blueprints whose env
+  is already placed there (`.claude-env-<name>/` exists) — so a per-project
+  blueprint workflow stays uncluttered. Press `F` to toggle showing all
+  blueprints; if none are placed here yet, the full list shows as before. The
+  registry title and footer count reflect the active filter (`PLACED HERE · N OF M`).
 - `/twosentences` — a new **universal** skill (seeded for every blueprint, like
   `/handoff`, regardless of capabilities). Invoke it manually to condense your
   previous response into exactly two sentences. Lands in every env on the next
