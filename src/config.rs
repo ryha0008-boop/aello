@@ -70,5 +70,14 @@ pub fn save(cfg: &Config) -> Result<()> {
         std::fs::create_dir_all(parent).context("could not create config dir")?;
     }
     let text = toml::to_string_pretty(cfg).context("failed to serialize config")?;
-    std::fs::write(&path, text).with_context(|| format!("could not write {}", path.display()))
+    // Atomic write: config.toml holds the only copy of the non-rotating OAuth
+    // token, so a crash mid-write must not truncate it. Write a sibling temp
+    // file, then rename over the target (atomic on the same filesystem).
+    let tmp = path.with_extension("toml.tmp");
+    std::fs::write(&tmp, text).with_context(|| format!("could not write {}", tmp.display()))?;
+    if let Err(e) = std::fs::rename(&tmp, &path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e).with_context(|| format!("could not replace {}", path.display()));
+    }
+    Ok(())
 }

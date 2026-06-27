@@ -3,6 +3,8 @@
 ## [Unreleased]
 
 ### Fixed
+- `config.toml` is now written atomically (temp file + rename), so an
+  interrupted save can no longer truncate it and lose the stored login token.
 - Session resume (`--resume`) and seeded starter memory now work when the
   project path contains a `.`. aello's project-directory encoding now maps `.`
   to `-` exactly like Claude Code, so it no longer points resume and the starter
