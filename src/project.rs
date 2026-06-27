@@ -64,10 +64,15 @@ pub fn env_dir(project: &Path, name: &str) -> PathBuf {
 /// token. Merges `hasCompletedOnboarding: true` into `.claude.json`.
 pub fn mark_onboarded(env_dir: &Path) -> Result<()> {
     let path = env_dir.join(".claude.json");
-    let mut v: serde_json::Value = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_else(|| serde_json::json!({}));
+    let mut v: serde_json::Value = match std::fs::read_to_string(&path) {
+        // Claude Code owns this file too; if it exists but we can't parse it,
+        // leave it untouched rather than overwrite real state with `{}`.
+        Ok(s) => match serde_json::from_str(&s) {
+            Ok(v) => v,
+            Err(_) => return Ok(()),
+        },
+        Err(_) => serde_json::json!({}),
+    };
     if let Some(obj) = v.as_object_mut() {
         obj.insert("hasCompletedOnboarding".into(), serde_json::Value::Bool(true));
     }
@@ -282,22 +287,50 @@ fn mirror_env_internal(project: &Path, env_dir: &Path, blueprint: &str) -> Resul
     Ok(())
 }
 
-/// Recursively copy `src` into `dst`, creating `dst` and any subdirectories.
-/// A missing `src` is a no-op (nothing to mirror yet). Existing files at the
-/// destination are overwritten — the mirror is one-way from the env dir.
+/// One-way *sync* of `src` into `dst`: copy every regular file/subdir from `src`,
+/// then delete anything in `dst` that no longer exists in `src`. Pruning keeps
+/// the tracked mirror from accumulating orphaned files — e.g. a deleted memory
+/// note, or the `sync` skill after the `github` cap is dropped — which a copy-only
+/// mirror would keep committing forever. Symlinks are skipped: the env is the
+/// single source of truth and must not pull foreign content into git. A missing
+/// `src` prunes `dst` entirely (nothing left to mirror).
 fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
     if !src.exists() {
+        if dst.exists() {
+            std::fs::remove_dir_all(dst).context("could not prune stale mirror dir")?;
+        }
         return Ok(());
     }
     std::fs::create_dir_all(dst).context("could not create mirror destination dir")?;
+
+    let mut keep = std::collections::HashSet::new();
     for entry in std::fs::read_dir(src).context("could not read mirror source dir")? {
         let entry = entry?;
+        let ft = entry.file_type()?;
+        if ft.is_symlink() {
+            continue;
+        }
+        keep.insert(entry.file_name());
         let from = entry.path();
         let to = dst.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
+        if ft.is_dir() {
             copy_dir_all(&from, &to)?;
         } else {
             std::fs::copy(&from, &to).context("could not copy mirror file")?;
+        }
+    }
+
+    // Prune destination entries that vanished from the source.
+    for entry in std::fs::read_dir(dst).context("could not read mirror dest dir")? {
+        let entry = entry?;
+        if keep.contains(&entry.file_name()) {
+            continue;
+        }
+        let p = entry.path();
+        if p.is_dir() {
+            std::fs::remove_dir_all(&p).context("could not prune stale mirror subdir")?;
+        } else {
+            std::fs::remove_file(&p).context("could not prune stale mirror file")?;
         }
     }
     Ok(())
@@ -586,6 +619,28 @@ mod tests {
         assert!(b.join("skills/sync/SKILL.md").exists());
         assert!(a.join("memory/MEMORY.md").exists());
         assert!(b.join("memory/MEMORY.md").exists());
+    }
+
+    #[test]
+    fn mirror_prunes_files_deleted_from_the_env() {
+        // The mirror is a one-way sync: a file removed from the env must not
+        // linger in the tracked claude-internal/ folder.
+        let proj = tempfile::tempdir().unwrap();
+        let env = env_dir(proj.path(), "demo");
+        let caps = Capabilities { github: true, ..Default::default() };
+        place(&env, &Instance { name: "demo".into(), model: "haiku".into() }, Some("# p"), &caps).unwrap();
+
+        let ci = proj.path().join("claude-internal").join("demo");
+        assert!(ci.join("skills/sync/SKILL.md").exists());
+
+        // Drop the sync skill from the live env, then re-mirror.
+        std::fs::remove_dir_all(env.join("skills/sync")).unwrap();
+        mirror_env_internal(proj.path(), &env, "demo").unwrap();
+
+        // The orphaned copy is gone; the rest of the mirror survives.
+        assert!(!ci.join("skills/sync").exists(), "stale skill should be pruned");
+        assert!(ci.join("memory/MEMORY.md").exists(), "memory still mirrored");
+        assert!(ci.join("persona.CLAUDE.md").exists(), "persona still mirrored");
     }
 
     #[test]

@@ -3,6 +3,10 @@
 ## [Unreleased]
 
 ### Fixed
+- The tracked `claude-internal/<blueprint>/` mirror is now a true one-way sync:
+  files deleted or renamed in the env (for example the `sync` skill after the
+  `github` cap is dropped) are pruned from the mirror instead of lingering in
+  git forever, and symlinks in the env are skipped rather than followed.
 - `aello update` now rejects an implausibly small download (a truncated transfer
   or an HTML error page) instead of replacing the binary with it and bricking the
   install.
