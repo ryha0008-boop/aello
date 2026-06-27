@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 ### Fixed
+- `aello init` now aborts on end-of-input instead of silently accepting every
+  default, so a non-interactive or closed stdin can no longer auto-create a
+  blueprint you never confirmed. `--model` also rejects a bare `claude-`.
 - Login-token capture is more robust to changes in `claude setup-token` output:
   it scans from the end (the token is printed after the auth URL) and trims
   surrounding quotes/punctuation so a trailing character can't truncate it.

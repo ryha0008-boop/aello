@@ -210,7 +210,7 @@ pub(crate) fn validate_model(model: &str) -> Result<()> {
     if m.is_empty() {
         bail!("model cannot be empty");
     }
-    if MODEL_ALIASES.contains(&m.as_str()) || m.starts_with("claude-") {
+    if MODEL_ALIASES.contains(&m.as_str()) || m.strip_prefix("claude-").is_some_and(|r| !r.is_empty()) {
         return Ok(());
     }
     bail!(
@@ -447,7 +447,9 @@ fn prompt(label: &str, default: &str) -> Result<String> {
     print!("{label} [{default}]: ");
     std::io::stdout().flush().ok();
     let mut line = String::new();
-    std::io::stdin().read_line(&mut line).context("could not read input")?;
+    if std::io::stdin().read_line(&mut line).context("could not read input")? == 0 {
+        bail!("unexpected end of input — run `aello init` in an interactive terminal");
+    }
     let v = line.trim();
     Ok(if v.is_empty() { default.to_string() } else { v.to_string() })
 }
@@ -459,7 +461,9 @@ fn prompt_bool(label: &str, default: bool) -> Result<bool> {
     print!("{label} [{hint}]: ");
     std::io::stdout().flush().ok();
     let mut line = String::new();
-    std::io::stdin().read_line(&mut line).context("could not read input")?;
+    if std::io::stdin().read_line(&mut line).context("could not read input")? == 0 {
+        bail!("unexpected end of input — run `aello init` in an interactive terminal");
+    }
     Ok(match line.trim().to_lowercase().as_str() {
         "y" | "yes" => true,
         "n" | "no" => false,
@@ -473,7 +477,9 @@ fn prompt_optional(label: &str) -> Result<Option<String>> {
     print!("{label}: ");
     std::io::stdout().flush().ok();
     let mut line = String::new();
-    std::io::stdin().read_line(&mut line).context("could not read input")?;
+    if std::io::stdin().read_line(&mut line).context("could not read input")? == 0 {
+        bail!("unexpected end of input — run `aello init` in an interactive terminal");
+    }
     let v = line.trim();
     Ok((!v.is_empty()).then(|| v.to_string()))
 }
@@ -583,7 +589,7 @@ mod tests {
 
     #[test]
     fn invalid_models_rejected() {
-        for m in ["", "opu", "sonnett", "gpt-4", "opus4"] {
+        for m in ["", "opu", "sonnett", "gpt-4", "opus4", "claude-"] {
             assert!(validate_model(m).is_err(), "{m:?} should be rejected");
         }
     }
