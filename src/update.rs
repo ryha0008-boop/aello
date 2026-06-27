@@ -61,6 +61,17 @@ pub fn run() -> Result<()> {
     let mut buf = Vec::new();
     std::io::Read::read_to_end(&mut reader, &mut buf).context("failed to read download")?;
 
+    // Guard against a truncated download or an HTML/error page silently becoming
+    // the installed binary (a short read isn't an I/O error). The real binaries
+    // are multi-MB; anything under 1 MiB is not a valid aello build.
+    if buf.len() < 1024 * 1024 {
+        anyhow::bail!(
+            "download was only {} bytes — likely a network error or error page, not a binary. \
+             Try again or download manually from: {RELEASES_PAGE}",
+            buf.len()
+        );
+    }
+
     let exe = std::env::current_exe().context("could not find current exe path")?;
     replace_binary(&exe, &buf)?;
 

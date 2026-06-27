@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 ### Fixed
+- `aello update` now rejects an implausibly small download (a truncated transfer
+  or an HTML error page) instead of replacing the binary with it and bricking the
+  install.
 - `config.toml` is now written atomically (temp file + rename), so an
   interrupted save can no longer truncate it and lose the stored login token.
 - Session resume (`--resume`) and seeded starter memory now work when the
