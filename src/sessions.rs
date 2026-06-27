@@ -13,11 +13,14 @@ pub struct Session {
     pub size: u64,
 }
 
-/// Claude's project-dir naming: replace each `\`, `/`, `:` with `-`.
+/// Claude's project-dir naming: replace each `\`, `/`, `:`, `.` with `-`.
+/// The `.` mapping matters — a cwd like `…/proj.v1.2` becomes `…-proj-v1-2`, so
+/// omitting it would point seeded memory and `--resume` at a directory Claude
+/// never reads. Verified against Claude Code's on-disk encoding.
 pub fn encode_project_path(path: &Path) -> String {
     path.to_string_lossy()
         .chars()
-        .map(|c| if matches!(c, '\\' | '/' | ':') { '-' } else { c })
+        .map(|c| if matches!(c, '\\' | '/' | ':' | '.') { '-' } else { c })
         .collect()
 }
 
@@ -63,4 +66,22 @@ pub fn format_utc(t: SystemTime) -> String {
     let y = if mo <= 2 { y + 1 } else { y };
 
     format!("{y:04}-{mo:02}-{d:02} {h:02}:{m:02}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encodes_separators_and_dots() {
+        // Matches Claude Code: `\ / : .` all collapse to `-`.
+        assert_eq!(
+            encode_project_path(Path::new(r"C:\Users\H\proj.v1.2")),
+            "C--Users-H-proj-v1-2"
+        );
+        assert_eq!(
+            encode_project_path(Path::new("/home/u/my.app")),
+            "-home-u-my-app"
+        );
+    }
 }

@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Fixed
+- Session resume (`--resume`) and seeded starter memory now work when the
+  project path contains a `.`. aello's project-directory encoding now maps `.`
+  to `-` exactly like Claude Code, so it no longer points resume and the starter
+  memory at a directory Claude never reads.
+
 ### Added
 - **Open-source project foundation.** aello is now dual licensed under MIT and
   Apache-2.0 (`LICENSE-MIT`, `LICENSE-APACHE`, `Cargo.toml` `license` field), with
