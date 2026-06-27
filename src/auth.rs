@@ -50,11 +50,16 @@ pub fn capture_setup_token() -> Result<Option<String>> {
     Ok(if t.is_empty() { None } else { Some(t.to_string()) })
 }
 
-/// Find a `sk-ant-...` token in arbitrary output.
+/// Find a `sk-ant-...` token in arbitrary output. Scans from the end (the token
+/// is printed after the auth URL, so the *last* match is the token even if an
+/// earlier line embeds the prefix) and strips any surrounding quotes/punctuation
+/// so a trailing `.` or `"` doesn't truncate or corrupt the captured token.
 fn extract_token(s: &str) -> Option<String> {
     s.split_whitespace()
-        .find(|w| w.starts_with("sk-ant-") && w.len() > 16)
-        .map(|w| w.trim().to_string())
+        .map(|w| w.trim_matches(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_')))
+        .filter(|w| w.starts_with("sk-ant-") && w.len() > 20)
+        .last()
+        .map(|w| w.to_string())
 }
 
 #[cfg(test)]
@@ -69,5 +74,16 @@ mod tests {
             Some("sk-ant-oat01-ABCDEF0123456789xyz")
         );
         assert!(extract_token("no token here").is_none());
+        // A token wrapped in punctuation is cleaned, not truncated.
+        assert_eq!(
+            extract_token("token: \"sk-ant-oat01-ABCDEF0123456789xyz\".").as_deref(),
+            Some("sk-ant-oat01-ABCDEF0123456789xyz")
+        );
+        // The last match wins (the token is printed after any earlier line).
+        let two = "earlier sk-ant-oat01-DECOY00000000000000\nfinal: sk-ant-oat01-REALTOKEN0123456789abc";
+        assert_eq!(
+            extract_token(two).as_deref(),
+            Some("sk-ant-oat01-REALTOKEN0123456789abc")
+        );
     }
 }

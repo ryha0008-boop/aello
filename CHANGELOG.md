@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 ### Fixed
+- Login-token capture is more robust to changes in `claude setup-token` output:
+  it scans from the end (the token is printed after the auth URL) and trims
+  surrounding quotes/punctuation so a trailing character can't truncate it.
 - The in-app docs reader (`?` in the TUI) can now scroll to the bottom of long
   docs — the scroll limit accounts for line wrapping instead of stopping at the
   unwrapped line count, which cut off every doc whose lines wrap.
