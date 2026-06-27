@@ -4,3 +4,4 @@
 - [aello TUI design](aello-tui-design.md) — "Kinetic Command" palette + conventions
 - [working style](working-style.md) — user does not read plans, give decisions to choose from
 - [aello dev gotchas](aello-dev-gotchas.md) — Windows locked-exe install fix; print mode doesn't load memory
+- [aello open source](aello-open-source.md) — license/contributor/domain decisions; stay pseudonymous; Tier-1 done

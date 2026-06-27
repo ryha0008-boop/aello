@@ -3,6 +3,12 @@ name = "aello"
 version = "0.1.46"
 edition = "2021"
 description = "Isolated Claude Code environments — like venvs, but for AI agents"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ryha0008-boop/aello"
+homepage = "https://github.com/ryha0008-boop/aello"
+readme = "README.md"
+keywords = ["claude", "claude-code", "agents", "cli", "isolation"]
+categories = ["command-line-utilities", "development-tools"]
 
 [[bin]]
 name = "aello"

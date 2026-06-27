@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+- **Open-source project foundation.** aello is now dual licensed under MIT and
+  Apache-2.0 (`LICENSE-MIT`, `LICENSE-APACHE`, `Cargo.toml` `license` field), with
+  full crate metadata (`repository`, `homepage`, `keywords`, `categories`) for
+  crates.io. Added `CONTRIBUTING.md` (dev loop + conventions, pointing to
+  `CLAUDE.md` for architecture), GitHub issue forms (bug report / feature
+  request) and a pull-request template, and Contributing/License sections in the
+  README.
+
 ### Fixed
 - `aello github-setup` now always lands its bootstrap "Initial commit" even on a
   machine with no global git `user.name`/`user.email`. Previously `git commit`
