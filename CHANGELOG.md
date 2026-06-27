@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 ### Fixed
+- The in-app docs reader (`?` in the TUI) can now scroll to the bottom of long
+  docs — the scroll limit accounts for line wrapping instead of stopping at the
+  unwrapped line count, which cut off every doc whose lines wrap.
 - The tracked `claude-internal/<blueprint>/` mirror is now a true one-way sync:
   files deleted or renamed in the env (for example the `sync` skill after the
   `github` cap is dropped) are pruned from the mirror instead of lingering in

@@ -221,6 +221,10 @@ struct App {
     /// Launch directory as "PARENT / CURRENT", uppercased — shown top-right.
     dir: String,
     has_token: bool,
+    /// Max scroll offset for the Help reader, computed from the wrapped content
+    /// height during draw (the only place the render width is known) and read
+    /// back when handling scroll keys so they can't run past the last line.
+    help_scroll_max: std::cell::Cell<u16>,
 }
 
 impl App {
@@ -238,6 +242,7 @@ impl App {
             mode: Mode::Normal,
             status: String::new(),
             dir: launch_dir_label(),
+            help_scroll_max: std::cell::Cell::new(0),
         };
         app.rebuild_view();
         Ok(app)
@@ -665,12 +670,10 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                 KeyCode::Up | KeyCode::Char('k') => *scroll = scroll.saturating_sub(1),
                 KeyCode::PageUp => *scroll = scroll.saturating_sub(10),
                 KeyCode::Down | KeyCode::Char('j') => {
-                    let max = render_markdown(docs[*sel].body).len() as u16;
-                    *scroll = (*scroll + 1).min(max.saturating_sub(1));
+                    *scroll = (*scroll + 1).min(app.help_scroll_max.get());
                 }
                 KeyCode::PageDown | KeyCode::Char(' ') => {
-                    let max = render_markdown(docs[*sel].body).len() as u16;
-                    *scroll = (*scroll + 10).min(max.saturating_sub(1));
+                    *scroll = (*scroll + 10).min(app.help_scroll_max.get());
                 }
                 _ => {}
             },
@@ -707,7 +710,7 @@ fn draw(f: &mut Frame, app: &App) {
         }
         Mode::Sessions { name, items, sel } => draw_sessions(f, name, items, *sel),
         Mode::Config { dir, entries, sel, new } => draw_config(f, dir, entries, *sel, new),
-        Mode::Help { docs, sel, scroll } => draw_help(f, docs, *sel, *scroll),
+        Mode::Help { docs, sel, scroll } => draw_help(f, docs, *sel, *scroll, &app.help_scroll_max),
     }
 }
 
@@ -1136,7 +1139,13 @@ fn draw_sessions(f: &mut Frame, name: &str, items: &[sessions::Session], sel: us
 
 /// Full-screen reader for the bundled docs: a list of docs on the left, the
 /// selected doc's rendered content (scrollable) on the right.
-fn draw_help(f: &mut Frame, docs: &[docs::Doc], sel: usize, scroll: u16) {
+fn draw_help(
+    f: &mut Frame,
+    docs: &[docs::Doc],
+    sel: usize,
+    scroll: u16,
+    scroll_max: &std::cell::Cell<u16>,
+) {
     let area = f.area();
     f.render_widget(Clear, area);
 
@@ -1182,6 +1191,23 @@ fn draw_help(f: &mut Frame, docs: &[docs::Doc], sel: usize, scroll: u16) {
 
     // Right: rendered content, scrolled.
     let content = docs.get(sel).map(|d| render_markdown(d.body)).unwrap_or_default();
+
+    // Cap the scroll at the wrapped content height minus the viewport, so the
+    // last line can reach the bottom but you can't scroll into empty space. The
+    // paragraph wraps at the text width (pane minus the horizontal padding of 2
+    // each side), so a long line occupies several visual rows — counting raw
+    // lines (the old cap) stopped short on every wrapped doc.
+    let text_w = cols[1].width.saturating_sub(4).max(1) as usize;
+    let rows: usize = content
+        .iter()
+        .map(|l| {
+            let w = l.width();
+            if w == 0 { 1 } else { w.div_ceil(text_w) }
+        })
+        .sum();
+    let rows = rows.min(u16::MAX as usize) as u16;
+    scroll_max.set(rows.saturating_sub(cols[1].height));
+
     let para = Paragraph::new(content)
         .scroll((scroll, 0))
         .wrap(Wrap { trim: false })
