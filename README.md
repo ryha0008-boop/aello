@@ -1,5 +1,10 @@
 # aello
 
+[![release](https://github.com/ryha0008-boop/aello/actions/workflows/release.yml/badge.svg)](https://github.com/ryha0008-boop/aello/actions/workflows/release.yml)
+[![license: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+[![good first issues](https://img.shields.io/github/issues/ryha0008-boop/aello/good%20first%20issue.svg?color=7057ff&label=good%20first%20issues)](https://github.com/ryha0008-boop/aello/labels/good%20first%20issue)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+
 Isolated Claude Code environments — like Python venvs, but for AI agents.
 
 `aello` lets you define reusable agent **blueprints** (a name, a model, a persona, and a set of capabilities) and drop them into any project as an isolated Claude Code environment. Each blueprint runs Claude with its own `CLAUDE_CONFIG_DIR`, so multiple agents can work in the same repo without stepping on each other's config — and `git blame` can tell you which one made each change.
@@ -132,7 +137,16 @@ Pulls the matching binary from the rolling `latest` GitHub release and replaces 
 
 ## Contributing
 
-Issues and PRs welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the dev loop and conventions, and [CLAUDE.md](CLAUDE.md) for the architecture deep-dive.
+Issues and PRs welcome — aello is a small, focused Rust CLI (no extra toolchain), and contributions of all sizes help.
+
+**New here? Start with a [`good first issue`](https://github.com/ryha0008-boop/aello/labels/good%20first%20issue).** Each is scoped, names the file to touch, and lists acceptance criteria — comment to claim it. Most logic (templates, placement, capability scaffolding) is unit-testable without ever launching Claude.
+
+```sh
+git clone https://github.com/ryha0008-boop/aello && cd aello
+cargo build --release && cargo test     # both green before you start
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full dev loop and conventions, and [CLAUDE.md](CLAUDE.md) for the architecture deep-dive (every `src/` module is mapped there).
 
 ## License
 
