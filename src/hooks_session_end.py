@@ -2,8 +2,8 @@
 
 PostCompact only fires when a session compacts; a session ended with /clear (or a
 plain exit) never compacts, so its context would otherwise never reach contextdb.
-This hook captures those: it archives the self-contained HANDOFF.md (written by the
-/handoff skill, deleted on next boot) plus a pointer to the full transcript.
+This hook captures those: it archives the self-contained <agent>.HANDOFF.md (written
+by the /handoff skill, deleted on next boot) plus a pointer to the full transcript.
 """
 import sys
 import json
@@ -49,10 +49,12 @@ filepath = os.path.join(contextdb_dir, f"{ts}_{session}_end.jsonl")
 
 # Archive the /handoff note if present — it's the crafted, self-contained resume
 # summary, and it's deleted on next boot, so this is the only chance to keep it.
+# The note is prefixed with the blueprint name so multiple envs in one repo don't
+# clobber each other's handoff.
 cwd = data.get("cwd", "") or os.getcwd()
 handoff = ""
 try:
-    with open(os.path.join(cwd, "HANDOFF.md"), encoding="utf-8") as f:
+    with open(os.path.join(cwd, f"{agent}.HANDOFF.md"), encoding="utf-8") as f:
         handoff = f.read().strip()
 except Exception:
     pass

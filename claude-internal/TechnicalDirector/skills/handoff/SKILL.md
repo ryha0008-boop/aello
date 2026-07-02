@@ -1,23 +1,27 @@
 ---
 name: handoff
-description: Write a self-contained HANDOFF.md resume note so the next session continues seamlessly after a /clear. Invoke manually with /handoff.
+description: Write a self-contained TechnicalDirector.HANDOFF.md resume note so the next session continues seamlessly after a /clear. Invoke manually with /handoff.
 disable-model-invocation: true
 allowed-tools: Write, Read, Bash
 ---
 
 # /handoff — session resume note
 
-When invoked, write a `HANDOFF.md` at the project root that lets the **next**
-session resume this work with **zero prior context**. Invoking this skill is
-your authorization to do so.
+When invoked, write a `TechnicalDirector.HANDOFF.md` at the project root that lets the
+**next** session resume this work with **zero prior context**. Invoking this
+skill is your authorization to do so.
+
+The filename is prefixed with this blueprint's name (`TechnicalDirector`) so multiple
+blueprints sharing one repo each keep their own handoff without clobbering each
+other. Write exactly `TechnicalDirector.HANDOFF.md`, no other name.
 
 A handoff is not a compact: after a `/clear` there is no conversation summary to
-fall back on, so `HANDOFF.md` must be **fully self-contained**. Assume the reader
-boots fresh, has never seen this conversation, and reads only this file plus the
-pointers it names.
+fall back on, so `TechnicalDirector.HANDOFF.md` must be **fully self-contained**. Assume the
+reader boots fresh, has never seen this conversation, and reads only this file
+plus the pointers it names.
 
-`HANDOFF.md` is **transient and untracked** — it is read on boot, then deleted.
-Begin the file with a one-line banner: `> Transient resume note (TechnicalDirector). Read on boot, then delete.`
+`TechnicalDirector.HANDOFF.md` is **transient and untracked** — it is read on boot, then
+deleted. Begin the file with a one-line banner: `> Transient resume note (TechnicalDirector). Read on boot, then delete.`
 
 Write these sections, in order:
 

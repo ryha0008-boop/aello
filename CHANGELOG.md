@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Changed
+- The `/handoff` note is now written to `<blueprint>.HANDOFF.md` (prefixed with
+  the blueprint name) instead of a shared `HANDOFF.md`, so multiple blueprints in
+  one repo each keep their own handoff without overwriting each other. The
+  SessionEnd hook archives the matching per-blueprint file.
+
 ### Fixed
 - `aello init` now aborts on end-of-input instead of silently accepting every
   default, so a non-interactive or closed stdin can no longer auto-create a

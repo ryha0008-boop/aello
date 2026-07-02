@@ -709,7 +709,7 @@ mod tests {
         assert!(handoff.exists());
         let s = std::fs::read_to_string(&handoff).unwrap();
         assert!(s.contains("name: handoff"));
-        assert!(s.contains("HANDOFF.md"));
+        assert!(s.contains("bare.HANDOFF.md")); // filename prefixed with blueprint name
 
         let two = env.join("skills/twosentences/SKILL.md");
         assert!(two.exists());

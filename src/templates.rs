@@ -136,31 +136,36 @@ Use normal prose for commit messages. Don't skip hooks or force-push unless the 
 /// Generate the `/handoff` SKILL.md. Unlike `/sync`, this is **universal** —
 /// seeded for every blueprint regardless of capabilities — because a clean
 /// session handoff is useful even for a blueprint that maintains no docs. At
-/// session end it writes a self-contained `HANDOFF.md` resume note so the next
-/// session picks up seamlessly after a full `/clear` (which, unlike a compact,
-/// leaves no summary behind). `name` is the blueprint name, for context.
+/// session end it writes a self-contained `<name>.HANDOFF.md` resume note so the
+/// next session picks up seamlessly after a full `/clear` (which, unlike a
+/// compact, leaves no summary behind). The filename is prefixed with the
+/// blueprint `name` so co-located blueprints don't clobber each other's handoff.
 pub fn render_handoff_skill(name: &str) -> String {
     format!(
         "---
 name: handoff
-description: Write a self-contained HANDOFF.md resume note so the next session continues seamlessly after a /clear. Invoke manually with /handoff.
+description: Write a self-contained {name}.HANDOFF.md resume note so the next session continues seamlessly after a /clear. Invoke manually with /handoff.
 disable-model-invocation: true
 allowed-tools: Write, Read, Bash
 ---
 
 # /handoff — session resume note
 
-When invoked, write a `HANDOFF.md` at the project root that lets the **next**
-session resume this work with **zero prior context**. Invoking this skill is
-your authorization to do so.
+When invoked, write a `{name}.HANDOFF.md` at the project root that lets the
+**next** session resume this work with **zero prior context**. Invoking this
+skill is your authorization to do so.
+
+The filename is prefixed with this blueprint's name (`{name}`) so multiple
+blueprints sharing one repo each keep their own handoff without clobbering each
+other. Write exactly `{name}.HANDOFF.md`, no other name.
 
 A handoff is not a compact: after a `/clear` there is no conversation summary to
-fall back on, so `HANDOFF.md` must be **fully self-contained**. Assume the reader
-boots fresh, has never seen this conversation, and reads only this file plus the
-pointers it names.
+fall back on, so `{name}.HANDOFF.md` must be **fully self-contained**. Assume the
+reader boots fresh, has never seen this conversation, and reads only this file
+plus the pointers it names.
 
-`HANDOFF.md` is **transient and untracked** — it is read on boot, then deleted.
-Begin the file with a one-line banner: `> Transient resume note ({name}). Read on boot, then delete.`
+`{name}.HANDOFF.md` is **transient and untracked** — it is read on boot, then
+deleted. Begin the file with a one-line banner: `> Transient resume note ({name}). Read on boot, then delete.`
 
 Write these sections, in order:
 
@@ -262,7 +267,7 @@ mod tests {
         assert!(s.contains("name: handoff"));
         assert!(s.contains("disable-model-invocation: true"));
         assert!(s.contains("allowed-tools: Write, Read, Bash"));
-        assert!(s.contains("HANDOFF.md"));
+        assert!(s.contains("coder.HANDOFF.md")); // filename prefixed with blueprint name
         assert!(s.contains("zero prior context")); // self-contained, no compact summary
         assert!(s.contains("Read on boot, then delete")); // transient
         assert!(s.contains("commit shas"));

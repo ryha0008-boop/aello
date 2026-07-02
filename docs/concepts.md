@@ -54,7 +54,7 @@ On a fresh env, aello also marks onboarding complete (`hasCompletedOnboarding` i
 
 ## contextdb (transcripts)
 
-aello seeds two transcript hooks. **PostCompact** saves each compaction summary; **SessionEnd** captures a session that ends without compacting — `/clear` or a plain exit — which PostCompact would otherwise miss entirely (a `/clear`-heavy workflow never compacts). The SessionEnd record archives the `/handoff` note (`HANDOFF.md`, otherwise deleted on next boot) plus a pointer to the full transcript; it skips subagent sessions so the tree isn't flooded. Both land in a unified tree:
+aello seeds two transcript hooks. **PostCompact** saves each compaction summary; **SessionEnd** captures a session that ends without compacting — `/clear` or a plain exit — which PostCompact would otherwise miss entirely (a `/clear`-heavy workflow never compacts). The SessionEnd record archives the `/handoff` note (`<blueprint>.HANDOFF.md`, otherwise deleted on next boot) plus a pointer to the full transcript; it skips subagent sessions so the tree isn't flooded. Both land in a unified tree:
 
 ```
 <contextdb>/<project>/<blueprint>/<timestamp>_<session>.jsonl       # PostCompact

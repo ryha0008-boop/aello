@@ -49,7 +49,7 @@ Generated per blueprint from its caps (`templates::render_sync_skill`), seeded t
 
 ## `/handoff`
 
-Universal counterpart to `/sync` (`templates::render_handoff_skill`), seeded **unconditionally** for every blueprint at `<env>/skills/handoff/SKILL.md` (no caps gate — even a bare blueprint gets it). Manual-only (`disable-model-invocation: true`), tools `Write, Read, Bash`. At session end it writes a transient, untracked `HANDOFF.md` at the project root so the next session resumes after a full `/clear` (not a compact — a clear leaves no summary, so the note is fully self-contained: read-first pointers, what shipped + commit shas, open threads/next steps, gotchas). Read on boot, then deleted.
+Universal counterpart to `/sync` (`templates::render_handoff_skill`), seeded **unconditionally** for every blueprint at `<env>/skills/handoff/SKILL.md` (no caps gate — even a bare blueprint gets it). Manual-only (`disable-model-invocation: true`), tools `Write, Read, Bash`. At session end it writes a transient, untracked `<name>.HANDOFF.md` at the project root so the next session resumes after a full `/clear` (not a compact — a clear leaves no summary, so the note is fully self-contained: read-first pointers, what shipped + commit shas, open threads/next steps, gotchas). The filename is **prefixed with the blueprint name** so co-located blueprints in one repo don't clobber each other's handoff; the SessionEnd hook reads the same `<name>.HANDOFF.md` (it derives the name from `CLAUDE_CONFIG_DIR`). Read on boot, then deleted.
 
 ## `/twosentences`
 
