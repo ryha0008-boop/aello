@@ -7,7 +7,7 @@ allowed-tools: Write, Read, Bash
 
 # /note — leave a note for another environment
 
-When invoked, write a note addressed to **another** aello environment sharing
+When invoked, append a note addressed to **another** aello environment sharing
 this repo. The argument is that environment's name (e.g. `/note frontend`).
 Invoking this skill is your authorization to write the note.
 
