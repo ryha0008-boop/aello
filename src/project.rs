@@ -2,7 +2,7 @@
 //! `settings.json`, optional CLAUDE.md, and the PostCompact hook script.
 
 use crate::models::{Capabilities, Instance};
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 
 const POST_COMPACT_SCRIPT: &str = include_str!("hooks_post_compact.py");
@@ -59,6 +59,45 @@ pub fn env_dir(project: &Path, name: &str) -> PathBuf {
     project.join(format!(".claude-env-{name}"))
 }
 
+/// Move a placed blueprint's on-disk artifacts when it's renamed: the env dir
+/// `.claude-env-<old>` → `.claude-env-<new>`, the `name` in its `.aello.toml`,
+/// and the tracked `claude-internal/<old>/` mirror → `<new>/`. Returns true when
+/// the env dir was present (i.e. the blueprint is placed in this project);
+/// false is a clean no-op for a blueprint that isn't placed here. Errors if a
+/// destination already exists, so a rename never clobbers another env. Skills
+/// and mirror content that embed the old name are refreshed on the next `run`.
+pub fn rename_placed(project: &Path, old: &str, new: &str) -> Result<bool> {
+    let old_env = env_dir(project, old);
+    if !old_env.exists() {
+        return Ok(false);
+    }
+    let new_env = env_dir(project, new);
+    if new_env.exists() {
+        bail!("{} already exists — cannot rename", new_env.display());
+    }
+    std::fs::rename(&old_env, &new_env)
+        .with_context(|| format!("could not move env dir to {}", new_env.display()))?;
+
+    // Point the placed instance at the new name so it launches under it.
+    if let Some(mut inst) = load_instance(&new_env) {
+        inst.name = new.to_string();
+        std::fs::write(new_env.join(".aello.toml"), toml::to_string_pretty(&inst)?)
+            .context("could not update .aello.toml after rename")?;
+    }
+
+    // Move the tracked mirror too, when the github cap seeded one.
+    let old_mirror = project.join("claude-internal").join(old);
+    if old_mirror.exists() {
+        let new_mirror = project.join("claude-internal").join(new);
+        if new_mirror.exists() {
+            bail!("{} already exists — cannot rename", new_mirror.display());
+        }
+        std::fs::rename(&old_mirror, &new_mirror)
+            .with_context(|| format!("could not move mirror to {}", new_mirror.display()))?;
+    }
+    Ok(true)
+}
+
 /// Mark the env as onboarded so interactive `claude` skips its first-run
 /// wizard (theme/login) and goes straight in — auth is handled by the shared
 /// token. Merges `hasCompletedOnboarding: true` into `.claude.json`.
@@ -80,7 +119,6 @@ pub fn mark_onboarded(env_dir: &Path) -> Result<()> {
         .context("could not write .claude.json")
 }
 
-#[allow(dead_code)] // used in later phases (edit/sessions)
 pub fn load_instance(env_dir: &Path) -> Option<Instance> {
     let text = std::fs::read_to_string(env_dir.join(".aello.toml")).ok()?;
     toml::from_str(&text).ok()
@@ -689,6 +727,40 @@ mod tests {
         place(&env, &inst, None, &Capabilities::default()).unwrap();
         assert_eq!(std::fs::read_to_string(&index).unwrap(), "- my own memory\n");
         assert!(!ws.exists()); // not re-seeded while a MEMORY.md exists
+    }
+
+    #[test]
+    fn rename_moves_env_dir_mirror_and_updates_instance() {
+        let proj = tempfile::tempdir().unwrap();
+        let caps = Capabilities { github: true, ..Default::default() };
+        let old_env = env_dir(proj.path(), "old");
+        place(&old_env, &Instance { name: "old".into(), model: "opus".into() },
+              Some("# p"), &caps).unwrap();
+        assert!(old_env.exists());
+        assert!(proj.path().join("claude-internal/old").exists());
+
+        // Rename moves both the env dir and the tracked mirror.
+        assert!(rename_placed(proj.path(), "old", "new").unwrap());
+        let new_env = env_dir(proj.path(), "new");
+        assert!(!old_env.exists());
+        assert!(new_env.exists());
+        assert!(!proj.path().join("claude-internal/old").exists());
+        assert!(proj.path().join("claude-internal/new").exists());
+
+        // .aello.toml now names the new blueprint; the model is preserved.
+        let inst = load_instance(&new_env).unwrap();
+        assert_eq!(inst.name, "new");
+        assert_eq!(inst.model, "opus");
+
+        // A blueprint not placed in this project renames to a clean no-op.
+        let fresh = tempfile::tempdir().unwrap();
+        assert!(!rename_placed(fresh.path(), "x", "y").unwrap());
+
+        // A destination env dir that already exists is refused, not clobbered.
+        let taken = env_dir(proj.path(), "taken");
+        place(&taken, &Instance { name: "taken".into(), model: "haiku".into() },
+              None, &caps).unwrap();
+        assert!(rename_placed(proj.path(), "new", "taken").is_err());
     }
 
     #[test]

@@ -121,6 +121,9 @@ enum Commands {
 struct EditArgs {
     /// Blueprint to edit.
     name: String,
+    /// Rename the blueprint (also moves the placed env dir + mirror here).
+    #[arg(long)]
+    rename: Option<String>,
     /// New model (alias like opus/sonnet/haiku or a full claude-* id).
     #[arg(long)]
     model: Option<String>,
@@ -327,6 +330,18 @@ fn cmd_edit(args: EditArgs) -> Result<()> {
     let Some(idx) = cfg.blueprints.iter().position(|b| b.name == args.name) else {
         bail!("no blueprint named '{}'", args.name);
     };
+
+    // Validate a rename against the whole registry before the mutable borrow.
+    if let Some(new) = &args.rename {
+        validate_name(new)?;
+        if *new == args.name {
+            bail!("--rename '{new}' is already the blueprint's name");
+        }
+        if cfg.blueprints.iter().any(|b| b.name == *new) {
+            bail!("blueprint '{new}' already exists");
+        }
+    }
+
     let bp = &mut cfg.blueprints[idx];
     let mut changed = false;
 
@@ -349,8 +364,19 @@ fn cmd_edit(args: EditArgs) -> Result<()> {
     bp.caps.readme = tri(args.readme, args.no_readme, bp.caps.readme, "readme")?;
     changed |= bp.caps != before;
 
+    // Rename last: move on-disk artifacts for this project, then the config name.
+    if let Some(new) = args.rename {
+        let project = std::env::current_dir().context("could not determine current directory")?;
+        let moved = project::rename_placed(&project, &args.name, &new)?;
+        bp.name = new.clone();
+        changed = true;
+        if moved {
+            println!("Renamed the placed env dir + mirror in this project to '{new}'.");
+        }
+    }
+
     if !changed {
-        bail!("nothing to change — pass --model, --claude-md, or a capability flag");
+        bail!("nothing to change — pass --rename, --model, --claude-md, or a capability flag");
     }
 
     let name = bp.name.clone();

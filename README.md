@@ -86,7 +86,7 @@ aello add <name> --model <m> [--claude-md <coder|sysadmin|path>]
         [--project-md] [--github] [--changelog] [--docs] [--readme]
 aello list [--json]
 aello remove <name> [--yes] [--purge]         # --purge also deletes the placed env dir + mirror
-aello edit <name> [--model <m>] [--claude-md <coder|sysadmin|path>]
+aello edit <name> [--rename <new>] [--model <m>] [--claude-md <coder|sysadmin|path>]
         [--project-md|--no-project-md] [--github|--no-github]
         [--changelog|--no-changelog] [--docs|--no-docs] [--readme|--no-readme]
 aello run [name] [--resume [id]] [-p <prompt>] [-- <extra args for claude>]
@@ -105,7 +105,7 @@ aello update                                   # self-update to the latest relea
   aello completions powershell >> $PROFILE                         # PowerShell
   ```
 
-- `edit` changes a blueprint in place. Capability flags are tri-state: `--github` enables, `--no-github` disables, omitting both leaves it as-is. Changes apply on the next `run`; the global persona in an already-placed env is never re-clobbered.
+- `edit` changes a blueprint in place, including `--rename <new>` (validated, rejected if the name is taken) — which also moves the placed `.claude-env-<name>/` env dir and its `claude-internal/<name>/` mirror in the current project. Capability flags are tri-state: `--github` enables, `--no-github` disables, omitting both leaves it as-is. Changes apply on the next `run`; the global persona in an already-placed env is never re-clobbered.
 - `run` with no name uses the sole blueprint (errors if there are several).
 - `--resume` with no value continues the most recent session; `--resume <id>` resumes a specific one. The TUI (`S`) browses sessions to resume.
 - `-p "<prompt>"` runs headless and exits. Anything after `--` is passed straight to `claude`.

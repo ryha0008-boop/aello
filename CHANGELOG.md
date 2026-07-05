@@ -42,6 +42,10 @@
   memory at a directory Claude never reads.
 
 ### Added
+- **`aello edit <name> --rename <new>`** — renames a blueprint. The new name is
+  validated and rejected if it's already taken; if the blueprint is placed in the
+  current project, its `.claude-env-<name>/` env dir and `claude-internal/<name>/`
+  mirror are moved to the new name and the placed instance still launches.
 - **`aello completions <shell>`** — prints a shell completion script (bash, zsh,
   fish, powershell, elvish) to stdout, generated from the CLI definition so it
   stays in sync. See the README for how to load it per shell.

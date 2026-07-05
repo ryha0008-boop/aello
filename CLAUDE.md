@@ -85,6 +85,6 @@ cargo install --path . --force # replace ~/.cargo/bin/aello with the local build
 
 ## Deferred
 
-- Phase 4 hook toggles — moot (the two transcript hooks are fixed, not user-toggleable). Blueprint edit shipped both as `aello edit` (CLI; model/persona/caps in place, tri-state cap flags) and in the TUI (`E`, guided edit). Editing a blueprint's *name* (a rename) is still unsupported in both — it would require moving the placed env dir.
+- Phase 4 hook toggles — moot (the two transcript hooks are fixed, not user-toggleable). Blueprint edit shipped both as `aello edit` (CLI; model/persona/caps in place, tri-state cap flags) and in the TUI (`E`, guided edit). Renaming a blueprint shipped as `aello edit <old> --rename <new>` (CLI; `project::rename_placed` moves the placed env dir, its `.aello.toml` name, and the `claude-internal/<old>/` mirror). The TUI `E` flow still doesn't offer a rename.
 
 Shipped since the original roadmap: aello-driven GitHub setup is now the `aello github-setup` command (`github.rs`); the `github` cap now also scaffolds `.gitattributes` and a generic `VERSION` + `version.yml` patch-bump CI for target projects; `aello init` is the first-run wizard (login + first blueprint, capabilities included). CI actions all target Node 24 (`checkout@v5`, `upload-artifact@v7`, `download-artifact@v8` — the artifact repos jumped majors faster than checkout); the Node-20 deprecation is resolved.
