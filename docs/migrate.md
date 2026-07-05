@@ -29,7 +29,7 @@ aello run <Name> -- --version
 `-- --version` passes straight through to Claude, which prints its version and exits — so this *places* the env without burning a real session. Placement:
 
 - creates `<project>/.claude-env-<Name>/` (the env dir) and adds `.claude-env-*` to `.gitignore`,
-- sets up git attribution, generates `/sync`, seeds the universal `/handoff`, marks onboarding complete,
+- sets up git attribution, generates `/sync`, seeds the universal skills (`/handoff`, `/note`, `/twosentences`), marks onboarding complete,
 - **seeds the `github` CI scaffolding**: `.github/workflows/version.yml`, `VERSION` (`0.1.0`), a `CHANGELOG.md` stub, and `.gitattributes`,
 - seeds a starter working-style memory.
 

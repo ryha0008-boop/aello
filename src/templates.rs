@@ -187,6 +187,58 @@ them it is deleted on next boot.
     )
 }
 
+/// Generate the `/note` SKILL.md. Also **universal** — seeded for every
+/// blueprint. Unlike `/handoff` (a note to *yourself* for your next session),
+/// `/note` leaves a note for **another** environment sharing this repo: when this
+/// blueprint touches something the other env owns, or hits a problem on the
+/// other side, it records what it was doing and what the other env must fix. The
+/// target env is passed as the skill argument; `name` is this (authoring)
+/// blueprint, woven in so the note is attributed.
+pub fn render_note_skill(name: &str) -> String {
+    format!(
+        "---
+name: note
+description: Leave a note for another environment in this repo about something it needs to fix. Invoke manually with /note <env-name>.
+disable-model-invocation: true
+allowed-tools: Write, Read, Bash
+---
+
+# /note — leave a note for another environment
+
+When invoked, append a note addressed to **another** aello environment sharing
+this repo. The argument is that environment's name (e.g. `/note frontend`).
+Invoking this skill is your authorization to write the note.
+
+This is **not** a handoff. `/handoff` is a note to *yourself* for your next
+session; `/note` is a message to a *different* environment — you touched
+something it owns, or hit a problem on its side, and it needs to act.
+
+You are the **`{name}`** environment. Write the note to `<target>.NOTE.md` at the
+project root, where `<target>` is the argument you were given. That file is the
+target env's inbox — it reads the note, acts on it, then deletes the file.
+
+Steps:
+1. Take the target env name from the argument. If none was given, ask which
+   environment the note is for and stop. Sanity-check that a `.claude-env-<target>`
+   dir exists at the project root; if it does not, warn the user (a typo?) and
+   only write the note if they confirm.
+2. **Overwrite** `<target>.NOTE.md` with a single, current note — do not append
+   to or preserve any old note. The target reads a note as soon as you leave it,
+   so only the latest matters; a fresh note supersedes whatever was there.
+3. Write, in this order:
+   - A one-line banner: `> Note for the <target> env from {name}. Read it, act on it, then delete this file.`
+   - A `## from {name} — <timestamp>` heading (get the timestamp with `date`).
+   - **What I was doing** — the task that led here.
+   - **The problem** — what is broken or blocked on the target's side, concretely.
+   - **What you need to fix** — the specific change or decision you need from the
+     target env, naming the files/paths involved.
+   Keep it tight and actionable; the target boots without your context.
+
+Then tell the user the note was written to `<target>.NOTE.md`.
+"
+    )
+}
+
 /// Generate the `/twosentences` SKILL.md. Like `/handoff` this is **universal**
 /// — seeded for every blueprint regardless of capabilities. It condenses the
 /// previous assistant response into exactly two sentences; a pure text task, so
@@ -272,6 +324,19 @@ mod tests {
         assert!(s.contains("Read on boot, then delete")); // transient
         assert!(s.contains("commit shas"));
         assert!(s.contains("coder")); // blueprint name woven in
+    }
+
+    #[test]
+    fn note_skill_targets_another_env_and_is_manual() {
+        let s = render_note_skill("core");
+        assert!(s.contains("name: note"));
+        assert!(s.contains("disable-model-invocation: true"));
+        assert!(s.contains("allowed-tools: Write, Read, Bash"));
+        assert!(s.contains("another")); // addressed to a different environment
+        assert!(s.contains("<target>.NOTE.md")); // target-keyed inbox file
+        assert!(s.contains("Overwrite")); // one current note, read immediately
+        assert!(s.contains("from core")); // attributed to the authoring blueprint
+        assert!(s.contains("not** a handoff")); // distinct from /handoff
     }
 
     #[test]

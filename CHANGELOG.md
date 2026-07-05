@@ -33,6 +33,14 @@
   memory at a directory Claude never reads.
 
 ### Added
+- **`/note` skill** — seeded for *every* blueprint (like `/handoff` and
+  `/twosentences`). `/note <env-name>` leaves a note for **another** environment
+  sharing the repo: it writes what you were doing, the problem, and what that env
+  needs to fix to `<env-name>.NOTE.md` at the repo root (the target env's inbox),
+  which the target reads and then deletes. A fresh note overwrites the last, and
+  each is attributed to the authoring blueprint. Unlike `/handoff` (a note to
+  yourself), this is a message across environments — for when two blueprints
+  split one project and one hits something on the other's side.
 - **Open-source project foundation.** aello is now dual licensed under MIT and
   Apache-2.0 (`LICENSE-MIT`, `LICENSE-APACHE`, `Cargo.toml` `license` field), with
   full crate metadata (`repository`, `homepage`, `keywords`, `categories`) for

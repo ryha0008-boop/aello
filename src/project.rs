@@ -149,6 +149,14 @@ pub fn place(
     std::fs::write(&handoff, crate::templates::render_handoff_skill(&inst.name))
         .context("could not write handoff SKILL.md")?;
 
+    // Always seed the /note skill — universal too: leave a note for another
+    // environment sharing this repo (distinct from /handoff, a note to self).
+    let note = env_dir.join("skills").join("note").join("SKILL.md");
+    std::fs::create_dir_all(note.parent().unwrap())
+        .context("could not create note skills dir")?;
+    std::fs::write(&note, crate::templates::render_note_skill(&inst.name))
+        .context("could not write note SKILL.md")?;
+
     // Always seed the /twosentences skill — also universal (capability-
     // independent): condense the previous response into two sentences.
     let twosentences = env_dir.join("skills").join("twosentences").join("SKILL.md");
@@ -716,5 +724,12 @@ mod tests {
         let t = std::fs::read_to_string(&two).unwrap();
         assert!(t.contains("name: twosentences"));
         assert!(t.contains("exactly two sentences"));
+
+        let note = env.join("skills/note/SKILL.md");
+        assert!(note.exists());
+        let n = std::fs::read_to_string(&note).unwrap();
+        assert!(n.contains("name: note"));
+        assert!(n.contains("<target>.NOTE.md")); // leaves a note for another env
+        assert!(n.contains("from bare")); // attributed to this blueprint
     }
 }
