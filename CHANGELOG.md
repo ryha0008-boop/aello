@@ -37,6 +37,9 @@
   memory at a directory Claude never reads.
 
 ### Added
+- **`aello completions <shell>`** — prints a shell completion script (bash, zsh,
+  fish, powershell, elvish) to stdout, generated from the CLI definition so it
+  stays in sync. See the README for how to load it per shell.
 - **`/note` skill** — seeded for *every* blueprint (like `/handoff` and
   `/twosentences`). `/note <env-name>` leaves a note for **another** environment
   sharing the repo: it writes what you were doing, the problem, and what that env

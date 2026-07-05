@@ -93,8 +93,17 @@ aello run [name] [--resume [id]] [-p <prompt>] [-- <extra args for claude>]
 aello login                                    # store the shared Claude token
 aello github-setup [--name <repo>] [--public] [--yes]   # create + push the repo via gh
 aello docs [name]                              # print bundled reference docs (no name lists them)
+aello completions <bash|zsh|fish|powershell|elvish>     # print a shell completion script
 aello update                                   # self-update to the latest release
 ```
+
+- `completions` prints a script to stdout for tab-completing blueprint names and flags. Load it, e.g.:
+  ```sh
+  aello completions bash | sudo tee /etc/bash_completion.d/aello   # bash (system-wide)
+  aello completions zsh  > ~/.zfunc/_aello                         # zsh (ensure ~/.zfunc is on $fpath)
+  aello completions fish > ~/.config/fish/completions/aello.fish   # fish
+  aello completions powershell >> $PROFILE                         # PowerShell
+  ```
 
 - `edit` changes a blueprint in place. Capability flags are tri-state: `--github` enables, `--no-github` disables, omitting both leaves it as-is. Changes apply on the next `run`; the global persona in an already-placed env is never re-clobbered.
 - `run` with no name uses the sole blueprint (errors if there are several).

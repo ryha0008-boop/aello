@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 
 mod auth;
 mod config;
@@ -92,6 +92,11 @@ enum Commands {
     },
     /// Update aello to the latest build from GitHub.
     Update,
+    /// Print a shell completion script (bash, zsh, fish, powershell, elvish).
+    Completions {
+        /// Shell to generate completions for.
+        shell: clap_complete::Shell,
+    },
     /// Show bundled reference docs (no name lists them).
     Docs {
         /// Doc to print (slug, e.g. `concepts`). Omit to list available docs.
@@ -179,6 +184,7 @@ fn main() {
         Some(Commands::Login) => cmd_login(),
         Some(Commands::GithubSetup { name, public, yes }) => github::run(name, public, yes),
         Some(Commands::Update) => update::run(),
+        Some(Commands::Completions { shell }) => cmd_completions(shell),
         Some(Commands::Docs { name }) => cmd_docs(name),
     };
 
@@ -502,6 +508,14 @@ fn cmd_docs(name: Option<String>) -> Result<()> {
             }
         },
     }
+    Ok(())
+}
+
+/// Print a clap-generated completion script for `shell` to stdout. Generated
+/// from the derived CLI, so it stays in sync with the commands automatically.
+fn cmd_completions(shell: clap_complete::Shell) -> Result<()> {
+    let mut cmd = Cli::command();
+    clap_complete::generate(shell, &mut cmd, "aello", &mut std::io::stdout());
     Ok(())
 }
 
