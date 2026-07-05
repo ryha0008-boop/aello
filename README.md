@@ -34,7 +34,18 @@ Install into a **user-writable** dir (`~/.local/bin`), not root-owned `/usr/loca
 
 Download [`aello-x86_64-windows.exe`](https://github.com/ryha0008-boop/aello/releases/download/latest/aello-x86_64-windows.exe) from the latest release, rename it to `aello.exe`, and put it somewhere on your `PATH` (e.g. `C:\Users\<you>\bin\`).
 
-### From source (any platform, incl. macOS)
+### macOS (build from source)
+
+No prebuilt macOS binary ships yet — build it from source. You need a [Rust toolchain](https://rustup.rs) (`rustc`/`cargo`); everything else is pulled in by `cargo`.
+
+```sh
+cargo install --git https://github.com/ryha0008-boop/aello   # installs to ~/.cargo/bin/aello
+aello --version
+```
+
+`~/.cargo/bin` is user-writable, so `aello update`'s in-place binary replacement works. Note that `aello update` only fetches the prebuilt Linux/Windows binaries — on macOS, re-run the `cargo install --git` line above to update. As on every platform, `claude` (Claude Code) must be on your `PATH` for `aello run` to launch it.
+
+### From source (any platform)
 
 ```sh
 git clone https://github.com/ryha0008-boop/aello

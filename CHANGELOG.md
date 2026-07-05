@@ -13,6 +13,11 @@
   one repo each keep their own handoff without overwriting each other. The
   SessionEnd hook archives the matching per-blueprint file.
 
+### Docs
+- Added a dedicated **macOS (build from source)** install section to the README
+  (`cargo install --git …`, Rust-toolchain prerequisite, and the caveat that
+  `aello update` only ships Linux/Windows binaries so macOS updates by rebuilding).
+
 ### Fixed
 - Blueprint names are now restricted to **ASCII** alphanumerics (plus `-`/`_`).
   Names like `café` or full-width characters previously slipped past
