@@ -85,7 +85,7 @@ aello init                                     # first-run: login + first bluepr
 aello add <name> --model <m> [--claude-md <coder|sysadmin|path>]
         [--project-md] [--github] [--changelog] [--docs] [--readme]
 aello list [--json]
-aello remove <name>
+aello remove <name> [--yes] [--purge]         # --purge also deletes the placed env dir + mirror
 aello edit <name> [--model <m>] [--claude-md <coder|sysadmin|path>]
         [--project-md|--no-project-md] [--github|--no-github]
         [--changelog|--no-changelog] [--docs|--no-docs] [--readme|--no-readme]

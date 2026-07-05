@@ -3,6 +3,11 @@
 ## [Unreleased]
 
 ### Changed
+- `aello remove <name>` now **prompts for confirmation** before deleting a
+  blueprint (`--yes` skips the prompt). A new `--purge` flag also deletes the
+  placed `.claude-env-<name>/` env dir and its `claude-internal/<name>/` mirror
+  in the current project; without it the on-disk dirs are left as-is and you're
+  told they remain.
 - The `/handoff` note is now written to `<blueprint>.HANDOFF.md` (prefixed with
   the blueprint name) instead of a shared `HANDOFF.md`, so multiple blueprints in
   one repo each keep their own handoff without overwriting each other. The

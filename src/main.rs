@@ -57,7 +57,16 @@ enum Commands {
         json: bool,
     },
     /// Remove a blueprint by name.
-    Remove { name: String },
+    Remove {
+        name: String,
+        /// Skip the confirmation prompt.
+        #[arg(long)]
+        yes: bool,
+        /// Also delete the placed env dir and its `claude-internal/<name>/`
+        /// mirror in the current project.
+        #[arg(long)]
+        purge: bool,
+    },
     /// Edit an existing blueprint's model, persona, or capabilities.
     Edit(EditArgs),
     /// Place a blueprint in the current directory and launch it.
@@ -177,7 +186,7 @@ fn main() {
             cmd_add(name, model, claude_md, Capabilities { project_md, github, changelog, docs, readme })
         }
         Some(Commands::List { json }) => cmd_list(json),
-        Some(Commands::Remove { name }) => cmd_remove(name),
+        Some(Commands::Remove { name, yes, purge }) => cmd_remove(name, yes, purge),
         Some(Commands::Edit(args)) => cmd_edit(args),
         Some(Commands::Run { name, resume, prompt, extra }) => cmd_run(name, resume, prompt, extra),
         Some(Commands::Init) => cmd_init(),
@@ -247,16 +256,61 @@ fn cmd_add(
     Ok(())
 }
 
-fn cmd_remove(name: String) -> Result<()> {
+fn cmd_remove(name: String, yes: bool, purge: bool) -> Result<()> {
     let mut cfg = config::load()?;
-    let before = cfg.blueprints.len();
-    cfg.blueprints.retain(|b| b.name != name);
-    if cfg.blueprints.len() == before {
+    if cfg.find(&name).is_none() {
         bail!("no blueprint named '{name}'");
     }
+
+    // On-disk artifacts for the CURRENT project (the only ones we can locate).
+    let project = std::env::current_dir().context("could not determine current directory")?;
+    let env = project::env_dir(&project, &name);
+    let mirror = project.join("claude-internal").join(&name);
+
+    if !yes {
+        let action = if purge {
+            format!("Remove blueprint '{name}' and delete its env dir + mirror in this project?")
+        } else {
+            format!("Remove blueprint '{name}'?")
+        };
+        if !confirm(&action) {
+            println!("Cancelled.");
+            return Ok(());
+        }
+    }
+
+    cfg.blueprints.retain(|b| b.name != name);
     config::save(&cfg)?;
     println!("Removed blueprint '{name}'.");
+
+    if purge {
+        for dir in [&env, &mirror] {
+            if dir.exists() {
+                std::fs::remove_dir_all(dir)
+                    .with_context(|| format!("could not delete {}", dir.display()))?;
+                println!("Deleted {}", dir.display());
+            }
+        }
+    } else if env.exists() {
+        println!(
+            "Note: {} remains on disk (pass --purge to delete it).",
+            env.display()
+        );
+    }
     Ok(())
+}
+
+/// Yes/No prompt on stdin, defaulting to No — returns false on a closed or
+/// unreadable stdin so a non-interactive run without `--yes` safely aborts.
+fn confirm(question: &str) -> bool {
+    use std::io::Write;
+    print!("{question} [y/N] ");
+    std::io::stdout().flush().ok();
+    let mut line = String::new();
+    if std::io::stdin().read_line(&mut line).unwrap_or(0) == 0 {
+        return false;
+    }
+    matches!(line.trim().to_lowercase().as_str(), "y" | "yes")
 }
 
 /// Resolve a tri-state capability flag: `on` wins, then `off`, else keep
