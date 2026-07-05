@@ -18,7 +18,15 @@ Cross-platform: Linux and Windows (x86_64). macOS: build from source.
 
 ## Install
 
-### Linux (x86_64)
+### Linux (x86_64) — one-liner
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ryha0008-boop/aello/main/install.sh | sh
+```
+
+Downloads the latest release into `~/.local/bin` (override with `AELLO_BIN_DIR`), makes it executable, and prints a PATH hint if that dir isn't on your `$PATH`. Unsupported platforms (macOS, arm64) exit with a build-from-source pointer.
+
+### Linux (x86_64) — manual
 
 ```sh
 mkdir -p ~/.local/bin

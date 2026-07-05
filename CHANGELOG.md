@@ -47,6 +47,11 @@
   memory at a directory Claude never reads.
 
 ### Added
+- **`install.sh`** — a `curl -fsSL … | sh` one-line installer for Linux x86_64.
+  Detects OS/arch, downloads the matching asset from the rolling `latest` release
+  into `~/.local/bin` (override with `AELLO_BIN_DIR`), guards against a truncated
+  download, and prints a PATH hint; unsupported platforms exit with a
+  build-from-source pointer rather than a partial install.
 - **`aello edit <name> --rename <new>`** — renames a blueprint. The new name is
   validated and rejected if it's already taken; if the blueprint is placed in the
   current project, its `.claude-env-<name>/` env dir and `claude-internal/<name>/`
