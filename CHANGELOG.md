@@ -9,6 +9,10 @@
   SessionEnd hook archives the matching per-blueprint file.
 
 ### Fixed
+- Blueprint names are now restricted to **ASCII** alphanumerics (plus `-`/`_`).
+  Names like `café` or full-width characters previously slipped past
+  `validate_name` yet made fragile, cross-platform-hostile `.claude-env-<name>/`
+  directory names; the error message already promised "letters, digits".
 - `aello init` now aborts on end-of-input instead of silently accepting every
   default, so a non-interactive or closed stdin can no longer auto-create a
   blueprint you never confirmed. `--model` also rejects a bare `claude-`.

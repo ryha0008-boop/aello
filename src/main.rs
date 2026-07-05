@@ -193,8 +193,8 @@ pub(crate) fn validate_name(name: &str) -> Result<()> {
     if name.is_empty() {
         bail!("name cannot be empty");
     }
-    if !name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
-        bail!("name '{name}' must contain only letters, digits, '-' or '_'");
+    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        bail!("name '{name}' must contain only ASCII letters, digits, '-' or '_'");
     }
     Ok(())
 }
@@ -575,7 +575,7 @@ mod tests {
 
     #[test]
     fn invalid_names_rejected() {
-        for n in ["", "bad name", "a/b", "x.y", "a:b"] {
+        for n in ["", "bad name", "a/b", "x.y", "a:b", "café", "ｆｕｌｌ"] {
             assert!(validate_name(n).is_err(), "{n:?} should be rejected");
         }
     }
