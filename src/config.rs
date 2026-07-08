@@ -53,14 +53,26 @@ pub fn config_path() -> Result<PathBuf> {
     Ok(config_dir()?.join("config.toml"))
 }
 
-/// Load config, returning an empty default if the file does not exist yet.
+/// Load config, returning an empty default only if the file does not exist yet.
+///
+/// A missing file is the normal first-run case → empty default. But every other
+/// I/O error (a transient share-violation from OneDrive / an AV scanner / the
+/// Windows Search Indexer holding a lock, a permission glitch, etc.) must
+/// **propagate**, not collapse to a default: callers are `load → mutate → save`
+/// sandwiches, so returning an empty default here would make the next `save()`
+/// overwrite `config.toml` — destroying every blueprint AND the non-rotating
+/// OAuth token — over a momentary read failure.
 pub fn load() -> Result<Config> {
-    let path = config_path()?;
-    match std::fs::read_to_string(&path) {
+    load_path(&config_path()?)
+}
+
+fn load_path(path: &std::path::Path) -> Result<Config> {
+    match std::fs::read_to_string(path) {
         Ok(text) => {
             toml::from_str(&text).with_context(|| format!("failed to parse {}", path.display()))
         }
-        Err(_) => Ok(Config::default()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Config::default()),
+        Err(e) => Err(e).with_context(|| format!("could not read {}", path.display())),
     }
 }
 
@@ -80,4 +92,28 @@ pub fn save(cfg: &Config) -> Result<()> {
         return Err(e).with_context(|| format!("could not replace {}", path.display()));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_file_is_empty_default() {
+        let dir = std::env::temp_dir().join(format!("aello-cfg-load-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let cfg = load_path(&dir.join("does-not-exist.toml")).expect("NotFound must default");
+        assert!(cfg.blueprints.is_empty());
+        assert!(cfg.oauth_token.is_none());
+    }
+
+    #[test]
+    fn non_notfound_error_propagates() {
+        // A path that exists but is a directory yields a non-NotFound read
+        // error; load() must NOT collapse it to an empty default (doing so would
+        // let the next save() overwrite a real config + token).
+        let dir = std::env::temp_dir().join(format!("aello-cfg-err-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        assert!(load_path(&dir).is_err());
+    }
 }

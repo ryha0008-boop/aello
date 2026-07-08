@@ -19,6 +19,14 @@
   `aello update` only ships Linux/Windows binaries so macOS updates by rebuilding).
 
 ### Fixed
+- **Config/token loss on a transient read error is prevented.** `config::load()`
+  previously turned *any* I/O error (not just "file missing") into an empty
+  default `Config`; since every command is `load → mutate → save`, one momentary
+  file lock — routine on Windows from OneDrive, an AV scanner, or the Search
+  Indexer holding `config.toml` — made the next `save()` overwrite it with an
+  empty default, destroying every blueprint and the non-rotating OAuth token. It
+  now defaults **only** when the file genuinely doesn't exist and propagates all
+  other errors so the command aborts instead of clobbering your config.
 - Blueprint names are now restricted to **ASCII** alphanumerics (plus `-`/`_`).
   Names like `café` or full-width characters previously slipped past
   `validate_name` yet made fragile, cross-platform-hostile `.claude-env-<name>/`
