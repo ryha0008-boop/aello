@@ -51,6 +51,11 @@
   **only in case** (e.g. `Coder` vs `coder`) is now rejected. Both map to the
   same `.claude-env-<name>/` dir on Windows/macOS default filesystems, so
   running one after the other silently clobbered the other's state.
+- Project paths containing an underscore or space are now encoded correctly for
+  session/memory lookup. Claude Code folds **every** non-alphanumeric character
+  to `-` (so `…\human_behavior` → `…-human-behavior`), but aello only folded
+  `\ / : .` — leaving `_`/spaces intact pointed seeded memory and `--resume` at
+  a directory Claude never reads, a silent no-op for those projects.
 - `aello init` now aborts on end-of-input instead of silently accepting every
   default, so a non-interactive or closed stdin can no longer auto-create a
   blueprint you never confirmed. `--model` also rejects a bare `claude-`.
