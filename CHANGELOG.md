@@ -30,6 +30,13 @@
   process can no longer read the token. No-op on Windows.
 
 ### Fixed
+- **Editing a blueprint in the TUI (`E`) no longer downgrades its model or
+  drops a custom persona.** The curated pickers can't represent a full
+  `claude-*` model id, the `default` alias, or a custom persona path, so opening
+  a CLI-configured blueprint and saving — even just to toggle one capability —
+  used to rewrite its model to `opus` and its persona to `none`. The edit flow
+  now preserves the original model/persona unless you actually change that
+  picker, and shows a `KEEPING = …` hint when the stored value is off-list.
 - **Config/token loss on a transient read error is prevented.** `config::load()`
   previously turned *any* I/O error (not just "file missing") into an empty
   default `Config`; since every command is `load → mutate → save`, one momentary
