@@ -72,28 +72,39 @@ pub fn rename_placed(project: &Path, old: &str, new: &str) -> Result<bool> {
         return Ok(false);
     }
     let new_env = env_dir(project, new);
+    let old_mirror = project.join("claude-internal").join(old);
+    let new_mirror = project.join("claude-internal").join(new);
+
+    // Pre-check BOTH destinations before moving anything. Previously the env dir
+    // was renamed first and the mirror collision was only caught afterwards, so
+    // a `bail!` there left the env dir already moved while cmd_edit's `?` skipped
+    // config::save — config still said <old>, disk said <new>, and `run <old>`
+    // then re-scaffolded a fresh env, orphaning the renamed one.
     if new_env.exists() {
         bail!("{} already exists — cannot rename", new_env.display());
     }
+    if old_mirror.exists() && new_mirror.exists() {
+        bail!("{} already exists — cannot rename", new_mirror.display());
+    }
+
     std::fs::rename(&old_env, &new_env)
         .with_context(|| format!("could not move env dir to {}", new_env.display()))?;
 
-    // Point the placed instance at the new name so it launches under it.
+    // Move the tracked mirror too, when the github cap seeded one. On any
+    // failure here, roll the env-dir move back so disk and config stay in sync.
+    if old_mirror.exists() {
+        if let Err(e) = std::fs::rename(&old_mirror, &new_mirror) {
+            let _ = std::fs::rename(&new_env, &old_env);
+            return Err(e).with_context(|| format!("could not move mirror to {}", new_mirror.display()));
+        }
+    }
+
+    // Both dirs moved — point the placed instance at the new name so it launches
+    // under it. (Done last; the moves are the part that must stay consistent.)
     if let Some(mut inst) = load_instance(&new_env) {
         inst.name = new.to_string();
         std::fs::write(new_env.join(".aello.toml"), toml::to_string_pretty(&inst)?)
             .context("could not update .aello.toml after rename")?;
-    }
-
-    // Move the tracked mirror too, when the github cap seeded one.
-    let old_mirror = project.join("claude-internal").join(old);
-    if old_mirror.exists() {
-        let new_mirror = project.join("claude-internal").join(new);
-        if new_mirror.exists() {
-            bail!("{} already exists — cannot rename", new_mirror.display());
-        }
-        std::fs::rename(&old_mirror, &new_mirror)
-            .with_context(|| format!("could not move mirror to {}", new_mirror.display()))?;
     }
     Ok(true)
 }
@@ -761,6 +772,26 @@ mod tests {
         place(&taken, &Instance { name: "taken".into(), model: "haiku".into() },
               None, &caps).unwrap();
         assert!(rename_placed(proj.path(), "new", "taken").is_err());
+    }
+
+    #[test]
+    fn rename_mirror_collision_does_not_move_env_dir() {
+        // Destination env dir is free but its mirror already exists: the rename
+        // must fail WITHOUT half-moving the env dir (else config and disk would
+        // diverge and `run <old>` would re-scaffold a fresh env).
+        let proj = tempfile::tempdir().unwrap();
+        let caps = Capabilities { github: true, ..Default::default() };
+        let src_env = env_dir(proj.path(), "src");
+        place(&src_env, &Instance { name: "src".into(), model: "opus".into() },
+              Some("# p"), &caps).unwrap();
+        // A stray mirror at the destination, with no matching env dir.
+        std::fs::create_dir_all(proj.path().join("claude-internal/dest")).unwrap();
+
+        assert!(rename_placed(proj.path(), "src", "dest").is_err());
+        // The source env dir is untouched — nothing half-moved.
+        assert!(src_env.exists());
+        assert!(!env_dir(proj.path(), "dest").exists());
+        assert!(proj.path().join("claude-internal/src").exists());
     }
 
     #[test]

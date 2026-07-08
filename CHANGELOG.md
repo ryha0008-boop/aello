@@ -30,6 +30,12 @@
   process can no longer read the token. No-op on Windows.
 
 ### Fixed
+- `aello edit --rename` is now transactional. It previously renamed the env dir
+  first and only then checked whether the `claude-internal/<new>/` mirror
+  collided — so a collision (or any fs error) left the env dir already moved but
+  the config not saved, and `run <old>` re-scaffolded a fresh env, orphaning the
+  renamed one. Both destinations are now pre-checked before any move, and a
+  failed mirror move rolls the env-dir move back.
 - **Editing a blueprint in the TUI (`E`) no longer downgrades its model or
   drops a custom persona.** The curated pickers can't represent a full
   `claude-*` model id, the `default` alias, or a custom persona path, so opening
