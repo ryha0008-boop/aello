@@ -80,6 +80,9 @@ pub fn save(cfg: &Config) -> Result<()> {
     let path = config_path()?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).context("could not create config dir")?;
+        // config.toml holds the plaintext, non-rotating OAuth token, so keep the
+        // dir owner-only on Unix (best effort; no-op on Windows).
+        restrict_dir(parent);
     }
     let text = toml::to_string_pretty(cfg).context("failed to serialize config")?;
     // Atomic write: config.toml holds the only copy of the non-rotating OAuth
@@ -87,12 +90,35 @@ pub fn save(cfg: &Config) -> Result<()> {
     // file, then rename over the target (atomic on the same filesystem).
     let tmp = path.with_extension("toml.tmp");
     std::fs::write(&tmp, text).with_context(|| format!("could not write {}", tmp.display()))?;
+    // Lock the token down to owner-only BEFORE the rename, so the file is never
+    // briefly world-readable at its final path (no-op on Windows).
+    restrict_file(&tmp);
     if let Err(e) = std::fs::rename(&tmp, &path) {
         let _ = std::fs::remove_file(&tmp);
         return Err(e).with_context(|| format!("could not replace {}", path.display()));
     }
     Ok(())
 }
+
+/// Restrict a file to owner read/write (`0600`) on Unix; no-op elsewhere.
+/// Best-effort: a permission-set failure must not block saving the config.
+#[cfg(unix)]
+fn restrict_file(p: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o600));
+}
+
+/// Restrict a directory to owner-only (`0700`) on Unix; no-op elsewhere.
+#[cfg(unix)]
+fn restrict_dir(p: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o700));
+}
+
+#[cfg(not(unix))]
+fn restrict_file(_p: &std::path::Path) {}
+#[cfg(not(unix))]
+fn restrict_dir(_p: &std::path::Path) {}
 
 #[cfg(test)]
 mod tests {
@@ -105,6 +131,19 @@ mod tests {
         let cfg = load_path(&dir.join("does-not-exist.toml")).expect("NotFound must default");
         assert!(cfg.blueprints.is_empty());
         assert!(cfg.oauth_token.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restrict_file_sets_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("aello-cfg-perm-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let f = dir.join("config.toml.tmp");
+        std::fs::write(&f, "x").unwrap();
+        restrict_file(&f);
+        let mode = std::fs::metadata(&f).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
     }
 
     #[test]

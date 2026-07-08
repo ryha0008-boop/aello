@@ -18,6 +18,12 @@
   (`cargo install --git …`, Rust-toolchain prerequisite, and the caveat that
   `aello update` only ships Linux/Windows binaries so macOS updates by rebuilding).
 
+### Security
+- On Unix, `config.toml` (which holds the plaintext, non-rotating OAuth token)
+  and its directory are now written owner-only (`0600`/`0700`) instead of the
+  default world-readable `0644`, so another local user or a low-privilege
+  process can no longer read the token. No-op on Windows.
+
 ### Fixed
 - **Config/token loss on a transient read error is prevented.** `config::load()`
   previously turned *any* I/O error (not just "file missing") into an empty
