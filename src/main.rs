@@ -288,6 +288,13 @@ fn cmd_remove(name: String, yes: bool, purge: bool) -> Result<()> {
     if cfg.find(&name).is_none() {
         bail!("no blueprint named '{name}'");
     }
+    // `--purge` deletes `.claude-env-<name>` and `claude-internal/<name>` derived
+    // from the name; re-gate a hand-edited config name so a traversal like
+    // `../../x` can't direct the delete outside the project.
+    if purge {
+        validate_name(&name)
+            .with_context(|| format!("blueprint name in config.toml is invalid: '{name}'"))?;
+    }
 
     // On-disk artifacts for the CURRENT project (the only ones we can locate).
     let project = std::env::current_dir().context("could not determine current directory")?;
@@ -452,6 +459,13 @@ pub(crate) fn run_blueprint(
 ) -> Result<i32> {
     let cfg = config::load()?;
     let bp = cfg.find(name).with_context(|| format!("no blueprint named '{name}'"))?;
+    // config.toml is just a file: a hand-edited name like `../../evil` never
+    // passed validate_name on write, but every read path interpolates the raw
+    // name into `.claude-env-<name>` / `claude-internal/<name>` fs paths. Re-gate
+    // it here (the shared placement sink) so a poisoned name can't escape the
+    // project dir or inject into generated SKILL.md frontmatter.
+    validate_name(&bp.name)
+        .with_context(|| format!("blueprint name in config.toml is invalid: '{}'", bp.name))?;
 
     let project = std::env::current_dir().context("could not determine current directory")?;
     let env = project::env_dir(&project, &bp.name);
@@ -702,7 +716,8 @@ mod tests {
 
     #[test]
     fn invalid_names_rejected() {
-        for n in ["", "bad name", "a/b", "x.y", "a:b", "café", "ｆｕｌｌ"] {
+        for n in ["", "bad name", "a/b", "x.y", "a:b", "café", "ｆｕｌｌ",
+                  "../../evil", "..", "a\\b", "a\nb"] {
             assert!(validate_name(n).is_err(), "{n:?} should be rejected");
         }
     }

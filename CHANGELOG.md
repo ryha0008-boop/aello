@@ -19,6 +19,12 @@
   `aello update` only ships Linux/Windows binaries so macOS updates by rebuilding).
 
 ### Security
+- A hand-edited blueprint name in `config.toml` is now re-validated before it's
+  used to build filesystem paths. `validate_name` only ran on config *writes*;
+  read paths interpolated the stored name straight into `.claude-env-<name>` /
+  `claude-internal/<name>`, so a name like `../../evil` could escape the project
+  dir when placing (or, under `remove --purge`, deleting). `run` and
+  `remove --purge` now re-gate the name at the sink.
 - `aello login` / `aello init` no longer echo the token line to their own
   stdout. The capture loop tees `claude setup-token`'s output so the auth URL
   shows on a headless box, but it now redacts the line carrying the `sk-ant-…`
