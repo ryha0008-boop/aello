@@ -26,19 +26,15 @@ pub fn home_dir() -> Option<PathBuf> {
     directories::BaseDirs::new().map(|b| b.home_dir().to_path_buf())
 }
 
-fn home() -> Option<PathBuf> {
-    home_dir()
-}
-
 /// Expand a leading `~` to the home directory; otherwise pass through. Splits
 /// the remainder on both separators so the result uses native components (no
 /// mixed `C:\Users\H\aello/contextdb`).
 fn expand_home(p: &str) -> PathBuf {
     if p == "~" {
-        return home().unwrap_or_else(|| PathBuf::from(p));
+        return home_dir().unwrap_or_else(|| PathBuf::from(p));
     }
     if let Some(rest) = p.strip_prefix("~/").or_else(|| p.strip_prefix("~\\")) {
-        if let Some(h) = home() {
+        if let Some(h) = home_dir() {
             let mut path = h;
             for comp in rest.split(['/', '\\']).filter(|c| !c.is_empty()) {
                 path.push(comp);

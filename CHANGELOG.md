@@ -42,6 +42,13 @@
   process can no longer read the token. No-op on Windows.
 
 ### Fixed
+- The TUI now restores your terminal (raw mode, alternate screen, cursor) if it
+  panics, instead of leaving the shell unusable, and undoes raw mode if it can't
+  enter the alternate screen. The session-resume list also no longer risks a
+  panic truncating a non-ASCII session id (it now truncates by character), and
+  the in-app docs reader's scroll uses saturating arithmetic. A stale `/sync`
+  skill that can't be removed when a blueprint drops all capabilities now
+  surfaces the error instead of being silently re-committed.
 - `aello edit --rename` is now transactional. It previously renamed the env dir
   first and only then checked whether the `claude-internal/<new>/` mirror
   collided — so a collision (or any fs error) left the env dir already moved but

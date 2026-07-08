@@ -185,8 +185,13 @@ pub fn place(
             .context("could not create skills dir")?;
         std::fs::write(&skill, crate::templates::render_sync_skill(caps, &inst.name))
             .context("could not write sync SKILL.md")?;
-    } else if skill.exists() {
-        let _ = std::fs::remove_file(&skill);
+    } else if let Err(e) = std::fs::remove_file(&skill) {
+        // A stale /sync skill left behind (blueprint dropped all caps) would keep
+        // getting re-mirrored and committed, so a real removal failure must
+        // surface — only a concurrent already-gone is fine to ignore.
+        if e.kind() != std::io::ErrorKind::NotFound {
+            return Err(e).with_context(|| format!("could not remove stale {}", skill.display()));
+        }
     }
 
     // Always seed the /handoff skill — unlike /sync it is universal (every

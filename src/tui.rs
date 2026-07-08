@@ -323,6 +323,16 @@ pub fn run() -> Result<()> {
     // Capture before any update replaces the binary at this path.
     let exe = std::env::current_exe().ok();
 
+    // Restore the terminal on a panic anywhere in the draw/event loop — the
+    // normal path restores via `restore()`, but a panic would otherwise leave
+    // the user in raw mode on the alternate screen with no cursor.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = disable_raw_mode();
+        let _ = execute!(io::stdout(), LeaveAlternateScreen);
+        default_hook(info);
+    }));
+
     loop {
         let mut terminal = setup()?;
         let result = run_app(&mut terminal);
@@ -374,7 +384,12 @@ pub fn run() -> Result<()> {
 fn setup() -> Result<Term> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    // Undo raw mode if entering the alternate screen fails, so we don't leave
+    // the user's terminal in raw mode with no TUI running.
+    if let Err(e) = execute!(stdout, EnterAlternateScreen) {
+        let _ = disable_raw_mode();
+        return Err(e.into());
+    }
     Ok(Terminal::new(CrosstermBackend::new(stdout))?)
 }
 
@@ -723,10 +738,10 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                 KeyCode::Up | KeyCode::Char('k') => *scroll = scroll.saturating_sub(1),
                 KeyCode::PageUp => *scroll = scroll.saturating_sub(10),
                 KeyCode::Down | KeyCode::Char('j') => {
-                    *scroll = (*scroll + 1).min(app.help_scroll_max.get());
+                    *scroll = scroll.saturating_add(1).min(app.help_scroll_max.get());
                 }
                 KeyCode::PageDown | KeyCode::Char(' ') => {
-                    *scroll = (*scroll + 10).min(app.help_scroll_max.get());
+                    *scroll = scroll.saturating_add(10).min(app.help_scroll_max.get());
                 }
                 _ => {}
             },
@@ -1222,7 +1237,8 @@ fn draw_sessions(f: &mut Frame, name: &str, items: &[sessions::Session], sel: us
     ))];
     for (i, s) in items.iter().take(shown).enumerate() {
         let kb = s.size.div_ceil(1024);
-        let label = format!("{:<8}  {}  {:>5} KB", &s.id[..s.id.len().min(8)], sessions::format_utc(s.modified), kb);
+        let short: String = s.id.chars().take(8).collect();
+        let label = format!("{:<8}  {}  {:>5} KB", short, sessions::format_utc(s.modified), kb);
         if i == sel {
             lines.push(Line::from(Span::styled(
                 format!(" › {label}"),
