@@ -19,6 +19,12 @@
   `aello update` only ships Linux/Windows binaries so macOS updates by rebuilding).
 
 ### Security
+- `aello update` now verifies the downloaded binary's **SHA-256** against a
+  `SHA256SUMS` asset published with the release before installing it, so a
+  hijacked release asset or a TLS-intercepted download can't silently replace
+  your binary. Releases without the manifest still update (the check is skipped
+  with a note). The download is also now size-capped (128 MiB) so a malicious
+  endpoint can't stream unbounded data and OOM the process.
 - A hand-edited blueprint name in `config.toml` is now re-validated before it's
   used to build filesystem paths. `validate_name` only ran on config *writes*;
   read paths interpolated the stored name straight into `.claude-env-<name>` /

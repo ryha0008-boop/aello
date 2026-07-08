@@ -53,13 +53,20 @@ pub fn run() -> Result<()> {
     println!("ok");
     println!("Downloading {expected}{}...", if sha.is_empty() { String::new() } else { format!(" ({sha})") });
 
-    let mut reader = ureq::get(url)
+    let reader = ureq::get(url)
         .set("User-Agent", &ua)
         .call()
         .context("download failed")?
         .into_reader();
     let mut buf = Vec::new();
-    std::io::Read::read_to_end(&mut reader, &mut buf).context("failed to read download")?;
+    // Cap the read: a malicious/hijacked endpoint could otherwise stream
+    // unbounded data and OOM the process. 128 MiB is far above any real build.
+    const MAX_BYTES: u64 = 128 * 1024 * 1024;
+    std::io::Read::read_to_end(&mut std::io::Read::take(reader, MAX_BYTES + 1), &mut buf)
+        .context("failed to read download")?;
+    if buf.len() as u64 > MAX_BYTES {
+        anyhow::bail!("download exceeded {MAX_BYTES} bytes — refusing it as not a valid aello build");
+    }
 
     // Guard against a truncated download or an HTML/error page silently becoming
     // the installed binary (a short read isn't an I/O error). The real binaries
@@ -72,11 +79,75 @@ pub fn run() -> Result<()> {
         );
     }
 
+    // Integrity: if the release publishes a SHA256SUMS asset, verify our binary
+    // against it before installing (TLS alone doesn't protect against a hijacked
+    // release asset). Verify-if-present so releases predating SHA256SUMS still
+    // update, just without the extra check.
+    verify_checksum(assets, expected, &buf, &ua)?;
+
     let exe = std::env::current_exe().context("could not find current exe path")?;
     replace_binary(&exe, &buf)?;
 
     println!("Updated. Restart aello to use the new build.");
     Ok(())
+}
+
+/// Verify `buf` against the release's `SHA256SUMS` asset, if it has one. No
+/// SHA256SUMS asset → skip (older releases), but a present-but-mismatched or
+/// present-but-missing-our-file checksum is a hard failure: we must not install
+/// a binary the release's own manifest disagrees with.
+fn verify_checksum(
+    assets: &[serde_json::Value],
+    filename: &str,
+    buf: &[u8],
+    ua: &str,
+) -> Result<()> {
+    let Some(sums_url) = assets
+        .iter()
+        .find(|a| a["name"].as_str() == Some("SHA256SUMS"))
+        .and_then(|a| a["browser_download_url"].as_str())
+    else {
+        println!("(no SHA256SUMS in release — skipping checksum verification)");
+        return Ok(());
+    };
+    let sums = ureq::get(sums_url)
+        .set("User-Agent", ua)
+        .call()
+        .context("failed to fetch SHA256SUMS")?
+        .into_string()
+        .context("failed to read SHA256SUMS")?;
+    let expected = expected_hash(&sums, filename)
+        .with_context(|| format!("{filename} not listed in the release SHA256SUMS"))?;
+    let actual = sha256_hex(buf);
+    if !actual.eq_ignore_ascii_case(expected) {
+        anyhow::bail!(
+            "checksum mismatch for {filename} — refusing to install.\n  expected {expected}\n  got      {actual}"
+        );
+    }
+    println!("checksum ok");
+    Ok(())
+}
+
+/// Look up a file's expected hash in `sha256sum`-format text (`<hash>  <name>`,
+/// or `<hash> *<name>` in binary mode).
+fn expected_hash<'a>(sums: &'a str, filename: &str) -> Option<&'a str> {
+    sums.lines().find_map(|l| {
+        let mut it = l.split_whitespace();
+        let hash = it.next()?;
+        let name = it.next()?.trim_start_matches('*');
+        (name == filename).then_some(hash)
+    })
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(bytes);
+    let mut s = String::with_capacity(64);
+    for b in digest {
+        use std::fmt::Write;
+        let _ = write!(s, "{b:02x}");
+    }
+    s
 }
 
 /// Replace the running binary with `buf`. Windows can't overwrite a running
@@ -125,4 +196,29 @@ fn replace_binary(exe: &std::path::Path, buf: &[u8]) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sha256_matches_known_vector() {
+        // NIST test vector for "abc".
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn parses_sha256sums_text_and_binary_modes() {
+        let sums = "\
+aaaa1111  aello-x86_64-linux
+bbbb2222 *aello-x86_64-windows.exe
+";
+        assert_eq!(expected_hash(sums, "aello-x86_64-linux"), Some("aaaa1111"));
+        assert_eq!(expected_hash(sums, "aello-x86_64-windows.exe"), Some("bbbb2222"));
+        assert_eq!(expected_hash(sums, "aello-x86_64-macos"), None);
+    }
 }

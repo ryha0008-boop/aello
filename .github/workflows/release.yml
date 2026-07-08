@@ -81,6 +81,10 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - name: generate checksums
+        # `aello update` verifies the downloaded binary against this manifest.
+        # Hash only the aello-* binaries (not SHA256SUMS itself).
+        run: (cd dist && sha256sum aello-* > SHA256SUMS && cat SHA256SUMS)
       - name: publish rolling latest release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
