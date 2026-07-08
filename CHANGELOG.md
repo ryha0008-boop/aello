@@ -19,6 +19,11 @@
   `aello update` only ships Linux/Windows binaries so macOS updates by rebuilding).
 
 ### Security
+- `aello login` / `aello init` no longer echo the token line to their own
+  stdout. The capture loop tees `claude setup-token`'s output so the auth URL
+  shows on a headless box, but it now redacts the line carrying the `sk-ant-…`
+  token — previously running login under any stdout capture (`| tee`, a CI job
+  log, `script`, tmux) persisted the long-lived token in cleartext in that log.
 - On Unix, `config.toml` (which holds the plaintext, non-rotating OAuth token)
   and its directory are now written owner-only (`0600`/`0700`) instead of the
   default world-readable `0644`, so another local user or a low-privilege
