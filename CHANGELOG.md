@@ -42,6 +42,11 @@
   Names like `café` or full-width characters previously slipped past
   `validate_name` yet made fragile, cross-platform-hostile `.claude-env-<name>/`
   directory names; the error message already promised "letters, digits".
+- Blueprint names that are **Windows reserved device names** (`CON`, `PRN`,
+  `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9`, any case) are now rejected at
+  creation. The `github` cap creates a bare `claude-internal/<name>/` component,
+  which Windows refuses for these names — previously the error surfaced only
+  late, as an opaque OS failure during placement.
 - `aello init` now aborts on end-of-input instead of silently accepting every
   default, so a non-interactive or closed stdin can no longer auto-create a
   blueprint you never confirmed. `--model` also rejects a bare `claude-`.

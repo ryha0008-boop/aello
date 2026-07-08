@@ -214,7 +214,25 @@ pub(crate) fn validate_name(name: &str) -> Result<()> {
     if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
         bail!("name '{name}' must contain only ASCII letters, digits, '-' or '_'");
     }
+    // The github cap creates a BARE `claude-internal/<name>/` component, so a
+    // Windows reserved device name (CON, NUL, COM1…) would make create_dir_all
+    // fail with an opaque OS error at the mirror step. Reject them up front,
+    // case-insensitively (Windows matches these regardless of case).
+    if is_reserved_device_name(name) {
+        bail!("name '{name}' is a reserved device name on Windows — pick another");
+    }
     Ok(())
+}
+
+/// Windows reserved device names (case-insensitive): CON, PRN, AUX, NUL,
+/// COM1–COM9, LPT1–LPT9. Bare filesystem components with these names are
+/// refused by Windows even on other platforms' shared repos.
+fn is_reserved_device_name(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ((upper.starts_with("COM") || upper.starts_with("LPT"))
+            && matches!(upper.as_bytes().get(3), Some(b'1'..=b'9'))
+            && upper.len() == 4)
 }
 
 /// Short aliases Claude Code accepts in settings.json "model".
@@ -671,6 +689,17 @@ mod tests {
     fn invalid_names_rejected() {
         for n in ["", "bad name", "a/b", "x.y", "a:b", "café", "ｆｕｌｌ"] {
             assert!(validate_name(n).is_err(), "{n:?} should be rejected");
+        }
+    }
+
+    #[test]
+    fn reserved_device_names_rejected() {
+        for n in ["con", "CON", "nul", "Nul", "PRN", "aux", "com1", "COM9", "lpt1", "LPT9"] {
+            assert!(validate_name(n).is_err(), "{n:?} should be rejected (reserved)");
+        }
+        // Near-misses that are NOT reserved must still pass.
+        for n in ["con1", "com", "com0", "com10", "lpt", "console", "nul-agent"] {
+            assert!(validate_name(n).is_ok(), "{n:?} should be valid");
         }
     }
 
