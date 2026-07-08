@@ -71,7 +71,7 @@ Also universal (`templates::render_twosentences_skill`), seeded **unconditionall
 Push to `main` → GitHub Actions:
 1. **bump** job increments the patch in `Cargo.toml` (+0.0.1), commits `release: vX.Y.Z [skip ci]`, pushes via `GITHUB_TOKEN` (does not re-trigger CI).
 2. **build** jobs (ref: `main`) build `x86_64-unknown-linux-gnu` → `aello-x86_64-linux` and `x86_64-pc-windows-msvc` → `aello-x86_64-windows.exe`.
-3. **publish** uploads both to the single permanent rolling `latest` release with `gh release upload --clobber`. Never delete+recreate the release (a draft state breaks `aello update` with a 404).
+3. **publish** generates `SHA256SUMS` (`sha256sum aello-*`) and uploads all three assets — both binaries + `SHA256SUMS` — to the single permanent rolling `latest` release with `gh release upload --clobber`. `aello update` verifies the downloaded binary against `SHA256SUMS` before installing (verify-if-present, so releases predating the manifest still update), so keep publishing it. Never delete+recreate the release (a draft state breaks `aello update` with a 404).
 
 No version tags (commits ≠ tags). After CI, `git pull --rebase` to sync the bumped `Cargo.toml` before the next local `cargo install`. Minor/major versions are bumped manually in `Cargo.toml`. If a plain push doesn't trigger the workflow, `gh workflow run release.yml --ref main` is the fallback.
 
