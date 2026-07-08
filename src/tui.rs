@@ -454,7 +454,7 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                 KeyCode::Enter => {
                     let name = buf.trim().to_string();
                     match crate::validate_name(&name) {
-                        Ok(()) if config::load()?.blueprints.iter().any(|b| b.name == name) => {
+                        Ok(()) if config::load()?.find_name_conflict(&name).is_some() => {
                             app.status = format!("'{name}' ALREADY EXISTS");
                         }
                         Ok(()) => app.mode = Mode::AddModel { name, sel: 0, edit: false },

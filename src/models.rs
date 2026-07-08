@@ -72,4 +72,34 @@ impl Config {
     pub fn find(&self, name: &str) -> Option<&Blueprint> {
         self.blueprints.iter().find(|b| b.name == name)
     }
+
+    /// Case-insensitive name lookup, returning the conflicting blueprint's
+    /// stored name. Env dir names (`.claude-env-<name>`) collide
+    /// case-insensitively on Windows/macOS default filesystems, so two
+    /// blueprints whose names differ only in case would map to a single on-disk
+    /// env dir and clobber each other's state.
+    pub fn find_name_conflict(&self, name: &str) -> Option<&str> {
+        self.blueprints
+            .iter()
+            .find(|b| b.name.eq_ignore_ascii_case(name))
+            .map(|b| b.name.as_str())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bp(name: &str) -> Blueprint {
+        Blueprint { name: name.into(), model: "opus".into(), claude_md: None, caps: Capabilities::default() }
+    }
+
+    #[test]
+    fn name_conflict_is_case_insensitive() {
+        let cfg = Config { blueprints: vec![bp("Coder")], ..Default::default() };
+        assert_eq!(cfg.find_name_conflict("coder"), Some("Coder"));
+        assert_eq!(cfg.find_name_conflict("CODER"), Some("Coder"));
+        assert_eq!(cfg.find_name_conflict("Coder"), Some("Coder"));
+        assert_eq!(cfg.find_name_conflict("other"), None);
+    }
 }

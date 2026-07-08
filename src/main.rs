@@ -268,8 +268,14 @@ fn cmd_add(
         templates::resolve(cm)?;
     }
     let mut cfg = config::load()?;
-    if cfg.find(&name).is_some() {
-        bail!("blueprint '{name}' already exists");
+    if let Some(existing) = cfg.find_name_conflict(&name) {
+        if existing == name {
+            bail!("blueprint '{name}' already exists");
+        }
+        bail!(
+            "blueprint name '{name}' collides with existing '{existing}' — names are \
+             case-insensitive on Windows/macOS filesystems and would share one env dir"
+        );
     }
     cfg.blueprints.push(Blueprint { name: name.clone(), model, claude_md, caps });
     config::save(&cfg)?;
@@ -355,8 +361,17 @@ fn cmd_edit(args: EditArgs) -> Result<()> {
         if *new == args.name {
             bail!("--rename '{new}' is already the blueprint's name");
         }
-        if cfg.blueprints.iter().any(|b| b.name == *new) {
-            bail!("blueprint '{new}' already exists");
+        // Reject a case-insensitive collision with a *different* blueprint (they
+        // would share one env dir on Windows/macOS). A pure case-flip of this
+        // blueprint's own name is left to rename_placed, which handles the
+        // on-disk case rename.
+        if let Some(existing) = cfg.find_name_conflict(new) {
+            if !existing.eq_ignore_ascii_case(&args.name) {
+                bail!(
+                    "blueprint name '{new}' collides with existing '{existing}' — names are \
+                     case-insensitive on Windows/macOS filesystems"
+                );
+            }
         }
     }
 
