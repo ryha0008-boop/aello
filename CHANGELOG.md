@@ -49,6 +49,10 @@
   the in-app docs reader's scroll uses saturating arithmetic. A stale `/sync`
   skill that can't be removed when a blueprint drops all capabilities now
   surfaces the error instead of being silently re-committed.
+- The `github` cap no longer appends a near-duplicate `.gitignore` line when a
+  `.claude-env-*/` (trailing-slash) entry already exists. And aello no longer
+  alphabetically reorders the keys in Claude-owned JSON (`.claude.json`,
+  `settings.json`) when it reads and rewrites them, keeping git diffs clean.
 - `aello edit --rename` is now transactional. It previously renamed the env dir
   first and only then checked whether the `claude-internal/<new>/` mirror
   collided — so a collision (or any fs error) left the env dir already moved but

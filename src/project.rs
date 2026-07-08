@@ -404,7 +404,10 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
 fn ensure_gitignore_entry(project: &Path, entry: &str) -> Result<()> {
     let path = project.join(".gitignore");
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
-    if existing.lines().any(|l| l.trim() == entry) {
+    // Treat a trailing-slash variant (`.claude-env-*/`) as already present so we
+    // don't append a near-duplicate line.
+    let norm = |l: &str| l.trim().trim_end_matches('/').to_string();
+    if existing.lines().any(|l| norm(l) == norm(entry)) {
         return Ok(());
     }
     let mut out = existing;
@@ -797,6 +800,16 @@ mod tests {
         assert!(src_env.exists());
         assert!(!env_dir(proj.path(), "dest").exists());
         assert!(proj.path().join("claude-internal/src").exists());
+    }
+
+    #[test]
+    fn gitignore_entry_dedups_trailing_slash_variant() {
+        let proj = tempfile::tempdir().unwrap();
+        std::fs::write(proj.path().join(".gitignore"), "node_modules\n.claude-env-*/\n").unwrap();
+        ensure_gitignore_entry(proj.path(), ".claude-env-*").unwrap();
+        let after = std::fs::read_to_string(proj.path().join(".gitignore")).unwrap();
+        // The `.claude-env-*/` line already covers it — no near-duplicate added.
+        assert_eq!(after.matches(".claude-env-*").count(), 1);
     }
 
     #[test]
