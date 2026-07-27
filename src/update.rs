@@ -28,6 +28,8 @@ pub fn run() -> Result<()> {
     let expected = match (std::env::consts::OS, std::env::consts::ARCH) {
         ("windows", "x86_64") => "aello-x86_64-windows.exe",
         ("linux", "x86_64") => "aello-x86_64-linux",
+        ("macos", "aarch64") => "aello-aarch64-macos",
+        ("macos", "x86_64") => "aello-x86_64-macos",
         (os, arch) => {
             return Err(anyhow::anyhow!(
                 "no pre-built binary for {arch}-{os} — build from source: cargo install --git https://github.com/ryha0008-boop/aello"

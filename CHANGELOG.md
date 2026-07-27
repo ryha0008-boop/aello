@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+- **Prebuilt macOS binaries** — `aello-aarch64-macos` (Apple Silicon) and
+  `aello-x86_64-macos` (Intel) now ship with every release, so macOS installs
+  with the same one-liner as Linux and `aello update` works there. The binaries
+  are unsigned; the installer strips the quarantine attribute for you, and the
+  README documents the manual `xattr -d com.apple.quarantine` step.
+
 ### Changed
 - Releases are now **versioned**. Every build publishes an immutable `vX.Y.Z`
   release (binaries + `SHA256SUMS`) alongside the existing rolling `latest` tag,

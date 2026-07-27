@@ -14,17 +14,19 @@ Isolated Claude Code environments — like Python venvs, but for AI agents.
 - **Capability-driven** — pick what a blueprint maintains (`/sync` docs, GitHub, CHANGELOG, docs/, README); aello scaffolds the files and generates a `/sync` skill tailored to exactly that.
 - **Attributable** — commits made through a blueprint are authored as `<blueprint> <blueprint@aello.local>`, so multi-agent work is traceable.
 
-Cross-platform: Linux and Windows (x86_64). macOS: build from source.
+Cross-platform: Linux (x86_64), macOS (Apple Silicon + Intel), Windows (x86_64).
 
 ## Install
 
-### Linux (x86_64) — one-liner
+### Linux / macOS — one-liner
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/ryha0008-boop/aello/main/install.sh | sh
 ```
 
-Downloads the latest release into `~/.local/bin` (override with `AELLO_BIN_DIR`), makes it executable, and prints a PATH hint if that dir isn't on your `$PATH`. Unsupported platforms (macOS, arm64) exit with a build-from-source pointer.
+Downloads the latest release into `~/.local/bin` (override with `AELLO_BIN_DIR`), makes it executable, clears the macOS quarantine flag, and prints a PATH hint if that dir isn't on your `$PATH`. Platforms without a prebuilt binary (e.g. arm64 Linux) exit with a build-from-source pointer.
+
+Every release also publishes an immutable `vX.Y.Z` tag if you'd rather pin a version — swap `latest` for `v0.1.52` in any download URL below. `aello update` always moves you to the newest release.
 
 ### Linux (x86_64) — manual
 
@@ -42,24 +44,35 @@ Install into a **user-writable** dir (`~/.local/bin`), not root-owned `/usr/loca
 
 Download [`aello-x86_64-windows.exe`](https://github.com/ryha0008-boop/aello/releases/download/latest/aello-x86_64-windows.exe) from the latest release, rename it to `aello.exe`, and put it somewhere on your `PATH` (e.g. `C:\Users\<you>\bin\`).
 
-### macOS (build from source)
+The `.exe` is **unsigned** (a code-signing certificate is a paid yearly subscription), so SmartScreen may show *"Windows protected your PC"* on first run — **More info → Run anyway**. Verify the download against the release's `SHA256SUMS` if you'd rather check it yourself.
 
-No prebuilt macOS binary ships yet — build it from source. You need a [Rust toolchain](https://rustup.rs) (`rustc`/`cargo`); everything else is pulled in by `cargo`.
+### macOS — manual
 
 ```sh
-cargo install --git https://github.com/ryha0008-boop/aello   # installs to ~/.cargo/bin/aello
+mkdir -p ~/.local/bin
+# Apple Silicon; use aello-x86_64-macos on Intel Macs
+curl -L https://github.com/ryha0008-boop/aello/releases/download/latest/aello-aarch64-macos -o ~/.local/bin/aello
+chmod +x ~/.local/bin/aello
+xattr -d com.apple.quarantine ~/.local/bin/aello   # see below
 aello --version
 ```
 
-`~/.cargo/bin` is user-writable, so `aello update`'s in-place binary replacement works. Note that `aello update` only fetches the prebuilt Linux/Windows binaries — on macOS, re-run the `cargo install --git` line above to update. As on every platform, `claude` (Claude Code) must be on your `PATH` for `aello run` to launch it.
+**Gatekeeper:** the macOS binaries are **unsigned** (code signing needs a paid Apple Developer account), so a browser- or `curl`-downloaded copy is quarantined and macOS refuses to run it — *"aello cannot be opened because the developer cannot be verified."* The `xattr -d com.apple.quarantine` line above clears it; the one-liner installer does it for you. Prefer not to trust an unsigned binary? Build from source — the checksums for every published binary are in the release's `SHA256SUMS`.
 
 ### From source (any platform)
 
+Needs a [Rust toolchain](https://rustup.rs); everything else `cargo` pulls in.
+
 ```sh
+cargo install --git https://github.com/ryha0008-boop/aello   # installs to ~/.cargo/bin/aello
+
+# or, to hack on it:
 git clone https://github.com/ryha0008-boop/aello
 cd aello
-cargo install --path .   # installs to ~/.cargo/bin/aello
+cargo install --path .
 ```
+
+`~/.cargo/bin` is user-writable, so `aello update`'s in-place binary replacement works from a source install too.
 
 ## Prerequisites
 
