@@ -3,6 +3,11 @@
 ## [Unreleased]
 
 ### Changed
+- Releases are now **versioned**. Every build publishes an immutable `vX.Y.Z`
+  release (binaries + `SHA256SUMS`) alongside the existing rolling `latest` tag,
+  so you can pin or roll back to a specific version and package managers have a
+  stable URL to point at. `install.sh` and already-installed binaries keep using
+  the rolling tag exactly as before — nothing to change on your side.
 - `aello remove <name>` now **prompts for confirmation** before deleting a
   blueprint (`--yes` skips the prompt). A new `--purge` flag also deletes the
   placed `.claude-env-<name>/` env dir and its `claude-internal/<name>/` mirror

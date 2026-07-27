@@ -1,10 +1,18 @@
 name: release
 
 # Every push to main auto-bumps the patch version (+0.0.1), commits the bumped
-# Cargo.toml back, then builds the binaries from it and replaces the rolling
-# `latest` release. Bump minor/major by hand in Cargo.toml for big updates —
-# patch is automatic. The bump commit is pushed with GITHUB_TOKEN, which does
-# NOT re-trigger workflows, so there is no infinite loop.
+# Cargo.toml back, then builds the binaries from it and publishes TWO releases:
+#
+#   1. an immutable `vX.Y.Z` release — marked as GitHub's "Latest release".
+#      Package managers (Homebrew/Scoop/winget) need a versioned URL whose
+#      assets never change, and users need to be able to pin or roll back.
+#   2. the rolling `latest` tag — same assets, clobbered every build.
+#      `install.sh` and every already-installed binary hard-code that download
+#      URL, so it has to keep working forever.
+#
+# Bump minor/major by hand in Cargo.toml for big updates — patch is automatic.
+# The bump commit is pushed with GITHUB_TOKEN, which does NOT re-trigger
+# workflows, so there is no infinite loop.
 on:
   push:
     branches: [main]
@@ -19,6 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.bump.outputs.version }}
+      sha: ${{ steps.bump.outputs.sha }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -37,6 +46,8 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git commit -am "release: v$new [skip ci]"
           git push origin main
+          # Tag the exact bump commit, not "whatever main points at later".
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
   build:
     name: build ${{ matrix.asset }}
@@ -52,10 +63,10 @@ jobs:
             target: x86_64-pc-windows-msvc
             asset: aello-x86_64-windows.exe
     steps:
-      # Check out main HEAD (the bump commit) so the binary reports the new version.
+      # Check out the bump commit so the binary reports the new version.
       - uses: actions/checkout@v5
         with:
-          ref: main
+          ref: ${{ needs.bump.outputs.sha }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -73,7 +84,7 @@ jobs:
           path: ${{ matrix.asset }}
 
   release:
-    name: publish latest
+    name: publish v${{ needs.bump.outputs.version }}
     needs: [bump, build]
     runs-on: ubuntu-latest
     steps:
@@ -85,19 +96,35 @@ jobs:
         # `aello update` verifies the downloaded binary against this manifest.
         # Hash only the aello-* binaries (not SHA256SUMS itself).
         run: (cd dist && sha256sum aello-* > SHA256SUMS && cat SHA256SUMS)
-      - name: publish rolling latest release
+      - name: publish releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           VERSION: ${{ needs.bump.outputs.version }}
+          SHA: ${{ needs.bump.outputs.sha }}
         run: |
-          notes="aello v$VERSION — build ${{ github.sha }}"
-          # Keep ONE permanent published release tagged `latest`; never delete it
-          # (delete+recreate intermittently produced a draft → 404 on update).
-          # Just clobber its assets and refresh title/notes each build.
+          # `aello update` reads the build commit from the last whitespace token
+          # of the release body — keep the sha last.
+          notes="$(printf 'aello v%s\n\nInstall: https://github.com/%s#install\nChangelog: https://github.com/%s/blob/main/CHANGELOG.md\n\nbuild %s' \
+            "$VERSION" "$GH_REPO" "$GH_REPO" "$SHA")"
+
+          # 1. Immutable versioned release, tagged at the bump commit, and marked
+          #    as GitHub's "Latest release" so /releases/latest resolves to a
+          #    version a user can pin. Re-runnable: clobber if it already exists.
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            gh release upload "v$VERSION" dist/* --clobber
+            gh release edit "v$VERSION" --title "v$VERSION" --notes "$notes" --draft=false --latest
+          else
+            gh release create "v$VERSION" dist/* --title "v$VERSION" --notes "$notes" --target "$SHA" --latest
+          fi
+
+          # 2. Rolling `latest` tag. Keep ONE permanent published release here and
+          #    never delete it (delete+recreate intermittently produced a draft →
+          #    404 on update); just clobber its assets and refresh title/notes.
+          #    Explicitly NOT flagged --latest — the versioned release owns that.
           if gh release view latest >/dev/null 2>&1; then
             gh release upload latest dist/* --clobber
-            gh release edit latest --title "v$VERSION" --notes "$notes" --draft=false --latest
+            gh release edit latest --title "v$VERSION (rolling)" --notes "$notes" --draft=false --latest=false
           else
-            gh release create latest dist/* --title "v$VERSION" --notes "$notes" --latest
+            gh release create latest dist/* --title "v$VERSION (rolling)" --notes "$notes" --latest=false
           fi

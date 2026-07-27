@@ -1,8 +1,9 @@
-//! Self-update: pull the latest CI build from the `latest` GitHub release.
+//! Self-update: pull the newest CI build from the GitHub releases API.
 //!
-//! aello uses a rolling release — every push to `main` rebuilds the binaries
-//! and replaces a single release tagged `latest`. There are no version tags,
-//! so `aello update` always fetches `latest` and replaces the running binary.
+//! Every push to `main` publishes an immutable `vX.Y.Z` release (flagged as
+//! GitHub's "Latest release") plus a rolling `latest` tag carrying the same
+//! assets. `/releases/latest` therefore resolves to the versioned one; the
+//! rolling tag exists for `install.sh`'s hard-coded download URL.
 
 use anyhow::{Context, Result};
 
@@ -42,8 +43,8 @@ pub fn run() -> Result<()> {
         .with_context(|| format!("no {expected} in latest release — download from: {RELEASES_PAGE}"))?;
 
     let url = asset["browser_download_url"].as_str().context("missing download URL")?;
-    // CI writes "Rolling build from <sha>" into the release notes; pull the
-    // commit from there (target_commitish is just the branch name).
+    // CI ends the release notes with "build <sha>"; pull the commit from there
+    // (target_commitish is just the branch name).
     let sha = release["body"]
         .as_str()
         .and_then(|b| b.split_whitespace().last())
