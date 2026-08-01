@@ -1,0 +1,290 @@
+/*
+ * Tokens transcribed from the captured GitHub design system
+ * (agent_run_results/design-systems/github1/DESIGN-SYSTEM.md).
+ * Values are reproduced as extracted — do not hand-tune them here.
+ */
+
+:root {
+  /* Canvas / surfaces */
+  --color-canvas-default: #0d1117;
+  --color-canvas-subtle: #151a22;
+  --color-canvas-inset: #090d0a;
+  --color-canvas-overlay: rgba(13, 17, 23, 0.75);
+  --color-canvas-glass-subtle: rgba(255, 255, 255, 0.06);
+  --color-canvas-glass-medium: rgba(255, 255, 255, 0.12);
+  --color-canvas-dark-glass: rgba(31, 35, 40, 0.4);
+  --color-canvas-green-subtle: #0d3024;
+  --color-canvas-green-dark: #0f1511;
+
+  /* Foreground */
+  --color-fg-default: #ffffff;
+  --color-fg-muted: #a4aea6;
+  --color-fg-subtle: #58635b;
+  --color-fg-on-dark-85: rgba(255, 255, 255, 0.85);
+  --color-fg-on-dark-75: rgba(255, 255, 255, 0.75);
+  --color-fg-on-dark-60: rgba(255, 255, 255, 0.6);
+
+  /* Accent / brand */
+  --color-accent-emphasis: #08872b;
+  --color-accent-emphasis-hover: #0a9631;
+  --color-accent-bright: #5fed83;
+  --color-accent-fg: #8dd6ff;
+
+  /* Decorative */
+  --color-decorative-indigo: #8c93fb;
+  --color-decorative-purple-soft: #a7a2ff;
+  --color-decorative-purple-mid: #5049c2;
+
+  /* Borders */
+  --color-border-default: #191f1b;
+  --color-border-subtle: rgba(255, 255, 255, 0.1);
+  --color-border-medium: rgba(255, 255, 255, 0.3);
+  --color-border-strong: rgba(255, 255, 255, 0.6);
+  --color-border-full: #ffffff;
+  --color-border-neutral: #484f58;
+  --borderWidth-thin: 0.0625rem;
+  --borderWidth-thick: 0.125rem;
+
+  /* Type stacks */
+  --brand-fontStack-sansSerif: var(--font-mona), -apple-system, BlinkMacSystemFont,
+    'Segoe UI', Helvetica, Arial, sans-serif;
+  --brand-fontStack-sansSerifAlt: var(--font-hubot), var(--font-mona), -apple-system,
+    BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  --brand-fontStack-monospace: 'Mona Sans Mono', ui-monospace, SFMono-Regular, 'SF Mono',
+    Menlo, Consolas, 'Liberation Mono', monospace;
+
+  /* Brand type scale — size / line-height / weight / letter-spacing */
+  --brand-text-size-1000: 4rem;
+  --brand-text-lineHeight-1000: 1.08;
+  --brand-heading-weight-1000: 425;
+  --brand-text-letterSpacing-1000: -0.035em;
+  --brand-text-size-900: 3.5rem;
+  --brand-text-lineHeight-900: 1.1;
+  --brand-heading-weight-900: 440;
+  --brand-text-size-700: 2.5rem;
+  --brand-text-lineHeight-700: 1.2;
+  --brand-heading-weight-700: 460;
+  --brand-text-size-500: 1.75rem;
+  --brand-text-lineHeight-500: 1.35;
+  --brand-heading-weight-500: 480;
+  --brand-text-size-400: 1.375rem;
+  --brand-text-lineHeight-400: 1.4;
+  --brand-heading-weight-400: 480;
+  --brand-text-size-350: 1.25rem;
+  --brand-text-size-300: 1.125rem;
+  --brand-text-size-200: 1rem;
+  --brand-text-size-100: 0.875rem;
+  --text-caption-size: 0.75rem;
+  --text-code-block-size: 0.8125rem;
+
+  /* Spacing — 4px base */
+  --base-size-2: 0.125rem;
+  --base-size-4: 0.25rem;
+  --base-size-6: 0.375rem;
+  --base-size-8: 0.5rem;
+  --base-size-12: 0.75rem;
+  --base-size-16: 1rem;
+  --base-size-20: 1.25rem;
+  --base-size-24: 1.5rem;
+  --base-size-28: 1.75rem;
+  --base-size-32: 2rem;
+  --base-size-40: 2.5rem;
+  --base-size-44: 2.75rem;
+  --base-size-48: 3rem;
+  --base-size-56: 3.5rem;
+  --base-size-64: 4rem;
+  --base-size-80: 5rem;
+  --base-size-96: 6rem;
+  --base-size-128: 8rem;
+
+  /* Radii */
+  --borderRadius-small: 0.1875rem;
+  --borderRadius-medium: 0.375rem;
+  --borderRadius-large: 0.75rem;
+  --borderRadius-full: 624.938rem;
+  --brand-borderRadius-medium: var(--base-size-8);
+  --brand-borderRadius-large: var(--base-size-16);
+  --brand-borderRadius-xlarge: var(--base-size-24);
+
+  /* Layout */
+  --brand-Section-container-maxWidth: 80rem;
+  --brand-Grid-spacing-column-gap: var(--base-size-48);
+  --brand-Section-padding-condensed: var(--base-size-48);
+  --brand-Section-padding-normal: var(--base-size-96);
+  --brand-Hero-regular-padding: var(--base-size-128);
+
+  /* Motion */
+  --base-duration-100: 0.1s;
+  --base-duration-200: 0.2s;
+  --brand-animation-duration-fast: 0.3s;
+  --brand-animation-duration-default: 0.6s;
+  --brand-Card-animation-duration: 0.4s;
+  --brand-control-animation-duration: 80ms;
+  --brand-animation-easing-default: cubic-bezier(0.16, 1, 0.3, 1);
+  --brand-animation-easing-glide: cubic-bezier(0.33, 1, 0.68, 1);
+  --brand-Card-animation-easing: cubic-bezier(0.01, 0.73, 0.08, 0.93);
+
+  /* Elevation */
+  --brand-River-visual-shadow: 0px 100px 80px #00000004, 0px 41.7776px 33.4221px #00000006,
+    0px 22.3363px 17.869px #00000007, 0px 12.5216px 10.0172px #00000009,
+    0px 6.6501px 5.32008px #0000000b, 0px 2.76726px 2.21381px #00000012;
+
+  /* Z-index */
+  --zIndex-sticky: 100;
+
+  /* Per-blueprint identity hues, drawn from the system's accent + decorative sets */
+  --hue-coder: var(--color-accent-bright);
+  --hue-docs: var(--color-accent-fg);
+  --hue-ops: var(--color-decorative-indigo);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+  /* Nav height + breathing room, so anchored sections don't sit under it */
+  scroll-padding-top: var(--base-size-96);
+}
+
+body {
+  margin: 0;
+  background: var(--color-canvas-default);
+  color: var(--color-fg-default);
+  font-family: var(--brand-fontStack-sansSerif);
+  font-size: var(--brand-text-size-200);
+  line-height: 1.5;
+  letter-spacing: 0.24px;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+p,
+figure,
+ul {
+  margin: 0;
+}
+
+a {
+  color: var(--color-accent-fg);
+  text-decoration: none;
+}
+
+:focus-visible {
+  outline: var(--borderWidth-thick) solid var(--color-accent-fg);
+  outline-offset: 2px;
+}
+
+code,
+pre {
+  font-family: var(--brand-fontStack-monospace);
+}
+
+/* ---- Shared layout primitives ---- */
+
+.container {
+  width: 100%;
+  max-width: var(--brand-Section-container-maxWidth);
+  margin-inline: auto;
+  padding-inline: var(--base-size-24);
+}
+
+.section {
+  padding-block: var(--brand-Section-padding-normal);
+  border-top: var(--borderWidth-thin) solid var(--color-border-default);
+}
+
+.eyebrow {
+  font-family: var(--brand-fontStack-monospace);
+  font-size: var(--brand-text-size-100);
+  line-height: 1.5;
+  font-weight: 480;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-fg-muted);
+}
+
+.sectionHeading {
+  font-family: var(--brand-fontStack-sansSerifAlt);
+  font-size: var(--brand-text-size-700);
+  line-height: var(--brand-text-lineHeight-700);
+  font-weight: var(--brand-heading-weight-700);
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+
+.sectionLead {
+  max-width: 46ch;
+  margin-top: var(--base-size-16);
+  font-size: var(--brand-text-size-350);
+  line-height: 1.5;
+  color: var(--color-fg-muted);
+  text-wrap: pretty;
+}
+
+/* ---- Scroll reveal ---- */
+
+/*
+ * Gated on `scripting: enabled` so the page still renders when JavaScript is
+ * off — nothing would ever set data-visible, and the content would stay hidden.
+ * A browser that doesn't understand the query simply shows the content unanimated.
+ *
+ * Don't replace this with an inline script that marks <html> with a class: the
+ * script mutates the element before React hydrates, which is a hydration mismatch
+ * on the <html> className. That was tried first, and reverted.
+ */
+@media (scripting: enabled) {
+  .reveal {
+    opacity: 0;
+    transform: translateY(0.9375rem);
+    transition:
+      opacity var(--brand-animation-duration-default) var(--brand-animation-easing-default),
+      transform var(--brand-animation-duration-default) var(--brand-animation-easing-default);
+    transition-delay: var(--reveal-delay, 0ms);
+  }
+
+  .reveal[data-visible='true'] {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  /* Same specificity as the rule above, but later in the file, so it wins. */
+  .reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (max-width: 48rem) {
+  .section {
+    padding-block: var(--brand-Section-padding-condensed);
+  }
+
+  .sectionHeading {
+    font-size: var(--brand-text-size-500);
+  }
+
+  .sectionLead {
+    font-size: var(--brand-text-size-300);
+  }
+}

@@ -1,0 +1,57 @@
+.list {
+  display: grid;
+  gap: var(--base-size-32);
+  margin: var(--base-size-48) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.step {
+  display: flex;
+  gap: var(--base-size-24);
+  padding-top: var(--base-size-24);
+  border-top: var(--borderWidth-thin) solid var(--color-border-default);
+}
+
+.index {
+  flex: none;
+  font-family: var(--brand-fontStack-monospace);
+  font-size: var(--brand-text-size-100);
+  color: var(--color-accent-bright);
+}
+
+.body {
+  min-width: 0;
+}
+
+.command {
+  display: inline-block;
+  padding: var(--base-size-4) var(--base-size-12);
+  font-size: var(--text-code-block-size);
+  color: var(--color-fg-on-dark-85);
+  background: var(--color-canvas-inset);
+  border: var(--borderWidth-thin) solid var(--color-border-subtle);
+  border-radius: var(--borderRadius-medium);
+}
+
+.title {
+  margin-top: var(--base-size-16);
+  font-family: var(--brand-fontStack-sansSerifAlt);
+  font-size: var(--brand-text-size-400);
+  line-height: var(--brand-text-lineHeight-400);
+  font-weight: var(--brand-heading-weight-400);
+}
+
+.text {
+  max-width: 52ch;
+  margin-top: var(--base-size-8);
+  color: var(--color-fg-muted);
+  text-wrap: pretty;
+}
+
+@media (min-width: 63.25rem) {
+  .list {
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--brand-Grid-spacing-column-gap);
+  }
+}

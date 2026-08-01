@@ -77,6 +77,7 @@ const CAP_ROWS: &[(&str, &str)] = &[
     ("changelog", "keep CHANGELOG.md current"),
     ("docs", "keep docs/ current"),
     ("readme", "keep README.md current"),
+    ("voice", "speak each response's TL;DR aloud"),
 ];
 
 fn cap_toggle(caps: &mut Capabilities, i: usize) {
@@ -86,6 +87,7 @@ fn cap_toggle(caps: &mut Capabilities, i: usize) {
         2 => caps.changelog = !caps.changelog,
         3 => caps.docs = !caps.docs,
         4 => caps.readme = !caps.readme,
+        5 => caps.voice = !caps.voice,
         _ => {}
     }
 }
@@ -97,6 +99,7 @@ fn cap_enabled(caps: &Capabilities, i: usize) -> bool {
         2 => caps.changelog,
         3 => caps.docs,
         4 => caps.readme,
+        5 => caps.voice,
         _ => false,
     }
 }
@@ -116,15 +119,41 @@ fn persona_index(claude_md: Option<&str>) -> usize {
     }
 }
 
+/// Resolve an edit-picker value: on edit, keep the blueprint's original value
+/// when the user never moved the picker (the curated picker can't represent a
+/// full `claude-*` id / `default` / a custom persona path, so writing the
+/// highlighted choice would silently downgrade it); otherwise use what they
+/// picked. On add (`edit == false`), always use the picked value.
+fn resolved_edit<T: Clone>(edit: bool, touched: bool, orig: &T, picked: T) -> T {
+    if edit && !touched {
+        orig.clone()
+    } else {
+        picked
+    }
+}
+
 enum Mode {
     Normal,
     AddName { buf: String },
     /// `edit` true means we're editing an existing blueprint, not adding one:
     /// the name step is skipped and each step is pre-seeded from the original,
     /// and the final step updates in place instead of pushing a new blueprint.
-    AddModel { name: String, sel: usize, edit: bool },
-    /// Pick the global persona (none / built-in template).
-    AddPersona { name: String, model: String, sel: usize, edit: bool },
+    /// `orig_model` is the blueprint's stored model (may be a full `claude-*`
+    /// id / `default` that the curated picker can't represent); `model_touched`
+    /// records whether the user actually moved the picker. On edit, if they
+    /// didn't, `orig_model` is preserved verbatim instead of being downgraded to
+    /// the highlighted curated alias.
+    AddModel { name: String, sel: usize, edit: bool, orig_model: String, model_touched: bool },
+    /// Pick the global persona (none / built-in template). `orig_persona` +
+    /// `persona_touched` preserve a custom persona path on edit the same way.
+    AddPersona {
+        name: String,
+        model: String,
+        sel: usize,
+        edit: bool,
+        orig_persona: Option<String>,
+        persona_touched: bool,
+    },
     /// Toggle the capabilities, then create/save. `persona` is the chosen template.
     AddCaps { name: String, model: String, persona: Option<String>, sel: usize, caps: Capabilities, edit: bool },
     ConfirmDelete,
@@ -297,6 +326,16 @@ pub fn run() -> Result<()> {
     // Capture before any update replaces the binary at this path.
     let exe = std::env::current_exe().ok();
 
+    // Restore the terminal on a panic anywhere in the draw/event loop — the
+    // normal path restores via `restore()`, but a panic would otherwise leave
+    // the user in raw mode on the alternate screen with no cursor.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = disable_raw_mode();
+        let _ = execute!(io::stdout(), LeaveAlternateScreen);
+        default_hook(info);
+    }));
+
     loop {
         let mut terminal = setup()?;
         let result = run_app(&mut terminal);
@@ -348,7 +387,12 @@ pub fn run() -> Result<()> {
 fn setup() -> Result<Term> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    // Undo raw mode if entering the alternate screen fails, so we don't leave
+    // the user's terminal in raw mode with no TUI running.
+    if let Err(e) = execute!(stdout, EnterAlternateScreen) {
+        let _ = disable_raw_mode();
+        return Err(e.into());
+    }
     Ok(Terminal::new(CrosstermBackend::new(stdout))?)
 }
 
@@ -427,8 +471,9 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                         let b = &app.blueprints[i];
                         let name = b.name.clone();
                         let sel = model_index(&b.model);
+                        let orig_model = b.model.clone();
                         app.status.clear();
-                        app.mode = Mode::AddModel { name, sel, edit: true };
+                        app.mode = Mode::AddModel { name, sel, edit: true, orig_model, model_touched: false };
                     } else {
                         app.status = "NO BLUEPRINTS TO EDIT".into();
                     }
@@ -454,50 +499,76 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                 KeyCode::Enter => {
                     let name = buf.trim().to_string();
                     match crate::validate_name(&name) {
-                        Ok(()) if config::load()?.blueprints.iter().any(|b| b.name == name) => {
+                        Ok(()) if config::load()?.find_name_conflict(&name).is_some() => {
                             app.status = format!("'{name}' ALREADY EXISTS");
                         }
-                        Ok(()) => app.mode = Mode::AddModel { name, sel: 0, edit: false },
+                        Ok(()) => {
+                            app.mode = Mode::AddModel {
+                                name,
+                                sel: 0,
+                                edit: false,
+                                orig_model: String::new(),
+                                model_touched: false,
+                            }
+                        }
                         Err(e) => app.status = e.to_string().to_uppercase(),
                     }
                 }
                 _ => {}
             },
-            Mode::AddModel { name, sel, edit } => match key.code {
+            Mode::AddModel { name, sel, edit, orig_model, model_touched } => match key.code {
                 KeyCode::Esc => {
                     app.mode = Mode::Normal;
                     app.status = "CANCELLED".into();
                 }
-                KeyCode::Down | KeyCode::Char('j') => *sel = (*sel + 1).min(MODELS.len() - 1),
-                KeyCode::Up | KeyCode::Char('k') => *sel = sel.saturating_sub(1),
+                KeyCode::Down | KeyCode::Char('j') => {
+                    *sel = (*sel + 1).min(MODELS.len() - 1);
+                    *model_touched = true;
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    *sel = sel.saturating_sub(1);
+                    *model_touched = true;
+                }
                 KeyCode::Enter => {
                     let edit = *edit;
                     let name = name.clone();
-                    let model = MODELS[*sel].0.to_string();
-                    // On edit, pre-select the blueprint's current persona.
-                    let sel = if edit {
+                    let model = resolved_edit(edit, *model_touched, orig_model, MODELS[*sel].0.to_string());
+                    // On edit, pre-select the blueprint's current persona and
+                    // remember it so a custom path survives an untouched picker.
+                    let (sel, orig_persona) = if edit {
                         let cfg = config::load()?;
-                        cfg.find(&name).map_or(0, |b| persona_index(b.claude_md.as_deref()))
+                        let b = cfg.find(&name);
+                        (
+                            b.map_or(0, |b| persona_index(b.claude_md.as_deref())),
+                            b.and_then(|b| b.claude_md.clone()),
+                        )
                     } else {
-                        0
+                        (0, None)
                     };
-                    app.mode = Mode::AddPersona { name, model, sel, edit };
+                    app.mode = Mode::AddPersona { name, model, sel, edit, orig_persona, persona_touched: false };
                 }
                 _ => {}
             },
-            Mode::AddPersona { name, model, sel, edit } => match key.code {
+            Mode::AddPersona { name, model, sel, edit, orig_persona, persona_touched } => match key.code {
                 KeyCode::Esc => {
                     app.mode = Mode::Normal;
                     app.status = "CANCELLED".into();
                 }
-                KeyCode::Down | KeyCode::Char('j') => *sel = (*sel + 1).min(PERSONAS.len() - 1),
-                KeyCode::Up | KeyCode::Char('k') => *sel = sel.saturating_sub(1),
+                KeyCode::Down | KeyCode::Char('j') => {
+                    *sel = (*sel + 1).min(PERSONAS.len() - 1);
+                    *persona_touched = true;
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    *sel = sel.saturating_sub(1);
+                    *persona_touched = true;
+                }
                 KeyCode::Enter => {
                     let edit = *edit;
                     let name = name.clone();
                     let model = model.clone();
                     // Index 0 is "none"; others are built-in template names.
-                    let persona = (*sel != 0).then(|| PERSONAS[*sel].0.to_string());
+                    let picked = (*sel != 0).then(|| PERSONAS[*sel].0.to_string());
+                    let persona = resolved_edit(edit, *persona_touched, orig_persona, picked);
                     // On edit, start from the blueprint's current capabilities.
                     let caps = if edit {
                         let cfg = config::load()?;
@@ -670,10 +741,10 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                 KeyCode::Up | KeyCode::Char('k') => *scroll = scroll.saturating_sub(1),
                 KeyCode::PageUp => *scroll = scroll.saturating_sub(10),
                 KeyCode::Down | KeyCode::Char('j') => {
-                    *scroll = (*scroll + 1).min(app.help_scroll_max.get());
+                    *scroll = scroll.saturating_add(1).min(app.help_scroll_max.get());
                 }
                 KeyCode::PageDown | KeyCode::Char(' ') => {
-                    *scroll = (*scroll + 10).min(app.help_scroll_max.get());
+                    *scroll = scroll.saturating_add(10).min(app.help_scroll_max.get());
                 }
                 _ => {}
             },
@@ -698,8 +769,27 @@ fn draw(f: &mut Frame, app: &App) {
     match &app.mode {
         Mode::Normal => {}
         Mode::AddName { buf } => draw_add_name(f, buf),
-        Mode::AddModel { name, sel, edit } => draw_add_model(f, name, *sel, *edit),
-        Mode::AddPersona { name, sel, edit, .. } => draw_add_persona(f, name, *sel, *edit),
+        Mode::AddModel { name, sel, edit, orig_model, model_touched } => {
+            // If editing and the stored model can't be shown in the curated
+            // picker (a full id / `default`) and the user hasn't changed it,
+            // tell them it will be kept — the highlighted row isn't the truth.
+            let keep = (*edit
+                && !*model_touched
+                && !MODELS.iter().any(|(id, _)| id == orig_model))
+            .then_some(orig_model.as_str());
+            draw_add_model(f, name, *sel, *edit, keep);
+        }
+        Mode::AddPersona { name, sel, edit, orig_persona, persona_touched, .. } => {
+            let keep = if *edit && !*persona_touched {
+                match orig_persona {
+                    Some(p) if !PERSONAS.iter().any(|(id, _)| id == p) => Some(p.as_str()),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            draw_add_persona(f, name, *sel, *edit, keep);
+        }
         Mode::AddCaps { name, persona, sel, caps, edit, .. } => {
             draw_add_caps(f, name, persona.as_deref(), *sel, caps, *edit)
         }
@@ -878,8 +968,8 @@ fn draw_add_name(f: &mut Frame, buf: &str) {
     f.render_widget(Paragraph::new(body).style(Style::default().bg(SURFACE_HI)), inner);
 }
 
-fn draw_add_model(f: &mut Frame, name: &str, sel: usize, edit: bool) {
-    let h = MODELS.len() as u16 + 6;
+fn draw_add_model(f: &mut Frame, name: &str, sel: usize, edit: bool, keep: Option<&str>) {
+    let h = MODELS.len() as u16 + 6 + keep.is_some() as u16;
     let title = if edit { "EDIT_BLUEPRINT // SELECT_MODEL" } else { "NEW_BLUEPRINT // SELECT_MODEL" };
     let inner = modal(f, title, 56, h);
 
@@ -887,6 +977,12 @@ fn draw_add_model(f: &mut Frame, name: &str, sel: usize, edit: bool) {
         Line::from(Span::styled(format!("  NAME = {name}"), Style::default().fg(MUTED))),
         Line::from(""),
     ];
+    if let Some(v) = keep {
+        lines.push(Line::from(Span::styled(
+            format!("  KEEPING = {v}  ([↑/↓] to change)"),
+            Style::default().fg(GREEN),
+        )));
+    }
     for (i, (id, desc)) in MODELS.iter().enumerate() {
         if i == sel {
             lines.push(Line::from(vec![
@@ -906,8 +1002,8 @@ fn draw_add_model(f: &mut Frame, name: &str, sel: usize, edit: bool) {
     f.render_widget(Paragraph::new(lines).style(Style::default().bg(SURFACE_HI)), inner);
 }
 
-fn draw_add_persona(f: &mut Frame, name: &str, sel: usize, edit: bool) {
-    let h = PERSONAS.len() as u16 + 6;
+fn draw_add_persona(f: &mut Frame, name: &str, sel: usize, edit: bool, keep: Option<&str>) {
+    let h = PERSONAS.len() as u16 + 6 + keep.is_some() as u16;
     let title = if edit { "EDIT_BLUEPRINT // GLOBAL_PERSONA" } else { "NEW_BLUEPRINT // GLOBAL_PERSONA" };
     let inner = modal(f, title, 60, h);
 
@@ -915,6 +1011,12 @@ fn draw_add_persona(f: &mut Frame, name: &str, sel: usize, edit: bool) {
         Line::from(Span::styled(format!("  NAME = {name}"), Style::default().fg(MUTED))),
         Line::from(""),
     ];
+    if let Some(v) = keep {
+        lines.push(Line::from(Span::styled(
+            format!("  KEEPING = {v}  ([↑/↓] to change)"),
+            Style::default().fg(GREEN),
+        )));
+    }
     for (i, (id, desc)) in PERSONAS.iter().enumerate() {
         if i == sel {
             lines.push(Line::from(vec![
@@ -1049,6 +1151,28 @@ mod tests {
     }
 
     #[test]
+    fn edit_preserves_untouched_values() {
+        // Editing a CLI-configured blueprint whose model is a full id / persona
+        // is a custom path: an untouched picker must NOT downgrade them.
+        let full_id = "claude-opus-4-8".to_string();
+        assert_eq!(
+            resolved_edit(true, false, &full_id, MODELS[0].0.to_string()),
+            "claude-opus-4-8",
+            "untouched model picker must keep the full id"
+        );
+        let custom = Some("/path/persona.md".to_string());
+        assert_eq!(
+            resolved_edit(true, false, &custom, Some(PERSONAS[0].0.to_string())),
+            Some("/path/persona.md".to_string()),
+            "untouched persona picker must keep the custom path"
+        );
+        // A touched picker uses the new choice.
+        assert_eq!(resolved_edit(true, true, &full_id, "sonnet".to_string()), "sonnet");
+        // On add, always use the picked value regardless of orig.
+        assert_eq!(resolved_edit(false, false, &full_id, "haiku".to_string()), "haiku");
+    }
+
+    #[test]
     fn cap_toggle_round_trips_each_row() {
         for i in 0..CAP_ROWS.len() {
             let mut c = Capabilities::default();
@@ -1116,7 +1240,8 @@ fn draw_sessions(f: &mut Frame, name: &str, items: &[sessions::Session], sel: us
     ))];
     for (i, s) in items.iter().take(shown).enumerate() {
         let kb = s.size.div_ceil(1024);
-        let label = format!("{:<8}  {}  {:>5} KB", &s.id[..s.id.len().min(8)], sessions::format_utc(s.modified), kb);
+        let short: String = s.id.chars().take(8).collect();
+        let label = format!("{:<8}  {}  {:>5} KB", short, sessions::format_utc(s.modified), kb);
         if i == sel {
             lines.push(Line::from(Span::styled(
                 format!(" › {label}"),

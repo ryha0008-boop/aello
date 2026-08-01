@@ -28,8 +28,15 @@ pub fn capture_setup_token() -> Result<Option<String>> {
         let mut out = std::io::stdout();
         for line in BufReader::new(stdout).lines() {
             let line = line.unwrap_or_default();
-            // Echo live so the auth URL is visible (headless VPS has no browser).
-            let _ = writeln!(out, "{line}");
+            // Echo live so the auth URL is visible (headless VPS has no browser),
+            // but never re-emit the line carrying the token into our own
+            // (redirectable) stdout — `aello login | tee`, CI logs, tmux capture
+            // would otherwise persist the long-lived token in cleartext.
+            if line_has_token(&line) {
+                let _ = writeln!(out, "<token received — hidden from stdout, stored in config.toml>");
+            } else {
+                let _ = writeln!(out, "{line}");
+            }
             let _ = out.flush();
             captured.push_str(&line);
             captured.push('\n');
@@ -50,16 +57,24 @@ pub fn capture_setup_token() -> Result<Option<String>> {
     Ok(if t.is_empty() { None } else { Some(t.to_string()) })
 }
 
+/// If a whitespace-delimited word, stripped of surrounding quotes/punctuation,
+/// looks like a setup token, return the cleaned token — so a trailing `.` or `"`
+/// doesn't truncate or corrupt it. Shared by extraction and stdout redaction.
+fn clean_token(word: &str) -> Option<&str> {
+    let t = word.trim_matches(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+    (t.starts_with("sk-ant-") && t.len() > 20).then_some(t)
+}
+
 /// Find a `sk-ant-...` token in arbitrary output. Scans from the end (the token
 /// is printed after the auth URL, so the *last* match is the token even if an
-/// earlier line embeds the prefix) and strips any surrounding quotes/punctuation
-/// so a trailing `.` or `"` doesn't truncate or corrupt the captured token.
+/// earlier line embeds the prefix).
 fn extract_token(s: &str) -> Option<String> {
-    s.split_whitespace()
-        .map(|w| w.trim_matches(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_')))
-        .filter(|w| w.starts_with("sk-ant-") && w.len() > 20)
-        .last()
-        .map(|w| w.to_string())
+    s.split_whitespace().filter_map(clean_token).next_back().map(str::to_string)
+}
+
+/// True if a single line contains a token — used to redact it before echoing.
+fn line_has_token(line: &str) -> bool {
+    line.split_whitespace().any(|w| clean_token(w).is_some())
 }
 
 #[cfg(test)]
@@ -85,5 +100,14 @@ mod tests {
             extract_token(two).as_deref(),
             Some("sk-ant-oat01-REALTOKEN0123456789abc")
         );
+    }
+
+    #[test]
+    fn detects_token_line_for_redaction() {
+        assert!(line_has_token("Your token: sk-ant-oat01-ABCDEF0123456789xyz"));
+        assert!(line_has_token("\"sk-ant-oat01-ABCDEF0123456789xyz\""));
+        // The auth-URL line (and any other non-token line) is not redacted.
+        assert!(!line_has_token("Visit https://claude.ai/oauth/authorize?code=xyz"));
+        assert!(!line_has_token("Success! Logged in."));
     }
 }

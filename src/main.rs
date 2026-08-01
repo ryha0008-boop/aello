@@ -12,6 +12,7 @@ mod sessions;
 mod templates;
 mod tui;
 mod update;
+mod voice;
 
 use models::{Blueprint, Capabilities, Instance};
 
@@ -50,6 +51,9 @@ enum Commands {
         /// `/sync` keeps README.md current.
         #[arg(long)]
         readme: bool,
+        /// Speak each response's TL;DR line aloud (text-to-speech).
+        #[arg(long)]
+        voice: bool,
     },
     /// List all blueprints.
     List {
@@ -111,6 +115,11 @@ enum Commands {
         /// Doc to print (slug, e.g. `concepts`). Omit to list available docs.
         name: Option<String>,
     },
+    /// Mute or unmute the voice capability (applies to every env).
+    Voice {
+        #[command(subcommand)]
+        action: VoiceAction,
+    },
     // More subcommands land here in later phases (sessions, ...).
 }
 
@@ -160,6 +169,34 @@ struct EditArgs {
     /// Disable the README.md capability.
     #[arg(long)]
     no_readme: bool,
+    /// Enable the voice (text-to-speech) capability.
+    #[arg(long)]
+    voice: bool,
+    /// Disable the voice (text-to-speech) capability.
+    #[arg(long)]
+    no_voice: bool,
+}
+
+/// Off switch for the `voice` capability. State is machine-wide, so these apply
+/// to every env at once and work from any directory.
+#[derive(Subcommand)]
+enum VoiceAction {
+    /// Silence the voice hook.
+    Mute {
+        /// Only this project, instead of everywhere.
+        #[arg(long)]
+        project: bool,
+    },
+    /// Let it speak again.
+    Unmute {
+        /// Only this project, instead of everywhere.
+        #[arg(long)]
+        project: bool,
+    },
+    /// Stop the sentence playing right now, without changing any mute.
+    Stop,
+    /// Show mute state and the voice pool.
+    Status,
 }
 
 fn main() {
@@ -185,8 +222,8 @@ fn main() {
     let cli = Cli::parse();
     let result = match cli.command {
         None => tui::run(),
-        Some(Commands::Add { name, model, claude_md, project_md, github, changelog, docs, readme }) => {
-            cmd_add(name, model, claude_md, Capabilities { project_md, github, changelog, docs, readme })
+        Some(Commands::Add { name, model, claude_md, project_md, github, changelog, docs, readme, voice }) => {
+            cmd_add(name, model, claude_md, Capabilities { project_md, github, changelog, docs, readme, voice })
         }
         Some(Commands::List { json }) => cmd_list(json),
         Some(Commands::Remove { name, yes, purge }) => cmd_remove(name, yes, purge),
@@ -198,6 +235,12 @@ fn main() {
         Some(Commands::Update) => update::run(),
         Some(Commands::Completions { shell }) => cmd_completions(shell),
         Some(Commands::Docs { name }) => cmd_docs(name),
+        Some(Commands::Voice { action }) => match action {
+            VoiceAction::Mute { project } => voice::mute(project),
+            VoiceAction::Unmute { project } => voice::unmute(project),
+            VoiceAction::Stop => voice::stop(),
+            VoiceAction::Status => voice::status(),
+        },
     };
 
     if let Err(e) = result {
@@ -214,7 +257,25 @@ pub(crate) fn validate_name(name: &str) -> Result<()> {
     if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
         bail!("name '{name}' must contain only ASCII letters, digits, '-' or '_'");
     }
+    // The github cap creates a BARE `claude-internal/<name>/` component, so a
+    // Windows reserved device name (CON, NUL, COM1…) would make create_dir_all
+    // fail with an opaque OS error at the mirror step. Reject them up front,
+    // case-insensitively (Windows matches these regardless of case).
+    if is_reserved_device_name(name) {
+        bail!("name '{name}' is a reserved device name on Windows — pick another");
+    }
     Ok(())
+}
+
+/// Windows reserved device names (case-insensitive): CON, PRN, AUX, NUL,
+/// COM1–COM9, LPT1–LPT9. Bare filesystem components with these names are
+/// refused by Windows even on other platforms' shared repos.
+fn is_reserved_device_name(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ((upper.starts_with("COM") || upper.starts_with("LPT"))
+            && matches!(upper.as_bytes().get(3), Some(b'1'..=b'9'))
+            && upper.len() == 4)
 }
 
 /// Short aliases Claude Code accepts in settings.json "model".
@@ -250,8 +311,14 @@ fn cmd_add(
         templates::resolve(cm)?;
     }
     let mut cfg = config::load()?;
-    if cfg.find(&name).is_some() {
-        bail!("blueprint '{name}' already exists");
+    if let Some(existing) = cfg.find_name_conflict(&name) {
+        if existing == name {
+            bail!("blueprint '{name}' already exists");
+        }
+        bail!(
+            "blueprint name '{name}' collides with existing '{existing}' — names are \
+             case-insensitive on Windows/macOS filesystems and would share one env dir"
+        );
     }
     cfg.blueprints.push(Blueprint { name: name.clone(), model, claude_md, caps });
     config::save(&cfg)?;
@@ -263,6 +330,13 @@ fn cmd_remove(name: String, yes: bool, purge: bool) -> Result<()> {
     let mut cfg = config::load()?;
     if cfg.find(&name).is_none() {
         bail!("no blueprint named '{name}'");
+    }
+    // `--purge` deletes `.claude-env-<name>` and `claude-internal/<name>` derived
+    // from the name; re-gate a hand-edited config name so a traversal like
+    // `../../x` can't direct the delete outside the project.
+    if purge {
+        validate_name(&name)
+            .with_context(|| format!("blueprint name in config.toml is invalid: '{name}'"))?;
     }
 
     // On-disk artifacts for the CURRENT project (the only ones we can locate).
@@ -337,8 +411,17 @@ fn cmd_edit(args: EditArgs) -> Result<()> {
         if *new == args.name {
             bail!("--rename '{new}' is already the blueprint's name");
         }
-        if cfg.blueprints.iter().any(|b| b.name == *new) {
-            bail!("blueprint '{new}' already exists");
+        // Reject a case-insensitive collision with a *different* blueprint (they
+        // would share one env dir on Windows/macOS). A pure case-flip of this
+        // blueprint's own name is left to rename_placed, which handles the
+        // on-disk case rename.
+        if let Some(existing) = cfg.find_name_conflict(new) {
+            if !existing.eq_ignore_ascii_case(&args.name) {
+                bail!(
+                    "blueprint name '{new}' collides with existing '{existing}' — names are \
+                     case-insensitive on Windows/macOS filesystems"
+                );
+            }
         }
     }
 
@@ -362,6 +445,7 @@ fn cmd_edit(args: EditArgs) -> Result<()> {
     bp.caps.changelog = tri(args.changelog, args.no_changelog, bp.caps.changelog, "changelog")?;
     bp.caps.docs = tri(args.docs, args.no_docs, bp.caps.docs, "docs")?;
     bp.caps.readme = tri(args.readme, args.no_readme, bp.caps.readme, "readme")?;
+    bp.caps.voice = tri(args.voice, args.no_voice, bp.caps.voice, "voice")?;
     changed |= bp.caps != before;
 
     // Rename last: move on-disk artifacts for this project, then the config name.
@@ -419,6 +503,13 @@ pub(crate) fn run_blueprint(
 ) -> Result<i32> {
     let cfg = config::load()?;
     let bp = cfg.find(name).with_context(|| format!("no blueprint named '{name}'"))?;
+    // config.toml is just a file: a hand-edited name like `../../evil` never
+    // passed validate_name on write, but every read path interpolates the raw
+    // name into `.claude-env-<name>` / `claude-internal/<name>` fs paths. Re-gate
+    // it here (the shared placement sink) so a poisoned name can't escape the
+    // project dir or inject into generated SKILL.md frontmatter.
+    validate_name(&bp.name)
+        .with_context(|| format!("blueprint name in config.toml is invalid: '{}'", bp.name))?;
 
     let project = std::env::current_dir().context("could not determine current directory")?;
     let env = project::env_dir(&project, &bp.name);
@@ -512,6 +603,9 @@ fn cmd_init() -> Result<()> {
         changelog: prompt_bool("  CHANGELOG.md", false)?,
         docs: prompt_bool("  docs/ directory", false)?,
         readme: prompt_bool("  README.md", false)?,
+        // Not a /sync capability — it speaks responses instead of maintaining a
+        // file — so it's asked separately to avoid implying otherwise.
+        voice: prompt_bool("\n  voice: speak each response's TL;DR aloud", false)?,
     };
 
     cfg.blueprints.push(Blueprint {
@@ -649,6 +743,9 @@ fn caps_label(c: &Capabilities) -> String {
     if c.readme {
         tags.push("readme");
     }
+    if c.voice {
+        tags.push("voice");
+    }
     if tags.is_empty() {
         "-".to_string()
     } else {
@@ -669,8 +766,20 @@ mod tests {
 
     #[test]
     fn invalid_names_rejected() {
-        for n in ["", "bad name", "a/b", "x.y", "a:b", "café", "ｆｕｌｌ"] {
+        for n in ["", "bad name", "a/b", "x.y", "a:b", "café", "ｆｕｌｌ",
+                  "../../evil", "..", "a\\b", "a\nb"] {
             assert!(validate_name(n).is_err(), "{n:?} should be rejected");
+        }
+    }
+
+    #[test]
+    fn reserved_device_names_rejected() {
+        for n in ["con", "CON", "nul", "Nul", "PRN", "aux", "com1", "COM9", "lpt1", "LPT9"] {
+            assert!(validate_name(n).is_err(), "{n:?} should be rejected (reserved)");
+        }
+        // Near-misses that are NOT reserved must still pass.
+        for n in ["con1", "com", "com0", "com10", "lpt", "console", "nul-agent"] {
+            assert!(validate_name(n).is_ok(), "{n:?} should be valid");
         }
     }
 

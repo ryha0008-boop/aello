@@ -12,19 +12,22 @@ Isolated Claude Code environments — like Python venvs, but for AI agents.
 - **Isolated** — every blueprint gets its own `.claude-env-<name>/` (settings, persona, hooks, skills), kept out of your repo automatically.
 - **Shared login** — one `aello login` token is shared safely across any number of concurrent envs (no credential rotation races).
 - **Capability-driven** — pick what a blueprint maintains (`/sync` docs, GitHub, CHANGELOG, docs/, README); aello scaffolds the files and generates a `/sync` skill tailored to exactly that.
+- **Optionally spoken** — with `--voice`, an env reads each response's `TL;DR:` line aloud, with a different voice per concurrent session and one `aello voice mute` to stop them all.
 - **Attributable** — commits made through a blueprint are authored as `<blueprint> <blueprint@aello.local>`, so multi-agent work is traceable.
 
-Cross-platform: Linux and Windows (x86_64). macOS: build from source.
+Cross-platform: Linux (x86_64), macOS (Apple Silicon + Intel), Windows (x86_64).
 
 ## Install
 
-### Linux (x86_64) — one-liner
+### Linux / macOS — one-liner
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/ryha0008-boop/aello/main/install.sh | sh
 ```
 
-Downloads the latest release into `~/.local/bin` (override with `AELLO_BIN_DIR`), makes it executable, and prints a PATH hint if that dir isn't on your `$PATH`. Unsupported platforms (macOS, arm64) exit with a build-from-source pointer.
+Downloads the latest release into `~/.local/bin` (override with `AELLO_BIN_DIR`), makes it executable, clears the macOS quarantine flag, and prints a PATH hint if that dir isn't on your `$PATH`. Platforms without a prebuilt binary (e.g. arm64 Linux) exit with a build-from-source pointer.
+
+Every release also publishes an immutable `vX.Y.Z` tag if you'd rather pin a version — swap `latest` for `v0.1.52` in any download URL below. `aello update` always moves you to the newest release.
 
 ### Linux (x86_64) — manual
 
@@ -42,24 +45,35 @@ Install into a **user-writable** dir (`~/.local/bin`), not root-owned `/usr/loca
 
 Download [`aello-x86_64-windows.exe`](https://github.com/ryha0008-boop/aello/releases/download/latest/aello-x86_64-windows.exe) from the latest release, rename it to `aello.exe`, and put it somewhere on your `PATH` (e.g. `C:\Users\<you>\bin\`).
 
-### macOS (build from source)
+The `.exe` is **unsigned** (a code-signing certificate is a paid yearly subscription), so SmartScreen may show *"Windows protected your PC"* on first run — **More info → Run anyway**. Verify the download against the release's `SHA256SUMS` if you'd rather check it yourself.
 
-No prebuilt macOS binary ships yet — build it from source. You need a [Rust toolchain](https://rustup.rs) (`rustc`/`cargo`); everything else is pulled in by `cargo`.
+### macOS — manual
 
 ```sh
-cargo install --git https://github.com/ryha0008-boop/aello   # installs to ~/.cargo/bin/aello
+mkdir -p ~/.local/bin
+# Apple Silicon; use aello-x86_64-macos on Intel Macs
+curl -L https://github.com/ryha0008-boop/aello/releases/download/latest/aello-aarch64-macos -o ~/.local/bin/aello
+chmod +x ~/.local/bin/aello
+xattr -d com.apple.quarantine ~/.local/bin/aello   # see below
 aello --version
 ```
 
-`~/.cargo/bin` is user-writable, so `aello update`'s in-place binary replacement works. Note that `aello update` only fetches the prebuilt Linux/Windows binaries — on macOS, re-run the `cargo install --git` line above to update. As on every platform, `claude` (Claude Code) must be on your `PATH` for `aello run` to launch it.
+**Gatekeeper:** the macOS binaries are **unsigned** (code signing needs a paid Apple Developer account), so a browser- or `curl`-downloaded copy is quarantined and macOS refuses to run it — *"aello cannot be opened because the developer cannot be verified."* The `xattr -d com.apple.quarantine` line above clears it; the one-liner installer does it for you. Prefer not to trust an unsigned binary? Build from source — the checksums for every published binary are in the release's `SHA256SUMS`.
 
 ### From source (any platform)
 
+Needs a [Rust toolchain](https://rustup.rs); everything else `cargo` pulls in.
+
 ```sh
+cargo install --git https://github.com/ryha0008-boop/aello   # installs to ~/.cargo/bin/aello
+
+# or, to hack on it:
 git clone https://github.com/ryha0008-boop/aello
 cd aello
-cargo install --path .   # installs to ~/.cargo/bin/aello
+cargo install --path .
 ```
+
+`~/.cargo/bin` is user-writable, so `aello update`'s in-place binary replacement works from a source install too.
 
 ## Prerequisites
 
@@ -102,16 +116,18 @@ aello                                          # interactive TUI (no args)
 aello --version
 aello init                                     # first-run: login + first blueprint
 aello add <name> --model <m> [--claude-md <coder|sysadmin|path>]
-        [--project-md] [--github] [--changelog] [--docs] [--readme]
+        [--project-md] [--github] [--changelog] [--docs] [--readme] [--voice]
 aello list [--json]
 aello remove <name> [--yes] [--purge]         # --purge also deletes the placed env dir + mirror
 aello edit <name> [--rename <new>] [--model <m>] [--claude-md <coder|sysadmin|path>]
         [--project-md|--no-project-md] [--github|--no-github]
         [--changelog|--no-changelog] [--docs|--no-docs] [--readme|--no-readme]
+        [--voice|--no-voice]
 aello run [name] [--resume [id]] [-p <prompt>] [-- <extra args for claude>]
 aello login                                    # store the shared Claude token
 aello github-setup [--name <repo>] [--public] [--yes]   # create + push the repo via gh
 aello docs [name]                              # print bundled reference docs (no name lists them)
+aello voice <mute|unmute|stop|status> [--project]       # off switch for the --voice capability
 aello completions <bash|zsh|fish|powershell|elvish>     # print a shell completion script
 aello update                                   # self-update to the latest release
 ```
@@ -149,6 +165,27 @@ By default the registry shows only blueprints already placed in the current dire
 | `--changelog` | changelog | `CHANGELOG.md` | keep CHANGELOG current |
 | `--docs` | docs | `docs/` | reconcile docs/ |
 | `--readme` | readme | `README.md` | keep README current |
+| `--voice` | voice | `hooks/speak.py` + the TL;DR persona section | — (not a `/sync` capability) |
+
+### `--voice` — speak responses aloud
+
+With `--voice`, the env gets a `Stop` hook that reads each response's trailing `TL;DR:` line aloud through a free Edge neural voice, and a `SessionEnd` hook that returns the voice it borrowed. The persona picks up a section instructing it to end every response with that line — without one there is nothing to speak.
+
+The hook is copied **into the env** and registered as `$CLAUDE_CONFIG_DIR/hooks/speak.py`, so it never points at a checkout somewhere else on disk: moving or renaming any other directory can't silence it, and a newly placed env speaks with no hand-editing.
+
+Its state — the voice pool, per-session leases, mute flags — lives in one machine-wide folder (`%LOCALAPPDATA%\revoiced`, `~/Library/Application Support/revoiced`, `$XDG_DATA_HOME/revoiced`), shared by every env. So concurrent envs each lease a different voice, playback is serialised machine-wide instead of overlapping, and a single mute covers all of them:
+
+```
+aello voice mute              # silence every env, and stop the current sentence
+aello voice mute --project    # silence just this project
+aello voice unmute            # (--project too)
+aello voice stop              # cut off what's speaking now, without muting
+aello voice status            # mute state + pool size
+```
+
+These work from any directory and need no Python — useful precisely when a machine you didn't expect to talk starts talking.
+
+**Prerequisites.** Python 3 on `PATH`. Without `edge-tts` (`pip install edge-tts`) it falls back to the OS voice — SAPI on Windows, `say` on macOS, `spd-say`/`espeak` on Linux. Linux playback also needs one of `mpv`, `ffplay`, `mpg123`, or `cvlc`; macOS (`afplay`) and Windows (.NET) are covered by the OS. Ducking other applications' audio while it speaks is Windows-only and needs `pycaw`; elsewhere it's a no-op.
 
 With `--github`, commits made through the blueprint are authored as `<name> <name@aello.local>` (both author and committer), and `/sync` appends an `Env: <name>` trailer to each commit — so `git log --author` and `git blame` reveal which blueprint did what.
 
@@ -174,6 +211,10 @@ Issues and PRs welcome — aello is a small, focused Rust CLI (no extra toolchai
 git clone https://github.com/ryha0008-boop/aello && cd aello
 cargo build --release && cargo test     # both green before you start
 ```
+
+The `site/` directory holds the landing page — a static Next.js app that's independent of the
+CLI. You only need Node if you're changing the page itself; `cargo build` and `cargo test`
+ignore it entirely.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full dev loop and conventions, and [CLAUDE.md](CLAUDE.md) for the architecture deep-dive (every `src/` module is mapped there).
 

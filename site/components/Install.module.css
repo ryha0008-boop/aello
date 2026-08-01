@@ -1,0 +1,50 @@
+.grid {
+  display: grid;
+  gap: var(--base-size-24);
+  margin-top: var(--base-size-48);
+}
+
+.slot {
+  min-width: 0;
+}
+
+.block {
+  height: 100%;
+  padding: var(--base-size-24);
+  background: var(--color-canvas-subtle);
+  border: var(--borderWidth-thin) solid var(--color-border-default);
+  border-radius: var(--brand-borderRadius-large);
+}
+
+.platform {
+  margin-bottom: var(--base-size-16);
+  font-family: var(--brand-fontStack-sansSerifAlt);
+  font-size: var(--brand-text-size-400);
+  line-height: var(--brand-text-lineHeight-400);
+  font-weight: var(--brand-heading-weight-400);
+}
+
+.note {
+  margin-top: var(--base-size-16);
+  font-size: var(--brand-text-size-100);
+  color: var(--color-fg-muted);
+  text-wrap: pretty;
+}
+
+.note code,
+.after code {
+  font-size: 0.9285em;
+  color: var(--color-fg-on-dark-85);
+}
+
+.after {
+  margin-top: var(--base-size-32);
+  color: var(--color-fg-muted);
+}
+
+@media (min-width: 63.25rem) {
+  .grid {
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--base-size-32);
+  }
+}

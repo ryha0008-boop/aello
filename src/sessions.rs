@@ -13,14 +13,16 @@ pub struct Session {
     pub size: u64,
 }
 
-/// Claude's project-dir naming: replace each `\`, `/`, `:`, `.` with `-`.
-/// The `.` mapping matters — a cwd like `…/proj.v1.2` becomes `…-proj-v1-2`, so
-/// omitting it would point seeded memory and `--resume` at a directory Claude
-/// never reads. Verified against Claude Code's on-disk encoding.
+/// Claude's project-dir naming: replace **every** non-alphanumeric character
+/// with `-` (case preserved). Not just separators — `.`, `_`, and spaces fold
+/// too: a real folder `…\human_behavior` is stored by Claude Code as
+/// `…-human-behavior`, so leaving `_`/spaces intact would point seeded memory
+/// and `--resume` at a directory Claude never reads (a silent no-op). Confirmed
+/// against Claude Code's on-disk encoding on this machine (2026-07-08).
 pub fn encode_project_path(path: &Path) -> String {
     path.to_string_lossy()
         .chars()
-        .map(|c| if matches!(c, '\\' | '/' | ':' | '.') { '-' } else { c })
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect()
 }
 
@@ -74,7 +76,7 @@ mod tests {
 
     #[test]
     fn encodes_separators_and_dots() {
-        // Matches Claude Code: `\ / : .` all collapse to `-`.
+        // Matches Claude Code: every non-alphanumeric char collapses to `-`.
         assert_eq!(
             encode_project_path(Path::new(r"C:\Users\H\proj.v1.2")),
             "C--Users-H-proj-v1-2"
@@ -82,6 +84,19 @@ mod tests {
         assert_eq!(
             encode_project_path(Path::new("/home/u/my.app")),
             "-home-u-my-app"
+        );
+    }
+
+    #[test]
+    fn folds_underscores_and_spaces() {
+        // Ground truth: `…\human_behavior` is stored as `…-human-behavior`.
+        assert_eq!(
+            encode_project_path(Path::new(r"C:\Users\H\Desktop\work\human_behavior")),
+            "C--Users-H-Desktop-work-human-behavior"
+        );
+        assert_eq!(
+            encode_project_path(Path::new("/home/John Smith/my_proj")),
+            "-home-John-Smith-my-proj"
         );
     }
 }

@@ -1,10 +1,11 @@
 ---
 name: aello-dev-gotchas
-description: "Windows dev gotchas for aello — locked-exe install workaround, print-mode doesn't load persistent memory, universal skills don't backfill, gh issue view needs --json"
+description: "Windows dev gotchas for aello — locked-exe install workaround, print-mode doesn't load persistent memory, universal skills don't backfill, gh issue view needs --json, Claude cwd-encoding folds all non-alphanumerics to '-', how to screenshot a page without downloading a browser"
 metadata: 
   node_type: memory
   type: reference
   originSessionId: 72999d30-dfc8-4f50-aac5-cbe588b64645
+  modified: 2026-08-01T12:37:35.281Z
 ---
 
 Two non-obvious things when developing/testing aello on Windows:
@@ -16,3 +17,11 @@ Two non-obvious things when developing/testing aello on Windows:
 3. **`gh issue view <n>` fails on this machine** with `authentication token is missing required scopes [read:project]` (and sometimes API timeouts) — the default view tries to fetch linked project data. Read issues with `gh issue view <n> --json title,body -q '.title + "\n\n" + .body'`, and `gh issue list` for the list. Commits with `Closes #n` trailers still auto-close the issues on push regardless.
 
 4. **A new universal skill (`/handoff`, `/twosentences`, `/note`, …) does NOT backfill to already-placed envs.** `place()` re-seeds the universal skills on every run, but only for the env being placed, and only via the *installed* binary — so existing env dirs across the machine stay stale until you `aello run` each one again with a freshly `cargo install`ed binary. The user runs ~29 envs across ~20 repos and does NOT want to re-run them. When you add a universal skill, **seed it directly** into every existing env: `find /c/Users/H -maxdepth 6 -name .aello.toml`, derive the blueprint name from the `.claude-env-<name>` dir, and write `<envdir>/skills/<skill>/SKILL.md` with the name substituted (the per-blueprint name is woven into the skill body). Design note for `/note`: it **overwrites** `<target>.NOTE.md` (single current note), not appends — the user reads a note the moment it's left, so accumulation is unwanted.
+
+5. **`aello update` cannot deliver work that lives on a branch — and it fails silently.** It fetches the latest *release*, and CI only builds on pushes to `main`. Testing a branch feature means `cargo install --path . --force` (see #1), not `update`. The trap is that the released version can be *higher* than the branch build (2026-08-01: installed 0.1.52 from a release vs 0.1.51 on `launch-prep`), so `aello update` looks like it upgrades while actually removing the feature you wanted to test. Check `aello <cmd> --help` for the new flag, not the version number. After `cargo install`, the local build's lower version is cosmetic — CI renumbers on merge.
+
+6. **Print mode fires hooks even though it skips memory.** Complementing #2: `aello run <bp> -p "..."` does load the persona and does run `Stop`/`SessionEnd` hooks, so it's a valid way to place an env and exercise hook behaviour headlessly. Only persistent *memory* injection is missing.
+
+7. **Claude Code's cwd→projects-dir encoding folds EVERY non-alphanumeric char to `-`, not just separators.** Verified empirically 2026-07-08: a real folder `…\work\human_behavior` is stored by Claude under `~/.claude/projects/` as `…-work-human-behavior` (underscore → hyphen; case preserved). So the rule is `replace([^A-Za-z0-9], '-')` — spaces and `_` fold too, not only `\ / : .`. aello's `sessions::encode_project_path` previously only folded `\ / : .`, so for any project path containing `_`/space it pointed seeded memory + `--resume` at a dir Claude never reads (silent no-op). Fixed on branch `audit-fixes-2026-07-08`. This is the ground truth behind the path-identity requirement in gotcha #2. See [[aello-architecture-decisions]].
+
+8. **This machine can screenshot a web page without downloading a browser.** Playwright *browsers* already sit at `%LOCALAPPDATA%\ms-playwright` (several chromium revisions), but the `playwright` npm package isn't installed in any project — and a fresh `npm i playwright` then fails at launch with "Executable doesn't exist at …chromium_headless_shell-<newer rev>", because the new package expects a revision that isn't there. Don't run `npx playwright install` (~150 MB); install the package into the scratchpad and pass `executablePath` to a revision that does exist, e.g. `chromium.launch({ executablePath: 'C:\\Users\\H\\AppData\\Local\\ms-playwright\\chromium-1228\\chrome-win64\\chrome.exe' })`. Second trap: `fullPage` screenshots of a page using IntersectionObserver scroll-reveals come out with **blank mid-page sections** — jumping straight to the bottom and back never intersects the middle. Step the scroll down in half-viewport increments first, then capture.

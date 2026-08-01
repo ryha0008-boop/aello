@@ -21,10 +21,13 @@ clap_complete = "4"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 directories = "5"
-serde_json = "1"
+# preserve_order: don't alphabetically reorder keys when we read+rewrite
+# Claude-owned JSON (.claude.json, settings.json) — keeps diffs clean.
+serde_json = { version = "1", features = ["preserve_order"] }
 ureq = { version = "2", features = ["json", "tls"] }
 ratatui = "0.29"
 include_dir = "0.7"
+sha2 = "0.10"
 
 [dev-dependencies]
 tempfile = "3"

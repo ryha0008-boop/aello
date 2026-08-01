@@ -21,10 +21,16 @@ pub struct Capabilities {
     /// Keep README.md current.
     #[serde(default)]
     pub readme: bool,
+    /// Speak each response's `TL;DR:` line aloud (text-to-speech `Stop` hook).
+    #[serde(default)]
+    pub voice: bool,
 }
 
 impl Capabilities {
-    /// True if anything is enabled — i.e. there's a reason to seed `/sync`.
+    /// True if anything `/sync` covers is enabled — i.e. there's a reason to seed
+    /// the skill. Deliberately excludes `voice`: it maintains no project file and
+    /// contributes no `/sync` section, so a voice-only blueprint must not get a
+    /// `/sync` skill with nothing in it.
     pub fn any(&self) -> bool {
         self.project_md || self.github || self.changelog || self.docs || self.readme
     }
@@ -71,5 +77,35 @@ pub struct Config {
 impl Config {
     pub fn find(&self, name: &str) -> Option<&Blueprint> {
         self.blueprints.iter().find(|b| b.name == name)
+    }
+
+    /// Case-insensitive name lookup, returning the conflicting blueprint's
+    /// stored name. Env dir names (`.claude-env-<name>`) collide
+    /// case-insensitively on Windows/macOS default filesystems, so two
+    /// blueprints whose names differ only in case would map to a single on-disk
+    /// env dir and clobber each other's state.
+    pub fn find_name_conflict(&self, name: &str) -> Option<&str> {
+        self.blueprints
+            .iter()
+            .find(|b| b.name.eq_ignore_ascii_case(name))
+            .map(|b| b.name.as_str())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bp(name: &str) -> Blueprint {
+        Blueprint { name: name.into(), model: "opus".into(), claude_md: None, caps: Capabilities::default() }
+    }
+
+    #[test]
+    fn name_conflict_is_case_insensitive() {
+        let cfg = Config { blueprints: vec![bp("Coder")], ..Default::default() };
+        assert_eq!(cfg.find_name_conflict("coder"), Some("Coder"));
+        assert_eq!(cfg.find_name_conflict("CODER"), Some("Coder"));
+        assert_eq!(cfg.find_name_conflict("Coder"), Some("Coder"));
+        assert_eq!(cfg.find_name_conflict("other"), None);
     }
 }

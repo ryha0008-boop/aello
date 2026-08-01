@@ -13,8 +13,27 @@ Each enabled capability does two things on placement:
 | `changelog` | `CHANGELOG.md` (`## [Unreleased]`) | keep CHANGELOG current |
 | `docs` | `docs/` directory | reconcile `docs/` |
 | `readme` | `README.md` | keep README current |
+| `voice` | `hooks/speak.py` + `duck.py` + `win_audio.ps1` in the env; a TL;DR section appended to the persona | — (see below) |
 
 The global persona (`--claude-md`) is separate from capabilities — it writes the env-level `CLAUDE.md` once.
+
+## `voice` — speaking responses aloud
+
+`voice` is the odd one out: it maintains no project file and adds no `/sync` section. It registers a `Stop` hook that speaks each response's trailing `TL;DR:` line through a free Edge neural voice, plus a `SessionEnd` hook that hands the borrowed voice back. Because it contributes nothing to `/sync`, a blueprint with `voice` and nothing else gets **no `/sync` skill at all** — `Capabilities::any()` deliberately ignores it.
+
+**Why the hook is vendored into the env.** It's copied to `<env>/hooks/` and registered as `$CLAUDE_CONFIG_DIR/hooks/speak.py`. The alternative — pointing every env at one checkout of the script — couples unrelated projects to that path: move or rename it and every env goes silent at once, and each newly placed env stays silent until edited by hand. `speak.py` imports `duck` as a sibling and shells out to `win_audio.ps1` beside it, so all three are copied together; a partial copy fails at runtime, not at placement.
+
+**Shared state, per-env script.** The scripts are per-env but their state is not: the voice pool, per-session leases, and mute flags live in one machine-wide folder (`%LOCALAPPDATA%\revoiced` on Windows, `~/Library/Application Support/revoiced` on macOS, `$XDG_DATA_HOME/revoiced` or `~/.local/share/revoiced` elsewhere). That's what makes concurrent envs behave: each session leases a **different** voice, playback serialises behind one machine-wide lock instead of several envs talking over each other, and one mute covers everything.
+
+**The persona has to cooperate.** The hook speaks the `TL;DR:` line and nothing else, so enabling `voice` appends a section to the env's `CLAUDE.md` telling it to end every response with one. It's appended, never rewritten, so enabling `voice` on an existing env adds the section without disturbing a persona you've edited. A response with no TL;DR is blocked once with a request to add one, then allowed through — it can't loop.
+
+**Migrating a hand-wired hook.** If an env already has a `Stop` hook you added yourself pointing at a checkout (`python "C:/…/revoiced/speak.py"`), enabling `voice` **replaces** it with the env-relative one on the next `run`. It isn't added beside it — that would speak every response twice — and it isn't left alone, since that absolute path is the coupling the capability exists to remove. Hooks that aren't a `speak.py` are never touched.
+
+**Turning it off.** `aello edit <name> --no-voice` deregisters both hooks on the next `run` (leaving other hooks alone). For an immediate off switch that needs neither Python nor a placed env, use `aello voice mute` (or `mute --project`, `stop`, `status`) — it writes the shared state directly, so it works from any directory and applies to every env at once.
+
+**Prerequisites.** Python 3 on `PATH`. Without `edge-tts` (`pip install edge-tts`) it falls back to the OS voice (SAPI / `say` / `spd-say` / `espeak`). Linux playback needs one of `mpv`, `ffplay`, `mpg123`, `cvlc`; macOS and Windows are covered by the OS. Ducking other audio while it speaks is Windows-only (`pycaw`) and a no-op elsewhere.
+
+**When it doesn't speak.** Check `aello voice status` first — a global or per-project mute is the usual answer. Beyond that, the hook appends a line to `history.jsonl` in its state dir for every response it handles, recording the project, the voice used, the text, and the audio file. An entry naming a real voice means synthesis worked and the problem is playback; `system fallback voice` means `edge-tts` wasn't found and it used the OS voice; **no entry at all** means the hook never ran or the response had no `TL;DR:` line to speak. Enabled envs only pick the hook up on their next `aello run`, so an env still in a session started beforehand stays silent until restarted.
 
 ## The generated `/sync` skill
 

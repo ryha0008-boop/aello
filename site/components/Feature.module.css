@@ -1,0 +1,40 @@
+.row {
+  display: grid;
+  gap: var(--base-size-48);
+  align-items: center;
+}
+
+.prose {
+  min-width: 0;
+}
+
+.text {
+  max-width: 52ch;
+  margin-top: var(--base-size-16);
+  color: var(--color-fg-muted);
+  text-wrap: pretty;
+}
+
+.text p + p {
+  margin-top: var(--base-size-16);
+}
+
+.text code {
+  font-size: 0.9285em;
+  color: var(--color-fg-on-dark-85);
+}
+
+.visual {
+  min-width: 0;
+}
+
+@media (min-width: 63.25rem) {
+  .row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--brand-Grid-spacing-column-gap);
+  }
+
+  .row[data-reversed='true'] .prose {
+    order: 2;
+  }
+}

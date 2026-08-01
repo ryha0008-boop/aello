@@ -2,7 +2,44 @@
 
 ## [Unreleased]
 
+### Added
+- **`--voice` capability — spoken responses.** A blueprint with `--voice` gets a
+  `Stop` hook that reads each response's trailing `TL;DR:` line aloud through a
+  free Edge neural voice, and a `SessionEnd` hook that returns the voice it
+  leased. The hook (and its two helper files) is copied **into the env** and
+  registered as `$CLAUDE_CONFIG_DIR/hooks/speak.py`, so it never points at a
+  checkout elsewhere on disk — a newly placed env speaks with no hand-editing,
+  and moving an unrelated directory can't silence it. The persona gains a section
+  asking for the TL;DR line the hook speaks (appended, never clobbered, so
+  enabling voice on an existing env works). State — voice pool, per-session
+  leases, mutes — is machine-wide, so concurrent envs each get a different voice
+  and queue behind one playback lock instead of talking over each other.
+  Available as `--voice` / `--no-voice` on `add` and `edit`, in the `init`
+  wizard, and as a row in the TUI capability checklist. Enabling it on an env
+  whose `Stop` hook was wired up by hand against a checkout **replaces** that
+  entry rather than adding beside it, so migrating doesn't speak every response
+  twice; unrelated hooks are left alone.
+- **`aello voice`** — the off switch: `mute` (optionally `--project`), `unmute`,
+  `stop` (cut off the current sentence), and `status`. It writes the shared state
+  directly, so it needs neither Python nor a placed env and works from any
+  directory — which is exactly where you are when a machine you didn't expect to
+  talk starts talking.
+- **Prebuilt macOS binaries** — `aello-aarch64-macos` (Apple Silicon) and
+  `aello-x86_64-macos` (Intel) now ship with every release, so macOS installs
+  with the same one-liner as Linux and `aello update` works there. The binaries
+  are unsigned; the installer strips the quarantine attribute for you, and the
+  README documents the manual `xattr -d com.apple.quarantine` step.
+- **A landing page**, in `site/` — a static Next.js build covering the install
+  one-liner, the three-command quick start, the capability table, and the
+  universal skills. Nothing in the CLI depends on it; `npm run build` in `site/`
+  emits plain HTML in `site/out/` for any static host.
+
 ### Changed
+- Releases are now **versioned**. Every build publishes an immutable `vX.Y.Z`
+  release (binaries + `SHA256SUMS`) alongside the existing rolling `latest` tag,
+  so you can pin or roll back to a specific version and package managers have a
+  stable URL to point at. `install.sh` and already-installed binaries keep using
+  the rolling tag exactly as before — nothing to change on your side.
 - `aello remove <name>` now **prompts for confirmation** before deleting a
   blueprint (`--yes` skips the prompt). A new `--purge` flag also deletes the
   placed `.claude-env-<name>/` env dir and its `claude-internal/<name>/` mirror
@@ -13,16 +50,101 @@
   one repo each keep their own handoff without overwriting each other. The
   SessionEnd hook archives the matching per-blueprint file.
 
+### Fixed
+- The SessionEnd self-heal no longer skips envs that already have a **third-party
+  `SessionEnd` hook**. It bailed whenever the `SessionEnd` key existed at all, so
+  adding any hook of your own permanently blocked aello from installing its own
+  transcript-archiving hook — envs placed before the feature existed would
+  silently never gain it. The check is now keyed on aello's own command, and its
+  hook group is appended alongside yours.
+
 ### Docs
+- `docs/capabilities.md` gains a "when it doesn't speak" section for `--voice`:
+  check `aello voice status` for a mute, then read the hook's `history.jsonl` —
+  a real voice name means synthesis worked, `system fallback voice` means
+  `edge-tts` wasn't found, and no entry at all means the hook never ran or the
+  response had no `TL;DR:` line.
+- `docs/concepts.md` now warns that a project-level `<project>/.claude/settings.json`
+  is **silently ignored** under aello (`CLAUDE_CONFIG_DIR` points at the env dir),
+  and says to use `<project>/.claude-env-<name>/settings.json` instead.
 - Added a dedicated **macOS (build from source)** install section to the README
   (`cargo install --git …`, Rust-toolchain prerequisite, and the caveat that
   `aello update` only ships Linux/Windows binaries so macOS updates by rebuilding).
 
+### Security
+- `aello update` now verifies the downloaded binary's **SHA-256** against a
+  `SHA256SUMS` asset published with the release before installing it, so a
+  hijacked release asset or a TLS-intercepted download can't silently replace
+  your binary. Releases without the manifest still update (the check is skipped
+  with a note). The download is also now size-capped (128 MiB) so a malicious
+  endpoint can't stream unbounded data and OOM the process.
+- A hand-edited blueprint name in `config.toml` is now re-validated before it's
+  used to build filesystem paths. `validate_name` only ran on config *writes*;
+  read paths interpolated the stored name straight into `.claude-env-<name>` /
+  `claude-internal/<name>`, so a name like `../../evil` could escape the project
+  dir when placing (or, under `remove --purge`, deleting). `run` and
+  `remove --purge` now re-gate the name at the sink.
+- `aello login` / `aello init` no longer echo the token line to their own
+  stdout. The capture loop tees `claude setup-token`'s output so the auth URL
+  shows on a headless box, but it now redacts the line carrying the `sk-ant-…`
+  token — previously running login under any stdout capture (`| tee`, a CI job
+  log, `script`, tmux) persisted the long-lived token in cleartext in that log.
+- On Unix, `config.toml` (which holds the plaintext, non-rotating OAuth token)
+  and its directory are now written owner-only (`0600`/`0700`) instead of the
+  default world-readable `0644`, so another local user or a low-privilege
+  process can no longer read the token. No-op on Windows.
+
 ### Fixed
+- The TUI now restores your terminal (raw mode, alternate screen, cursor) if it
+  panics, instead of leaving the shell unusable, and undoes raw mode if it can't
+  enter the alternate screen. The session-resume list also no longer risks a
+  panic truncating a non-ASCII session id (it now truncates by character), and
+  the in-app docs reader's scroll uses saturating arithmetic. A stale `/sync`
+  skill that can't be removed when a blueprint drops all capabilities now
+  surfaces the error instead of being silently re-committed.
+- The `github` cap no longer appends a near-duplicate `.gitignore` line when a
+  `.claude-env-*/` (trailing-slash) entry already exists. And aello no longer
+  alphabetically reorders the keys in Claude-owned JSON (`.claude.json`,
+  `settings.json`) when it reads and rewrites them, keeping git diffs clean.
+- `aello edit --rename` is now transactional. It previously renamed the env dir
+  first and only then checked whether the `claude-internal/<new>/` mirror
+  collided — so a collision (or any fs error) left the env dir already moved but
+  the config not saved, and `run <old>` re-scaffolded a fresh env, orphaning the
+  renamed one. Both destinations are now pre-checked before any move, and a
+  failed mirror move rolls the env-dir move back.
+- **Editing a blueprint in the TUI (`E`) no longer downgrades its model or
+  drops a custom persona.** The curated pickers can't represent a full
+  `claude-*` model id, the `default` alias, or a custom persona path, so opening
+  a CLI-configured blueprint and saving — even just to toggle one capability —
+  used to rewrite its model to `opus` and its persona to `none`. The edit flow
+  now preserves the original model/persona unless you actually change that
+  picker, and shows a `KEEPING = …` hint when the stored value is off-list.
+- **Config/token loss on a transient read error is prevented.** `config::load()`
+  previously turned *any* I/O error (not just "file missing") into an empty
+  default `Config`; since every command is `load → mutate → save`, one momentary
+  file lock — routine on Windows from OneDrive, an AV scanner, or the Search
+  Indexer holding `config.toml` — made the next `save()` overwrite it with an
+  empty default, destroying every blueprint and the non-rotating OAuth token. It
+  now defaults **only** when the file genuinely doesn't exist and propagates all
+  other errors so the command aborts instead of clobbering your config.
 - Blueprint names are now restricted to **ASCII** alphanumerics (plus `-`/`_`).
   Names like `café` or full-width characters previously slipped past
   `validate_name` yet made fragile, cross-platform-hostile `.claude-env-<name>/`
   directory names; the error message already promised "letters, digits".
+- Blueprint names that are **Windows reserved device names** (`CON`, `PRN`,
+  `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9`, any case) are now rejected at
+  creation. The `github` cap creates a bare `claude-internal/<name>/` component,
+  which Windows refuses for these names — previously the error surfaced only
+  late, as an opaque OS failure during placement.
+- Adding (or renaming to) a blueprint whose name differs from an existing one
+  **only in case** (e.g. `Coder` vs `coder`) is now rejected. Both map to the
+  same `.claude-env-<name>/` dir on Windows/macOS default filesystems, so
+  running one after the other silently clobbered the other's state.
+- Project paths containing an underscore or space are now encoded correctly for
+  session/memory lookup. Claude Code folds **every** non-alphanumeric character
+  to `-` (so `…\human_behavior` → `…-human-behavior`), but aello only folded
+  `\ / : .` — leaving `_`/spaces intact pointed seeded memory and `--resume` at
+  a directory Claude never reads, a silent no-op for those projects.
 - `aello init` now aborts on end-of-input instead of silently accepting every
   default, so a non-interactive or closed stdin can no longer auto-create a
   blueprint you never confirmed. `--model` also rejects a bare `claude-`.
