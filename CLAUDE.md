@@ -8,6 +8,7 @@ Isolated Claude Code environments — like Python venvs, but for AI agents. Clau
 - `CHANGELOG.md` — version history of user-facing changes. Every user-facing change gets an entry, in the same commit as the code.
 - `docs/` — deeper reference: `concepts.md` (isolation model, auth, contextdb), `capabilities.md` (capability → scaffold/`/sync` mapping, git attribution, deferred work), `migrate.md` (migrating an existing repo onto aello: validated flow + gotchas). **`docs/` is also the in-app help**: it's embedded into the binary (`docs.rs`) and rendered by `aello docs` (CLI) and the TUI reader (`?`), so `docs/` is the single source of truth — add a `.md` and it appears with no code change. Keep these in sync with behavior.
 - This file (`CLAUDE.md`) — agent/architecture notes. Maintain as the design evolves.
+- `site/` — the landing page. A **static Next.js** app, entirely separate from the Rust crate: `cargo build`/`cargo test` never touch it, and it ships nothing into the binary. Its design tokens are transcribed verbatim from a captured GitHub design system into the `:root` block of `site/app/globals.css` — change values there, never inline in a component. `npm run build` in `site/` emits plain HTML in `site/out/`. See `site/README.md`; update the page when the install steps, command list, or capability table change.
 
 ## Architecture
 

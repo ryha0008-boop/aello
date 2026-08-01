@@ -1,0 +1,128 @@
+.card {
+  margin: 0;
+  background: var(--color-canvas-subtle);
+  border: var(--borderWidth-thin) solid var(--color-border-default);
+  border-radius: var(--brand-borderRadius-xlarge);
+  box-shadow: var(--brand-River-visual-shadow);
+  overflow: hidden;
+}
+
+.filename {
+  padding: var(--base-size-12) var(--base-size-24);
+  background: var(--color-canvas-inset);
+  border-bottom: var(--borderWidth-thin) solid var(--color-border-default);
+  font-family: var(--brand-fontStack-monospace);
+  font-size: var(--text-caption-size);
+  letter-spacing: 0.06em;
+  color: var(--color-fg-muted);
+}
+
+.note,
+.voice {
+  padding: var(--base-size-24);
+}
+
+.noteFrom {
+  font-family: var(--brand-fontStack-monospace);
+  font-size: var(--text-caption-size);
+  color: var(--color-fg-subtle);
+}
+
+.noteHeading {
+  margin-top: var(--base-size-20);
+  font-size: var(--brand-text-size-100);
+  font-weight: 550;
+  color: var(--color-accent-bright);
+}
+
+.noteLine {
+  margin-top: var(--base-size-4);
+  font-size: var(--brand-text-size-100);
+  color: var(--color-fg-muted);
+  text-wrap: pretty;
+}
+
+.noteLine code,
+.mute code {
+  font-size: 0.9285em;
+  color: var(--color-fg-on-dark-85);
+}
+
+.spoken {
+  font-size: var(--brand-text-size-350);
+  line-height: 1.5;
+  color: var(--color-fg-default);
+  text-wrap: pretty;
+}
+
+.spokenLabel {
+  font-family: var(--brand-fontStack-monospace);
+  color: var(--color-accent-bright);
+}
+
+.meta {
+  display: flex;
+  align-items: center;
+  gap: var(--base-size-8);
+  margin-top: var(--base-size-16);
+  font-size: var(--brand-text-size-100);
+  color: var(--color-fg-muted);
+}
+
+.wave {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--base-size-2);
+  height: var(--base-size-16);
+}
+
+.wave i {
+  display: block;
+  width: var(--base-size-2);
+  height: 40%;
+  border-radius: var(--borderRadius-full);
+  background: var(--color-accent-bright);
+  animation: pulse 1.4s var(--brand-animation-easing-default) infinite;
+}
+
+.wave i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.wave i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+.wave i:nth-child(4) {
+  animation-delay: 0.45s;
+}
+.wave i:nth-child(5) {
+  animation-delay: 0.6s;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    height: 30%;
+    opacity: 0.5;
+  }
+  50% {
+    height: 100%;
+    opacity: 1;
+  }
+}
+
+.mute {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--base-size-12);
+  padding: var(--base-size-16) var(--base-size-24);
+  background: var(--color-canvas-inset);
+  border-top: var(--borderWidth-thin) solid var(--color-border-default);
+  font-size: var(--text-code-block-size);
+}
+
+.muteNote {
+  font-family: var(--brand-fontStack-sansSerif);
+  font-size: var(--brand-text-size-100);
+  color: var(--color-fg-muted);
+}

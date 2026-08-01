@@ -1,11 +1,11 @@
 ---
 name: aello-dev-gotchas
-description: "Windows dev gotchas for aello — locked-exe install workaround, print-mode doesn't load persistent memory, universal skills don't backfill, gh issue view needs --json, Claude cwd-encoding folds all non-alphanumerics to '-'"
+description: "Windows dev gotchas for aello — locked-exe install workaround, print-mode doesn't load persistent memory, universal skills don't backfill, gh issue view needs --json, Claude cwd-encoding folds all non-alphanumerics to '-', how to screenshot a page without downloading a browser"
 metadata: 
   node_type: memory
   type: reference
   originSessionId: 72999d30-dfc8-4f50-aac5-cbe588b64645
-  modified: 2026-08-01T11:01:28.018Z
+  modified: 2026-08-01T12:37:35.281Z
 ---
 
 Two non-obvious things when developing/testing aello on Windows:
@@ -23,3 +23,5 @@ Two non-obvious things when developing/testing aello on Windows:
 6. **Print mode fires hooks even though it skips memory.** Complementing #2: `aello run <bp> -p "..."` does load the persona and does run `Stop`/`SessionEnd` hooks, so it's a valid way to place an env and exercise hook behaviour headlessly. Only persistent *memory* injection is missing.
 
 7. **Claude Code's cwd→projects-dir encoding folds EVERY non-alphanumeric char to `-`, not just separators.** Verified empirically 2026-07-08: a real folder `…\work\human_behavior` is stored by Claude under `~/.claude/projects/` as `…-work-human-behavior` (underscore → hyphen; case preserved). So the rule is `replace([^A-Za-z0-9], '-')` — spaces and `_` fold too, not only `\ / : .`. aello's `sessions::encode_project_path` previously only folded `\ / : .`, so for any project path containing `_`/space it pointed seeded memory + `--resume` at a dir Claude never reads (silent no-op). Fixed on branch `audit-fixes-2026-07-08`. This is the ground truth behind the path-identity requirement in gotcha #2. See [[aello-architecture-decisions]].
+
+8. **This machine can screenshot a web page without downloading a browser.** Playwright *browsers* already sit at `%LOCALAPPDATA%\ms-playwright` (several chromium revisions), but the `playwright` npm package isn't installed in any project — and a fresh `npm i playwright` then fails at launch with "Executable doesn't exist at …chromium_headless_shell-<newer rev>", because the new package expects a revision that isn't there. Don't run `npx playwright install` (~150 MB); install the package into the scratchpad and pass `executablePath` to a revision that does exist, e.g. `chromium.launch({ executablePath: 'C:\\Users\\H\\AppData\\Local\\ms-playwright\\chromium-1228\\chrome-win64\\chrome.exe' })`. Second trap: `fullPage` screenshots of a page using IntersectionObserver scroll-reveals come out with **blank mid-page sections** — jumping straight to the bottom and back never intersects the middle. Step the scroll down in half-viewport increments first, then capture.

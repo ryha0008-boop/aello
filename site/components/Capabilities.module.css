@@ -1,0 +1,73 @@
+.inlineCode {
+  font-size: 0.9285em;
+  color: var(--color-fg-on-dark-85);
+}
+
+.grid {
+  display: grid;
+  gap: var(--base-size-20);
+  margin-top: var(--base-size-48);
+  padding: 0;
+  list-style: none;
+}
+
+/* The Reveal wrapper is the grid item, so it has to carry the full row height. */
+.slot {
+  min-width: 0;
+}
+
+.card {
+  height: 100%;
+  padding: var(--base-size-24);
+  background: var(--color-canvas-subtle);
+  border: var(--borderWidth-thin) solid var(--color-border-default);
+  border-radius: var(--brand-borderRadius-large);
+  transition:
+    border-color var(--brand-Card-animation-duration) var(--brand-Card-animation-easing),
+    background var(--brand-Card-animation-duration) var(--brand-Card-animation-easing);
+}
+
+.card:hover {
+  background: var(--color-canvas-glass-subtle);
+  border-color: var(--color-border-subtle);
+}
+
+.card[data-accent='true'] {
+  background: var(--color-canvas-green-subtle);
+  border-color: rgba(95, 237, 131, 0.35);
+}
+
+.flag {
+  font-size: var(--brand-text-size-100);
+  color: var(--color-accent-bright);
+}
+
+.scaffolds {
+  margin-top: var(--base-size-12);
+  font-size: var(--brand-text-size-300);
+  line-height: 1.5;
+  color: var(--color-fg-default);
+  text-wrap: pretty;
+}
+
+.sync {
+  margin-top: var(--base-size-12);
+  padding-top: var(--base-size-12);
+  border-top: var(--borderWidth-thin) solid var(--color-border-subtle);
+  font-size: var(--brand-text-size-100);
+  color: var(--color-fg-muted);
+  text-wrap: pretty;
+}
+
+@media (min-width: 48rem) {
+  .grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: var(--base-size-32);
+  }
+}
+
+@media (min-width: 63.25rem) {
+  .grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}

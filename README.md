@@ -212,6 +212,10 @@ git clone https://github.com/ryha0008-boop/aello && cd aello
 cargo build --release && cargo test     # both green before you start
 ```
 
+The `site/` directory holds the landing page — a static Next.js app that's independent of the
+CLI. You only need Node if you're changing the page itself; `cargo build` and `cargo test`
+ignore it entirely.
+
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full dev loop and conventions, and [CLAUDE.md](CLAUDE.md) for the architecture deep-dive (every `src/` module is mapped there).
 
 ## License

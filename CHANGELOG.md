@@ -29,6 +29,10 @@
   with the same one-liner as Linux and `aello update` works there. The binaries
   are unsigned; the installer strips the quarantine attribute for you, and the
   README documents the manual `xattr -d com.apple.quarantine` step.
+- **A landing page**, in `site/` — a static Next.js build covering the install
+  one-liner, the three-command quick start, the capability table, and the
+  universal skills. Nothing in the CLI depends on it; `npm run build` in `site/`
+  emits plain HTML in `site/out/` for any static host.
 
 ### Changed
 - Releases are now **versioned**. Every build publishes an immutable `vX.Y.Z`

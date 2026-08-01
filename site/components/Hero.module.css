@@ -1,0 +1,109 @@
+.hero {
+  padding-block: var(--base-size-80) var(--brand-Hero-regular-padding);
+  background:
+    radial-gradient(60rem 32rem at 12% -10%, rgba(8, 135, 43, 0.16), transparent 60%),
+    radial-gradient(48rem 28rem at 92% 4%, rgba(80, 73, 194, 0.14), transparent 62%);
+}
+
+.title {
+  max-width: 22ch;
+  margin-top: var(--base-size-24);
+  font-family: var(--brand-fontStack-sansSerifAlt);
+  font-size: var(--brand-text-size-1000);
+  line-height: var(--brand-text-lineHeight-1000);
+  font-weight: var(--brand-heading-weight-1000);
+  letter-spacing: var(--brand-text-letterSpacing-1000);
+  text-wrap: balance;
+}
+
+.lead {
+  max-width: 60ch;
+  margin-top: var(--base-size-24);
+  font-size: var(--brand-text-size-350);
+  line-height: 1.5;
+  color: var(--color-fg-on-dark-85);
+  text-wrap: pretty;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--base-size-12);
+  margin-top: var(--base-size-32);
+}
+
+.primary,
+.secondary {
+  padding: var(--base-size-12) var(--base-size-24);
+  font-size: var(--brand-text-size-200);
+  border-radius: var(--borderRadius-medium);
+  transition:
+    background var(--brand-control-animation-duration) var(--brand-animation-easing-glide),
+    border-color var(--brand-control-animation-duration) var(--brand-animation-easing-glide);
+}
+
+.primary {
+  color: var(--color-fg-default);
+  background: var(--color-accent-emphasis);
+  border: var(--borderWidth-thin) solid transparent;
+}
+
+.primary:hover {
+  background: var(--color-accent-emphasis-hover);
+}
+
+.primary:focus-visible {
+  outline-offset: -2px;
+}
+
+.secondary {
+  color: var(--color-accent-fg);
+  background: var(--color-canvas-dark-glass);
+  border: var(--borderWidth-thin) solid var(--color-border-full);
+}
+
+.secondary:hover {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: var(--color-border-subtle);
+}
+
+.installLine {
+  max-width: 44rem;
+  margin-top: var(--base-size-32);
+}
+
+.platforms {
+  margin-top: var(--base-size-8);
+  font-size: var(--brand-text-size-100);
+  color: var(--color-fg-muted);
+}
+
+.platforms code {
+  font-size: 0.9285em;
+  color: var(--color-fg-on-dark-85);
+}
+
+.demoSlot {
+  margin-top: var(--base-size-64);
+}
+
+@media (max-width: 63.25rem) {
+  .title {
+    font-size: var(--brand-text-size-900);
+  }
+}
+
+@media (max-width: 48rem) {
+  .hero {
+    padding-block: var(--base-size-48) var(--base-size-80);
+  }
+
+  .title {
+    font-size: 2.75rem;
+    letter-spacing: -0.025em;
+  }
+
+  .lead {
+    font-size: var(--brand-text-size-300);
+  }
+}
