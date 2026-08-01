@@ -27,7 +27,7 @@ curl -fsSL https://raw.githubusercontent.com/ryha0008-boop/aello/main/install.sh
 
 Downloads the latest release into `~/.local/bin` (override with `AELLO_BIN_DIR`), makes it executable, clears the macOS quarantine flag, and prints a PATH hint if that dir isn't on your `$PATH`. Platforms without a prebuilt binary (e.g. arm64 Linux) exit with a build-from-source pointer.
 
-Every release also publishes an immutable `vX.Y.Z` tag if you'd rather pin a version — swap `latest` for `v0.1.52` in any download URL below. `aello update` always moves you to the newest release.
+Every release also publishes an immutable `vX.Y.Z` tag if you'd rather pin a version — swap `latest` for `v0.1.54` in any download URL below. `aello update` always moves you to the newest release.
 
 ### Linux (x86_64) — manual
 
