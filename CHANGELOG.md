@@ -55,6 +55,11 @@
   hook group is appended alongside yours.
 
 ### Docs
+- `docs/capabilities.md` gains a "when it doesn't speak" section for `--voice`:
+  check `aello voice status` for a mute, then read the hook's `history.jsonl` —
+  a real voice name means synthesis worked, `system fallback voice` means
+  `edge-tts` wasn't found, and no entry at all means the hook never ran or the
+  response had no `TL;DR:` line.
 - `docs/concepts.md` now warns that a project-level `<project>/.claude/settings.json`
   is **silently ignored** under aello (`CLAUDE_CONFIG_DIR` points at the env dir),
   and says to use `<project>/.claude-env-<name>/settings.json` instead.

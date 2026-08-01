@@ -33,6 +33,8 @@ The global persona (`--claude-md`) is separate from capabilities — it writes t
 
 **Prerequisites.** Python 3 on `PATH`. Without `edge-tts` (`pip install edge-tts`) it falls back to the OS voice (SAPI / `say` / `spd-say` / `espeak`). Linux playback needs one of `mpv`, `ffplay`, `mpg123`, `cvlc`; macOS and Windows are covered by the OS. Ducking other audio while it speaks is Windows-only (`pycaw`) and a no-op elsewhere.
 
+**When it doesn't speak.** Check `aello voice status` first — a global or per-project mute is the usual answer. Beyond that, the hook appends a line to `history.jsonl` in its state dir for every response it handles, recording the project, the voice used, the text, and the audio file. An entry naming a real voice means synthesis worked and the problem is playback; `system fallback voice` means `edge-tts` wasn't found and it used the OS voice; **no entry at all** means the hook never ran or the response had no `TL;DR:` line to speak. Enabled envs only pick the hook up on their next `aello run`, so an env still in a session started beforehand stays silent until restarted.
+
 ## The generated `/sync` skill
 
 `/sync` replaces the old auto-commit-every-turn hooks. It's **manual only** (`disable-model-invocation: true`) — nothing happens until you type `/sync` inside Claude.
