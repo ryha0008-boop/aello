@@ -250,6 +250,9 @@ struct App {
     /// Launch directory as "PARENT / CURRENT", uppercased — shown top-right.
     dir: String,
     has_token: bool,
+    /// Machine-wide voice mute, cached so the footer doesn't re-read the shared
+    /// state file every frame. Refreshed on launch and whenever M toggles it.
+    voice_muted: bool,
     /// Max scroll offset for the Help reader, computed from the wrapped content
     /// height during draw (the only place the render width is known) and read
     /// back when handling scroll keys so they can't run past the last line.
@@ -271,6 +274,7 @@ impl App {
             mode: Mode::Normal,
             status: String::new(),
             dir: launch_dir_label(),
+            voice_muted: crate::voice::is_globally_muted(),
             help_scroll_max: std::cell::Cell::new(0),
         };
         app.rebuild_view();
@@ -438,6 +442,19 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                     let dir = browse_start();
                     let entries = list_dirs(&dir);
                     app.mode = Mode::Config { dir, entries, sel: 0, new: None };
+                }
+                KeyCode::Char('m') => {
+                    // The mute is machine-wide, not per blueprint — the point is
+                    // one key that silences everything currently talking at you.
+                    match crate::voice::toggle_global_mute() {
+                        Ok(muted) => {
+                            app.voice_muted = muted;
+                            app.status =
+                                if muted { "VOICE MUTED (ALL ENVS)" } else { "VOICE UNMUTED" }
+                                    .into();
+                        }
+                        Err(e) => app.status = e.to_string().to_uppercase(),
+                    }
                 }
                 KeyCode::Char('l') => return Ok(PostExit::Login),
                 KeyCode::Char('u') => return Ok(PostExit::Update),
@@ -892,6 +909,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         keyhint("E", "EDIT"),
         keyhint("D", "DELETE"),
         keyhint("C", "CONTEXTDB"),
+        keyhint("M", if app.voice_muted { "UNMUTE" } else { "MUTE" }),
         keyhint("L", "LOGIN"),
         keyhint("U", "UPDATE"),
         keyhint("?", "DOCS"),
@@ -908,13 +926,19 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
     } else {
         format!("{} BLUEPRINT(S)", app.blueprints.len())
     };
-    let telemetry = Line::from(vec![
+    let mut telemetry = vec![
         Span::styled(
             format!(" AELLO v{VERSION} · {count} · "),
             Style::default().fg(DIM),
         ),
         auth_span,
-    ]);
+    ];
+    // Only surfaced while muted — that's the state you'd otherwise mistake for
+    // the voice capability being broken.
+    if app.voice_muted {
+        telemetry.push(Span::styled(" · VOICE: MUTED", Style::default().fg(AMBER)));
+    }
+    let telemetry = Line::from(telemetry);
     f.render_widget(
         Paragraph::new(vec![hints, status, telemetry]).style(Style::default().bg(BG)),
         area,

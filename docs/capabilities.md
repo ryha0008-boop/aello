@@ -29,7 +29,7 @@ The global persona (`--claude-md`) is separate from capabilities — it writes t
 
 **Migrating a hand-wired hook.** If an env already has a `Stop` hook you added yourself pointing at a checkout (`python "C:/…/revoiced/speak.py"`), enabling `voice` **replaces** it with the env-relative one on the next `run`. It isn't added beside it — that would speak every response twice — and it isn't left alone, since that absolute path is the coupling the capability exists to remove. Hooks that aren't a `speak.py` are never touched.
 
-**Turning it off.** `aello edit <name> --no-voice` deregisters both hooks on the next `run` (leaving other hooks alone). For an immediate off switch that needs neither Python nor a placed env, use `aello voice mute` (or `mute --project`, `stop`, `status`) — it writes the shared state directly, so it works from any directory and applies to every env at once.
+**Turning it off.** `aello edit <name> --no-voice` deregisters both hooks on the next `run` (leaving other hooks alone). For an immediate off switch that needs neither Python nor a placed env, use `aello voice mute` (or `mute --project`, `stop`, `status`) — it writes the shared state directly, so it works from any directory and applies to every env at once. The TUI has the same switch on `M`, which toggles the global mute and shows `VOICE: MUTED` in the footer while it's on.
 
 **Prerequisites.** Python 3 on `PATH`. Without `edge-tts` (`pip install edge-tts`) it falls back to the OS voice (SAPI / `say` / `spd-say` / `espeak`). Linux playback needs one of `mpv`, `ffplay`, `mpg123`, `cvlc`; macOS and Windows are covered by the OS. Ducking other audio while it speaks is Windows-only (`pycaw`) and a no-op elsewhere.
 

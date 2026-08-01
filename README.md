@@ -147,7 +147,9 @@ aello update                                   # self-update to the latest relea
 
 ### TUI keys
 
-`↑/↓` move · `↵` run · `F` filter · `S` sessions · `A` add (guided) · `E` edit (guided) · `D` delete · `C` contextdb folder · `L` login · `U` update · `?` docs · `Q` quit.
+`↑/↓` move · `↵` run · `F` filter · `S` sessions · `A` add (guided) · `E` edit (guided) · `D` delete · `C` contextdb folder · `M` mute voice · `L` login · `U` update · `?` docs · `Q` quit.
+
+`M` toggles the same machine-wide mute as `aello voice mute` — it silences every env, not just the selected blueprint, and cuts off whatever is speaking. While muted the footer reads `VOICE: MUTED`, so a silent machine doesn't look like a broken hook.
 
 By default the registry shows only blueprints already placed in the current directory (their `.claude-env-<name>/` exists), which keeps a per-project blueprint workflow tidy. `F` toggles between that local subset and all blueprints; when nothing is placed here yet, all are shown.
 

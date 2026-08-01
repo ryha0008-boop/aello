@@ -29,6 +29,12 @@
   with the same one-liner as Linux and `aello update` works there. The binaries
   are unsigned; the installer strips the quarantine attribute for you, and the
   README documents the manual `xattr -d com.apple.quarantine` step.
+- **`M` mutes the voice from the TUI** — the same machine-wide switch as
+  `aello voice mute`, on a single key, so you don't have to leave the TUI (or
+  find a script path) when a machine you didn't expect to talk starts talking.
+  It silences every env and cuts off the sentence already playing; while muted
+  the footer reads `VOICE: MUTED`, so a quiet machine isn't mistaken for a
+  broken hook.
 - **A landing page**, in `site/` — a static Next.js build covering the install
   one-liner, the three-command quick start, the capability table, and the
   universal skills. Nothing in the CLI depends on it; `npm run build` in `site/`

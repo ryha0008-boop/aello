@@ -113,6 +113,31 @@ pub fn unmute(project_only: bool) -> Result<()> {
     Ok(())
 }
 
+/// Read the machine-wide mute flag. The TUI shows this in its footer, so it has
+/// to be a plain query — no printing, and no error when the hook has never run
+/// and the state file doesn't exist yet.
+pub fn is_globally_muted() -> bool {
+    data_dir()
+        .map(|dir| read_state(&dir).get("global").and_then(|g| g.as_bool()).unwrap_or(false))
+        .unwrap_or(false)
+}
+
+/// Flip the machine-wide mute, returning the new state. Muting also cuts off the
+/// sentence already playing, exactly as `aello voice mute` does. Print-free: the
+/// TUI owns the alternate screen, so a stray println would corrupt the display.
+pub fn toggle_global_mute() -> Result<bool> {
+    let dir = data_dir()?;
+    let mut state = read_state(&dir);
+    let obj = state.as_object_mut().context("voice state is not an object")?;
+    let muted = !obj.get("global").and_then(|g| g.as_bool()).unwrap_or(false);
+    obj.insert("global".into(), serde_json::Value::Bool(muted));
+    write_state(&dir, &state)?;
+    if muted {
+        bump_stop_token(&dir)?;
+    }
+    Ok(muted)
+}
+
 /// Stop the current utterance without changing any mute setting.
 pub fn stop() -> Result<()> {
     bump_stop_token(&data_dir()?)?;
@@ -190,6 +215,36 @@ mod tests {
         bump_stop_token(dir.path()).unwrap();
         let second = std::fs::read_to_string(dir.path().join("run").join("stop")).unwrap();
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn toggling_the_mute_flips_it_and_leaves_the_hook_s_keys_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        write_state(
+            dir.path(),
+            &serde_json::json!({"global": false, "presets": [{"id": "a"}], "duck": 15}),
+        )
+        .unwrap();
+
+        // The same logic the TUI's M key runs, against a temp dir rather than
+        // the real machine-wide one.
+        let flip = |dir: &Path| {
+            let mut state = read_state(dir);
+            let obj = state.as_object_mut().unwrap();
+            let muted = !obj.get("global").and_then(|g| g.as_bool()).unwrap_or(false);
+            obj.insert("global".into(), serde_json::Value::Bool(muted));
+            write_state(dir, &state).unwrap();
+            muted
+        };
+
+        assert!(flip(dir.path()), "first press mutes");
+        assert_eq!(read_state(dir.path())["global"], serde_json::json!(true));
+        assert!(!flip(dir.path()), "second press unmutes");
+
+        let back = read_state(dir.path());
+        assert_eq!(back["global"], serde_json::json!(false));
+        assert_eq!(back["duck"], serde_json::json!(15));
+        assert_eq!(back["presets"].as_array().unwrap().len(), 1);
     }
 
     #[test]
