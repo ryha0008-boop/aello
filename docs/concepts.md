@@ -12,6 +12,7 @@ my-project/
 │   ├── CLAUDE.md             #   global persona (set once)
 │   ├── hooks/post-compact.py
 │   ├── hooks/session-end.py
+│   ├── hooks/speak.py        #   voice cap only — + duck.py, win_audio.ps1
 │   ├── skills/sync/SKILL.md  #   generated from this blueprint's capabilities
 │   ├── skills/handoff/SKILL.md       # universal — resume note to self
 │   ├── skills/note/SKILL.md          # universal — note to another env
@@ -29,6 +30,8 @@ my-project/
 ```
 
 The env dir is gitignored, so the skills, memory, and persona that define a blueprint would never reach git. With the `github` cap, `claude-internal/` (a tracked folder at the repo root) is a **one-way mirror** of that internal config — written *from* the env dir, never back into it, so the live env stays the single source of truth. Each blueprint mirrors into its own `claude-internal/<name>/` namespace, so multiple blueprints sharing one repo don't clobber each other. It's seeded at placement and refreshed by `/sync`. The persona snapshot is renamed (`persona.CLAUDE.md`) so Claude Code never auto-loads it as a second persona.
+
+**A project-level `<project>/.claude/settings.json` is silently ignored under aello.** Claude Code reads its settings from `CLAUDE_CONFIG_DIR`, which aello points at the env dir — so the per-project `.claude/` directory you'd use with a normal Claude Code install has no effect here, with no warning. Put hooks, permissions, and env vars in `<project>/.claude-env-<name>/settings.json` instead. This is per blueprint by design: two blueprints in one repo are meant to be able to disagree about their settings.
 
 ## Tracked source of truth vs derived artifacts
 

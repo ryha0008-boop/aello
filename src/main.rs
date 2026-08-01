@@ -12,6 +12,7 @@ mod sessions;
 mod templates;
 mod tui;
 mod update;
+mod voice;
 
 use models::{Blueprint, Capabilities, Instance};
 
@@ -50,6 +51,9 @@ enum Commands {
         /// `/sync` keeps README.md current.
         #[arg(long)]
         readme: bool,
+        /// Speak each response's TL;DR line aloud (text-to-speech).
+        #[arg(long)]
+        voice: bool,
     },
     /// List all blueprints.
     List {
@@ -111,6 +115,11 @@ enum Commands {
         /// Doc to print (slug, e.g. `concepts`). Omit to list available docs.
         name: Option<String>,
     },
+    /// Mute or unmute the voice capability (applies to every env).
+    Voice {
+        #[command(subcommand)]
+        action: VoiceAction,
+    },
     // More subcommands land here in later phases (sessions, ...).
 }
 
@@ -160,6 +169,34 @@ struct EditArgs {
     /// Disable the README.md capability.
     #[arg(long)]
     no_readme: bool,
+    /// Enable the voice (text-to-speech) capability.
+    #[arg(long)]
+    voice: bool,
+    /// Disable the voice (text-to-speech) capability.
+    #[arg(long)]
+    no_voice: bool,
+}
+
+/// Off switch for the `voice` capability. State is machine-wide, so these apply
+/// to every env at once and work from any directory.
+#[derive(Subcommand)]
+enum VoiceAction {
+    /// Silence the voice hook.
+    Mute {
+        /// Only this project, instead of everywhere.
+        #[arg(long)]
+        project: bool,
+    },
+    /// Let it speak again.
+    Unmute {
+        /// Only this project, instead of everywhere.
+        #[arg(long)]
+        project: bool,
+    },
+    /// Stop the sentence playing right now, without changing any mute.
+    Stop,
+    /// Show mute state and the voice pool.
+    Status,
 }
 
 fn main() {
@@ -185,8 +222,8 @@ fn main() {
     let cli = Cli::parse();
     let result = match cli.command {
         None => tui::run(),
-        Some(Commands::Add { name, model, claude_md, project_md, github, changelog, docs, readme }) => {
-            cmd_add(name, model, claude_md, Capabilities { project_md, github, changelog, docs, readme })
+        Some(Commands::Add { name, model, claude_md, project_md, github, changelog, docs, readme, voice }) => {
+            cmd_add(name, model, claude_md, Capabilities { project_md, github, changelog, docs, readme, voice })
         }
         Some(Commands::List { json }) => cmd_list(json),
         Some(Commands::Remove { name, yes, purge }) => cmd_remove(name, yes, purge),
@@ -198,6 +235,12 @@ fn main() {
         Some(Commands::Update) => update::run(),
         Some(Commands::Completions { shell }) => cmd_completions(shell),
         Some(Commands::Docs { name }) => cmd_docs(name),
+        Some(Commands::Voice { action }) => match action {
+            VoiceAction::Mute { project } => voice::mute(project),
+            VoiceAction::Unmute { project } => voice::unmute(project),
+            VoiceAction::Stop => voice::stop(),
+            VoiceAction::Status => voice::status(),
+        },
     };
 
     if let Err(e) = result {
@@ -402,6 +445,7 @@ fn cmd_edit(args: EditArgs) -> Result<()> {
     bp.caps.changelog = tri(args.changelog, args.no_changelog, bp.caps.changelog, "changelog")?;
     bp.caps.docs = tri(args.docs, args.no_docs, bp.caps.docs, "docs")?;
     bp.caps.readme = tri(args.readme, args.no_readme, bp.caps.readme, "readme")?;
+    bp.caps.voice = tri(args.voice, args.no_voice, bp.caps.voice, "voice")?;
     changed |= bp.caps != before;
 
     // Rename last: move on-disk artifacts for this project, then the config name.
@@ -559,6 +603,9 @@ fn cmd_init() -> Result<()> {
         changelog: prompt_bool("  CHANGELOG.md", false)?,
         docs: prompt_bool("  docs/ directory", false)?,
         readme: prompt_bool("  README.md", false)?,
+        // Not a /sync capability — it speaks responses instead of maintaining a
+        // file — so it's asked separately to avoid implying otherwise.
+        voice: prompt_bool("\n  voice: speak each response's TL;DR aloud", false)?,
     };
 
     cfg.blueprints.push(Blueprint {
@@ -695,6 +742,9 @@ fn caps_label(c: &Capabilities) -> String {
     }
     if c.readme {
         tags.push("readme");
+    }
+    if c.voice {
+        tags.push("voice");
     }
     if tags.is_empty() {
         "-".to_string()

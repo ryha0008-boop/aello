@@ -3,6 +3,27 @@
 ## [Unreleased]
 
 ### Added
+- **`--voice` capability — spoken responses.** A blueprint with `--voice` gets a
+  `Stop` hook that reads each response's trailing `TL;DR:` line aloud through a
+  free Edge neural voice, and a `SessionEnd` hook that returns the voice it
+  leased. The hook (and its two helper files) is copied **into the env** and
+  registered as `$CLAUDE_CONFIG_DIR/hooks/speak.py`, so it never points at a
+  checkout elsewhere on disk — a newly placed env speaks with no hand-editing,
+  and moving an unrelated directory can't silence it. The persona gains a section
+  asking for the TL;DR line the hook speaks (appended, never clobbered, so
+  enabling voice on an existing env works). State — voice pool, per-session
+  leases, mutes — is machine-wide, so concurrent envs each get a different voice
+  and queue behind one playback lock instead of talking over each other.
+  Available as `--voice` / `--no-voice` on `add` and `edit`, in the `init`
+  wizard, and as a row in the TUI capability checklist. Enabling it on an env
+  whose `Stop` hook was wired up by hand against a checkout **replaces** that
+  entry rather than adding beside it, so migrating doesn't speak every response
+  twice; unrelated hooks are left alone.
+- **`aello voice`** — the off switch: `mute` (optionally `--project`), `unmute`,
+  `stop` (cut off the current sentence), and `status`. It writes the shared state
+  directly, so it needs neither Python nor a placed env and works from any
+  directory — which is exactly where you are when a machine you didn't expect to
+  talk starts talking.
 - **Prebuilt macOS binaries** — `aello-aarch64-macos` (Apple Silicon) and
   `aello-x86_64-macos` (Intel) now ship with every release, so macOS installs
   with the same one-liner as Linux and `aello update` works there. The binaries
@@ -25,7 +46,18 @@
   one repo each keep their own handoff without overwriting each other. The
   SessionEnd hook archives the matching per-blueprint file.
 
+### Fixed
+- The SessionEnd self-heal no longer skips envs that already have a **third-party
+  `SessionEnd` hook**. It bailed whenever the `SessionEnd` key existed at all, so
+  adding any hook of your own permanently blocked aello from installing its own
+  transcript-archiving hook — envs placed before the feature existed would
+  silently never gain it. The check is now keyed on aello's own command, and its
+  hook group is appended alongside yours.
+
 ### Docs
+- `docs/concepts.md` now warns that a project-level `<project>/.claude/settings.json`
+  is **silently ignored** under aello (`CLAUDE_CONFIG_DIR` points at the env dir),
+  and says to use `<project>/.claude-env-<name>/settings.json` instead.
 - Added a dedicated **macOS (build from source)** install section to the README
   (`cargo install --git …`, Rust-toolchain prerequisite, and the caveat that
   `aello update` only ships Linux/Windows binaries so macOS updates by rebuilding).

@@ -21,10 +21,16 @@ pub struct Capabilities {
     /// Keep README.md current.
     #[serde(default)]
     pub readme: bool,
+    /// Speak each response's `TL;DR:` line aloud (text-to-speech `Stop` hook).
+    #[serde(default)]
+    pub voice: bool,
 }
 
 impl Capabilities {
-    /// True if anything is enabled — i.e. there's a reason to seed `/sync`.
+    /// True if anything `/sync` covers is enabled — i.e. there's a reason to seed
+    /// the skill. Deliberately excludes `voice`: it maintains no project file and
+    /// contributes no `/sync` section, so a voice-only blueprint must not get a
+    /// `/sync` skill with nothing in it.
     pub fn any(&self) -> bool {
         self.project_md || self.github || self.changelog || self.docs || self.readme
     }

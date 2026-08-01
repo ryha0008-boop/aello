@@ -5,3 +5,4 @@
 - [working style](working-style.md) — user does not read plans, give decisions to choose from
 - [aello dev gotchas](aello-dev-gotchas.md) — Windows locked-exe install fix; print mode doesn't load memory; universal skills don't backfill; gh issue view needs --json; Claude cwd-encoding folds all non-alphanumerics to '-'
 - [aello open source](aello-open-source.md) — license/contributor/domain decisions; stay pseudonymous; Tier-1 done
+- [aello voice capability](aello-voice-capability.md) — where revoiced lives, the shared state.json contract, edge-tts is global, existing envs need a re-run

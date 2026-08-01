@@ -23,6 +23,30 @@ pub fn builtin(name: &str) -> Option<&'static str> {
     }
 }
 
+/// Persona section appended when the `voice` capability is on. The TTS hook
+/// speaks the trailing `TL;DR:` line and nothing else, so without this the hook
+/// has nothing to say — it blocks the turn once asking for the line, then gives
+/// up. Appended to whatever persona the blueprint uses (built-in or custom)
+/// rather than baked into the templates, so non-voice blueprints stay unchanged.
+pub const VOICE_TLDR: &str = r#"
+## End every response with a TL;DR
+
+End **every** response with a final line in exactly this form:
+
+```
+TL;DR: <two sentences>
+```
+
+Two sentences, no more. Say what happened and what it means or what's next —
+the outcome, not the steps. No bullets, no bold, nothing after it.
+
+This is not decoration: the voice hook speaks that line and nothing else, so it
+is the only part of a response that gets heard. A response without it is
+rejected and you will be asked to add one before the turn can end. The user
+skims for keywords rather than reading in full, so the TL;DR is also the part
+they actually read.
+"#;
+
 /// Resolve a blueprint's `claude_md` value to CLAUDE.md content: a built-in
 /// name returns the bundled template; anything else is read as a file path.
 pub fn resolve(claude_md: &str) -> Result<String> {
