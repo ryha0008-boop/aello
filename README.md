@@ -173,7 +173,9 @@ The voice is **not** a capability and there is nothing to turn on. Every env get
 
 Silence is a runtime setting, not a property of a blueprint: `aello voice mute` (or `M` in the TUI) covers every env at once, `mute --project` covers one project. An env is never made quiet by placing it differently.
 
-The hook is copied **into the env** and registered as `$CLAUDE_CONFIG_DIR/hooks/speak.py`, so it never points at a checkout somewhere else on disk: moving or renaming any other directory can't silence it, and a newly placed env speaks with no hand-editing.
+The hook is copied **into the env** and registered as `$CLAUDE_CONFIG_DIR/hooks/speak.py`, so it never points at a checkout somewhere else on disk: moving or renaming any other directory can't silence it, and a newly placed env speaks with no hand-editing. It is five files — `speak.py` plus `duck.py`, `focus.py`, `notify.py` and `win_audio.ps1` beside it — copied as a set on every placement, so an env that has fallen behind catches up on its next `run`.
+
+Each spoken line also goes out as a **desktop notification**, for the times you're in another window while an agent works. On macOS and Linux that needs `osascript` or `notify-send`; on Windows a toast is always shown *as* some registered application, and one sent under an identity Windows doesn't know is dropped without an error — so the toast appears only where the [revoiced](https://github.com/ryha0008-boop/revoiced) station has registered its own, and elsewhere speech simply carries on alone.
 
 Its state — the voice pool, per-session leases, mute flags — lives in one machine-wide folder (`%LOCALAPPDATA%\revoiced`, `~/Library/Application Support/revoiced`, `$XDG_DATA_HOME/revoiced`), shared by every env. So concurrent envs each lease a different voice, playback is serialised machine-wide instead of overlapping, and a single mute covers all of them:
 
@@ -182,7 +184,7 @@ aello voice mute              # silence every env, and stop the current sentence
 aello voice mute --project    # silence just this project
 aello voice unmute            # (--project too)
 aello voice stop              # cut off what's speaking now, without muting
-aello voice status            # mute state + pool size
+aello voice status            # hook version, mute state, pool size
 ```
 
 These work from any directory and need no Python — useful precisely when a machine you didn't expect to talk starts talking.
