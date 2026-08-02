@@ -76,6 +76,26 @@
   SessionEnd hook archives the matching per-blueprint file.
 
 ### Fixed
+- **`aello edit <name> --model` now actually reaches an env that has already been
+  placed.** `settings.json` is the only thing that tells Claude Code which model
+  to use, and it was written only when it didn't already exist — so editing the
+  model updated `config.toml`, `.aello.toml` and `aello list` while the env kept
+  running the model it was first placed with, indefinitely, and `edit` still
+  reported "Changes apply on the next `aello run`". The model is now merged into
+  the existing file on placement, key by key, so hand-added settings like
+  `effortLevel` and `enabledPlugins` survive untouched.
+- **`Ctrl`+letter no longer triggers the plain-letter command in the TUI.** Key
+  presses were matched on the letter alone, ignoring modifiers, so **`Ctrl+U`
+  started an unprompted self-update** that replaced the running binary,
+  `Ctrl+S` silently wrote the contextdb path to disk, and `Ctrl+D` opened the
+  delete modal. `Ctrl+C` now quits from every mode instead of doing whatever the
+  bare letter did, and a chord typed into a name field is ignored rather than
+  inserting the letter.
+- **Uppercase keys work.** The footer advertises `[F] [S] [A] …` and the delete
+  modal says `[Y] CONFIRM`, but only lowercase was bound — so pressing Shift+Y as
+  instructed, or using any command with Caps Lock on, did nothing at all and gave
+  no feedback. Command keys are now case-insensitive. Text entry still keeps its
+  case, so capitalised blueprint and folder names are unaffected.
 - The SessionEnd self-heal no longer skips envs that already have a **third-party
   `SessionEnd` hook**. It bailed whenever the `SessionEnd` key existed at all, so
   adding any hook of your own permanently blocked aello from installing its own

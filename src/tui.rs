@@ -9,7 +9,7 @@
 
 use anyhow::Result;
 use ratatui::crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind},
+    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -403,6 +403,37 @@ fn restore(terminal: &mut Term) {
     let _ = terminal.show_cursor();
 }
 
+/// A Ctrl or Alt chord. Text entry ignores these rather than inserting the bare
+/// letter, which is how Ctrl+C used to type a literal `c` into a blueprint name.
+fn is_chord(key: &KeyEvent) -> bool {
+    key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+}
+
+/// The one chord bound globally, ahead of per-mode dispatch.
+fn quits_everywhere(key: &KeyEvent) -> bool {
+    key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c')
+}
+
+/// Normalise a key press for command dispatch.
+///
+/// Two problems, one place. Crossterm delivers Ctrl+<letter> as the lowercase
+/// letter plus CONTROL — raw mode means the terminal never intercepts it first —
+/// so matching on the code alone ran the plain-letter command: Ctrl+U
+/// self-updated without asking, Ctrl+S wrote the contextdb path, Ctrl+D opened
+/// the delete modal. And every command arm bound lowercase while the footer
+/// advertises `[F] [S] [A] …` and the delete modal says `[Y] CONFIRM`, so
+/// Shift+Y or Caps Lock fell through in silence.
+///
+/// So: a chord on a letter becomes `Null` (matches no arm), and a plain letter
+/// folds to lowercase. Non-letter keys — arrows, Enter, Esc — pass through.
+fn command_code(key: &KeyEvent) -> KeyCode {
+    match key.code {
+        KeyCode::Char(_) if is_chord(key) => KeyCode::Null,
+        KeyCode::Char(c) => KeyCode::Char(c.to_ascii_lowercase()),
+        other => other,
+    }
+}
+
 fn run_app(terminal: &mut Term) -> Result<PostExit> {
     let mut app = App::load()?;
     loop {
@@ -413,8 +444,25 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
             continue; // Windows emits Press and Release; act on Press only.
         }
 
+        // Crossterm delivers Ctrl+<letter> as the lowercase letter plus CONTROL,
+        // on both platforms, and raw mode means the terminal never intercepts it
+        // first. Matching on the code alone therefore ran the plain-letter command:
+        // Ctrl+U self-updated without asking, Ctrl+S wrote the contextdb path,
+        // Ctrl+D opened the delete modal.
+        let chord = is_chord(&key);
+
+        // The most reflexive key there is. Bind it once, ahead of every mode, so
+        // it always means the same thing instead of whatever `c` happens to do.
+        if quits_everywhere(&key) {
+            return Ok(PostExit::Quit);
+        }
+
+        // Text-entry modes below deliberately keep `key.code` — a blueprint or
+        // folder name needs its original case.
+        let code = command_code(&key);
+
         match &mut app.mode {
-            Mode::Normal => match key.code {
+            Mode::Normal => match code {
                 KeyCode::Char('q') | KeyCode::Esc => return Ok(PostExit::Quit),
                 KeyCode::Enter => {
                     if let Some(&i) = app.view.get(app.selected) {
@@ -509,7 +557,7 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                 KeyCode::Backspace => {
                     buf.pop();
                 }
-                KeyCode::Char(c) => buf.push(c),
+                KeyCode::Char(c) if !chord => buf.push(c),
                 KeyCode::Enter => {
                     let name = buf.trim().to_string();
                     match crate::validate_name(&name) {
@@ -530,7 +578,7 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                 }
                 _ => {}
             },
-            Mode::AddModel { name, sel, edit, orig_model, model_touched } => match key.code {
+            Mode::AddModel { name, sel, edit, orig_model, model_touched } => match code {
                 KeyCode::Esc => {
                     app.mode = Mode::Normal;
                     app.status = "CANCELLED".into();
@@ -563,7 +611,7 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                 }
                 _ => {}
             },
-            Mode::AddPersona { name, model, sel, edit, orig_persona, persona_touched } => match key.code {
+            Mode::AddPersona { name, model, sel, edit, orig_persona, persona_touched } => match code {
                 KeyCode::Esc => {
                     app.mode = Mode::Normal;
                     app.status = "CANCELLED".into();
@@ -594,7 +642,7 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                 }
                 _ => {}
             },
-            Mode::AddCaps { name, model, persona, sel, caps, edit } => match key.code {
+            Mode::AddCaps { name, model, persona, sel, caps, edit } => match code {
                 KeyCode::Esc => {
                     app.mode = Mode::Normal;
                     app.status = "CANCELLED".into();
@@ -639,7 +687,7 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                 }
                 _ => {}
             },
-            Mode::ConfirmDelete => match key.code {
+            Mode::ConfirmDelete => match code {
                 KeyCode::Char('y') => {
                     if let Some(target) = app.current_name() {
                         let mut cfg = config::load()?;
@@ -656,7 +704,7 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                 }
                 _ => {}
             },
-            Mode::Sessions { name, items, sel } => match key.code {
+            Mode::Sessions { name, items, sel } => match code {
                 KeyCode::Esc => app.mode = Mode::Normal,
                 KeyCode::Down | KeyCode::Char('j') => *sel = (*sel + 1).min(items.len() - 1),
                 KeyCode::Up | KeyCode::Char('k') => *sel = sel.saturating_sub(1),
@@ -676,7 +724,7 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                         KeyCode::Backspace => {
                             buf.pop();
                         }
-                        KeyCode::Char(c) => buf.push(c),
+                        KeyCode::Char(c) if !chord => buf.push(c),
                         KeyCode::Enter => {
                             let name = buf.trim();
                             if !name.is_empty() {
@@ -736,7 +784,7 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                     }
                 }
             }
-            Mode::Help { docs, sel, scroll } => match key.code {
+            Mode::Help { docs, sel, scroll } => match code {
                 KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => {
                     app.mode = Mode::Normal;
                 }
@@ -1163,6 +1211,60 @@ fn draw_config(f: &mut Frame, dir: &Path, entries: &[String], sel: usize, new: &
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn press(code: KeyCode, mods: KeyModifiers) -> KeyEvent {
+        KeyEvent::new(code, mods)
+    }
+
+    #[test]
+    fn ctrl_letters_never_fire_the_plain_letter_command() {
+        // The dangerous three: 'u' is self-update (no prompt), 's' writes the
+        // contextdb path, 'd' opens the delete modal. As a Ctrl chord they must
+        // match no arm at all.
+        for c in ['u', 's', 'd', 'a', 'l', 'm', 'q'] {
+            let k = press(KeyCode::Char(c), KeyModifiers::CONTROL);
+            assert_eq!(command_code(&k), KeyCode::Null, "Ctrl+{c} leaked through");
+            assert!(is_chord(&k));
+        }
+        // Alt too — same reasoning, and Alt+letter is a menu convention.
+        assert_eq!(
+            command_code(&press(KeyCode::Char('u'), KeyModifiers::ALT)),
+            KeyCode::Null
+        );
+    }
+
+    #[test]
+    fn ctrl_c_quits_from_every_mode() {
+        assert!(quits_everywhere(&press(KeyCode::Char('c'), KeyModifiers::CONTROL)));
+        // Not the bare letter — 'c' alone opens the contextdb picker.
+        assert!(!quits_everywhere(&press(KeyCode::Char('c'), KeyModifiers::NONE)));
+        assert!(!quits_everywhere(&press(KeyCode::Char('d'), KeyModifiers::CONTROL)));
+    }
+
+    #[test]
+    fn command_keys_are_case_insensitive() {
+        // The delete modal renders "[Y] CONFIRM · [N] CANCEL"; a user following
+        // it literally presses Shift+Y, and every handler binds lowercase.
+        assert_eq!(
+            command_code(&press(KeyCode::Char('Y'), KeyModifiers::SHIFT)),
+            KeyCode::Char('y')
+        );
+        // Caps Lock reports no modifier at all.
+        assert_eq!(command_code(&press(KeyCode::Char('Q'), KeyModifiers::NONE)), KeyCode::Char('q'));
+        // Non-letter keys pass through untouched.
+        assert_eq!(command_code(&press(KeyCode::Enter, KeyModifiers::NONE)), KeyCode::Enter);
+        assert_eq!(command_code(&press(KeyCode::Esc, KeyModifiers::NONE)), KeyCode::Esc);
+        assert_eq!(command_code(&press(KeyCode::Down, KeyModifiers::NONE)), KeyCode::Down);
+    }
+
+    #[test]
+    fn shift_still_types_capitals_into_a_name() {
+        // Text entry keeps `key.code`, so a blueprint name can be capitalised —
+        // only Ctrl/Alt are filtered out there.
+        let k = press(KeyCode::Char('T'), KeyModifiers::SHIFT);
+        assert!(!is_chord(&k));
+        assert!(is_chord(&press(KeyCode::Char('t'), KeyModifiers::CONTROL)));
+    }
 
     #[test]
     fn personas_match_builtins() {

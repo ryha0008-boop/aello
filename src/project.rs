@@ -172,6 +172,8 @@ pub fn place(
         // Same for the voice hook, so an env placed before voice was universal
         // starts speaking on its next run.
         sync_voice_hooks(&settings)?;
+        // And the model, so `aello edit <name> --model` actually reaches the env.
+        ensure_model(&settings, &inst.model)?;
     }
 
     // Global persona — set once, never clobbered (the user may have edited it).
@@ -545,6 +547,35 @@ fn sync_voice_hooks(settings: &Path) -> Result<()> {
         .context("could not update settings.json with the voice hook")
 }
 
+/// Self-heal the `model` key in an existing `settings.json`.
+///
+/// `settings.json` is the **only** channel carrying the model to Claude Code —
+/// `launch` passes no `--model` — and it is written once, on first placement. So
+/// without this, `aello edit <name> --model` updated `config.toml`, `.aello.toml`
+/// and `aello list` while the env kept running the model it was placed with,
+/// forever, and `cmd_edit` still printed "Changes apply on the next run".
+///
+/// A key-scoped merge, deliberately not a regenerate: a real env's settings.json
+/// carries keys the user added by hand (`effortLevel`, `enabledPlugins`), and
+/// rewriting the file from a template would silently delete them.
+fn ensure_model(settings: &Path, model: &str) -> Result<()> {
+    let Ok(text) = std::fs::read_to_string(settings) else {
+        return Ok(());
+    };
+    let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return Ok(());
+    };
+    let Some(obj) = v.as_object_mut() else {
+        return Ok(());
+    };
+    if obj.get("model").and_then(|m| m.as_str()) == Some(model) {
+        return Ok(());
+    }
+    obj.insert("model".into(), serde_json::Value::String(model.to_string()));
+    std::fs::write(settings, serde_json::to_string_pretty(&v)?)
+        .context("could not update settings.json with the model")
+}
+
 /// Append the TL;DR instruction to the env's persona when it isn't already
 /// there. The voice hook speaks that line and nothing else, so a persona that
 /// never writes one makes the capability silent. Appends rather than rewrites —
@@ -805,6 +836,35 @@ mod tests {
         let v = read();
         assert_eq!(v["hooks"]["Stop"].as_array().unwrap().len(), 1);
         assert_eq!(v["hooks"]["SessionEnd"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn edit_model_reaches_an_already_placed_env() {
+        let proj = tempfile::tempdir().unwrap();
+        let env = env_dir(proj.path(), "coder");
+        let caps = Capabilities::default();
+
+        // Placed on sonnet, then edited to opus (`aello edit coder --model opus`,
+        // which rewrites the blueprint and re-places on the next run).
+        place(&env, &Instance { name: "coder".into(), model: "sonnet".into() }, None, &caps)
+            .unwrap();
+        // A key the user added by hand: a regenerate would destroy it.
+        let settings = env.join("settings.json");
+        let mut v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        v.as_object_mut().unwrap().insert("effortLevel".into(), "high".into());
+        std::fs::write(&settings, serde_json::to_string_pretty(&v).unwrap()).unwrap();
+
+        place(&env, &Instance { name: "coder".into(), model: "opus".into() }, None, &caps).unwrap();
+
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        // settings.json is the only channel carrying the model to Claude Code.
+        assert_eq!(v["model"], "opus");
+        // The hand-added key survived, and so did the hooks.
+        assert_eq!(v["effortLevel"], "high");
+        assert!(registers_command(&v["hooks"]["SessionEnd"], "session-end.py"));
+        assert!(registers_command(&v["hooks"]["Stop"], "speak.py"));
     }
 
     #[test]
