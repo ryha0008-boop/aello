@@ -76,6 +76,25 @@
   SessionEnd hook archives the matching per-blueprint file.
 
 ### Fixed
+- **Desktop notifications work again — the voice hook was vendored incomplete.**
+  `speak.py` imports four siblings; aello copied two of them. The other two,
+  `focus.py` and `notify.py`, are imported behind a `try`/`ImportError` guard, so
+  nothing failed: every env spoke normally while `notify`'s stub reported "not
+  shown" and **no desktop notification was ever raised, in any env**, with
+  nothing anywhere saying so. Placement now writes all five files
+  (`speak.py`, `duck.py`, `focus.py`, `notify.py`, `win_audio.ps1`), so any
+  existing env picks them up on its next `run`. `focus.py` also restores the
+  window tracking that lease reaping and the toast's **Go to terminal** button
+  depend on.
+- **A vendored copy that has fallen behind is now visible.** `speak.py` carries a
+  `HOOK_VERSION`, bumped upstream whenever one of the five hook-path files
+  changes; aello records the version it vendored, a unit test fails if a
+  re-vendor moves one without the other, and `aello voice status` prints it
+  alongside the mute state. `python <env>/hooks/speak.py --status` prints what
+  that env actually runs, so the two can be compared. The upstream re-vendor also
+  brings a hard timeout on a stuck player (one wedged process used to hold the
+  machine-wide speaker lock and silence every env) and a `win_audio.ps1` that no
+  longer drops a line when the audio duration resolves slowly.
 - **`aello update` no longer re-downloads and reinstalls a version you already
   have.** It never compared versions, so every run pulled the whole multi-MB
   asset and rewrote the running binary — which on Windows means renaming the live
