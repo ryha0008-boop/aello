@@ -76,6 +76,15 @@
   SessionEnd hook archives the matching per-blueprint file.
 
 ### Fixed
+- **"Skip this one" now skips that one.** A toast stays in Windows' notification
+  centre for three days, and the skip link named no turn — so pressing the button
+  on an old notification cut off whatever happened to be speaking at that moment,
+  which across dozens of envs is usually another env's line. Re-vendored the voice
+  hook at `HOOK_VERSION = 4`: the URI carries the turn id and the station refuses
+  a stale one. Existing envs pick it up on their next `run`. The drift check now
+  covers **all five** vendored files rather than only `speak.py` — `HOOK_VERSION`
+  lives in `speak.py` alone, so a re-vendor touching just `duck.py` or
+  `win_audio.ps1` used to slip past it.
 - **Desktop notifications work again — the voice hook was vendored incomplete.**
   `speak.py` imports four siblings; aello copied two of them. The other two,
   `focus.py` and `notify.py`, are imported behind a `try`/`ImportError` guard, so

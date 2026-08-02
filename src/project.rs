@@ -37,7 +37,7 @@ const WIN_AUDIO_SCRIPT: &str = include_str!("hooks_win_audio.ps1");
 /// rewritten. A recorded sha goes stale by itself; a recorded version cannot.
 /// Surfaced by `aello voice status`, so checking a machine does not mean
 /// finding an env dir and running Python in it.
-pub const HOOK_VERSION: u32 = 3;
+pub const HOOK_VERSION: u32 = 4;
 
 /// Starter memory seeded on first placement so a fresh env boots with the
 /// user's working-style note already loaded in `/context`. The body is bundled;
@@ -934,9 +934,9 @@ mod tests {
         assert!(!env.join("skills/sync/SKILL.md").exists());
     }
 
-    /// The drift check. Upstream moves `HOOK_VERSION` whenever one of the five
-    /// hook-path files changes, so a re-vendor that forgets to move the constant
-    /// here fails this rather than shipping a copy nobody can date.
+    /// Half the drift check: the version the vendored `speak.py` claims must be
+    /// the one `project.rs` records, so a re-vendor that forgets to move the
+    /// constant fails here rather than shipping a copy nobody can date.
     #[test]
     fn the_recorded_hook_version_matches_the_vendored_script() {
         let line = SPEAK_SCRIPT
@@ -951,6 +951,43 @@ mod tests {
         assert_eq!(
             vendored, HOOK_VERSION,
             "re-vendored speak.py is version {vendored} but project.rs still records {HOOK_VERSION}"
+        );
+    }
+
+    /// Digest of all five vendored hook files, in the order below, with CRLF
+    /// normalised so a Windows checkout and Linux CI agree. Update it in the
+    /// same commit as a re-vendor — and only together with `HOOK_VERSION`.
+    const HOOK_FILES_DIGEST: &str =
+        "15df906b8cb4082bd878bc17dc541fffffce1c69eeb5b90d284eeb1c1b243426";
+
+    fn hook_files_digest() -> String {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        for script in [
+            SPEAK_SCRIPT,
+            DUCK_SCRIPT,
+            FOCUS_SCRIPT,
+            NOTIFY_SCRIPT,
+            WIN_AUDIO_SCRIPT,
+        ] {
+            h.update(script.replace("\r\n", "\n").as_bytes());
+        }
+        format!("{:x}", h.finalize())
+    }
+
+    /// The other half. `HOOK_VERSION` lives only in `speak.py`, but upstream
+    /// moves it whenever *any* of the five hook-path files changes — so the test
+    /// above sees nothing when a re-vendor touches only `duck.py` or
+    /// `win_audio.ps1`. This one hashes all five: any byte that moves fails it,
+    /// and the fix is to check that `HOOK_VERSION` moved too before recording
+    /// the new digest.
+    #[test]
+    fn the_recorded_digest_covers_all_five_vendored_hook_files() {
+        let actual = hook_files_digest();
+        assert_eq!(
+            actual, HOOK_FILES_DIGEST,
+            "a vendored hook file changed. Confirm upstream bumped HOOK_VERSION \
+             (now {HOOK_VERSION} here), then record the new digest: {actual}"
         );
     }
 

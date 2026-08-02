@@ -85,7 +85,7 @@ NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if IS_WIN else {}
 # comparing it against the value here is how a vendored copy learns it has
 # fallen behind. Station-only changes leave it alone: a version that moves for
 # reasons the hook never executes trains everyone to ignore the warning.
-HOOK_VERSION = 3
+HOOK_VERSION = 4
 
 MAX_CHARS = int(os.environ.get("REVOICED_MAX_CHARS", "1200"))
 KEEP = int(os.environ.get("REVOICED_HISTORY", "200"))
@@ -818,7 +818,7 @@ def worker(job_file: Path) -> None:
             # same reason: you are almost never looking at the station while an
             # agent works, so a pop-up drawn inside it announces nothing.
             notifying.show(job["project"], job["text"],
-                           job.get("key") or job["cwd"])
+                           job.get("key") or job["cwd"], job["id"])
             run_cancellable(cmd, job["id"], job["session"], stop_at_start,
                             skip_at_start)
         finally:

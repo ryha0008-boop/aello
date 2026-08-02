@@ -154,7 +154,7 @@ def _toast_xml(title: str, body: str, buttons: list) -> str:
         f"<audio silent='true'/></toast>")
 
 
-def buttons_for(key: str) -> list:
+def buttons_for(key: str, turn: str = "") -> list:
     """The two things worth doing about a notification you just heard: go and
     look, or stop it reading this one out.
 
@@ -162,19 +162,28 @@ def buttons_for(key: str) -> list:
     toast that is gone a second later and with nothing on the page to show for
     it afterwards - which is how seven projects ended up silent for a day. The
     thing you actually want while a line is being read is to stop *this* line.
+
+    Skip carries the turn it belongs to, and *this line* is meant literally: a
+    toast stays in the notification centre for three days, so without the id the
+    button dropped whatever happened to be speaking when it was finally pressed
+    - which, with 39 environments raising toasts, is usually somebody else.
     """
     if not key:
         return []
     q = quote(key, safe="")
+    skip = f"{SCHEME}://skip?project={q}"
+    if turn:
+        skip += f"&id={quote(turn, safe='')}"
     return [("Go to terminal", f"{SCHEME}://focus?project={q}"),
-            ("Skip this one", f"{SCHEME}://skip?project={q}")]
+            ("Skip this one", skip)]
 
 
-def _cmd(title: str, body: str, key: str) -> list | None:
+def _cmd(title: str, body: str, key: str, turn: str = "") -> list | None:
     if IS_WIN:
         return ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
                 "-File", str(HERE / "win_audio.ps1"), "-Mode", "toast",
-                "-Aumid", AUMID, "-Xml", _toast_xml(title, body, buttons_for(key))]
+                "-Aumid", AUMID, "-Xml",
+                _toast_xml(title, body, buttons_for(key, turn))]
     if IS_MAC:
         esc = lambda s: s.replace("\\", "\\\\").replace('"', '\\"')
         return ["osascript", "-e",
@@ -182,7 +191,7 @@ def _cmd(title: str, body: str, key: str) -> list | None:
     return ["notify-send", "-a", "revoiced", title, body]
 
 
-def show(title: str, body: str, key: str = "") -> bool:
+def show(title: str, body: str, key: str = "", turn: str = "") -> bool:
     """Raise one notification. True when it was handed off, not when it was seen.
 
     Nothing here is worth a traceback in a hook: every failure is a
@@ -191,7 +200,8 @@ def show(title: str, body: str, key: str = "") -> bool:
     """
     if not available():
         return False
-    cmd = _cmd((title or "revoiced").strip(), " ".join((body or "").split()), key)
+    cmd = _cmd((title or "revoiced").strip(), " ".join((body or "").split()),
+               key, turn)
     if not cmd:
         return False
     try:
@@ -203,6 +213,16 @@ def show(title: str, body: str, key: str = "") -> bool:
 
 
 if __name__ == "__main__":
+    # Registration on its own, for a machine that runs aello envs but never
+    # starts the station. A toast sent under an unregistered AppUserModelID is
+    # dropped by Windows with no error whatsoever, so without this every env on
+    # such a machine is silently notification-less - the same failure the
+    # three-file vendor caused, one layer out. No test toast: this runs at setup
+    # time, where a pop-up would be noise.
+    if "--register" in sys.argv[1:]:
+        print(register() or "registered")
+        raise SystemExit(0)
+
     reason = why_not()
     if reason:
         print(f"cannot notify: {reason}")
