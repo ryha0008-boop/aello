@@ -4,6 +4,11 @@ use serde::{Deserialize, Serialize};
 /// (when placed) and adds a matching section to the generated `/sync` skill, so
 /// `/sync` only covers what this blueprint actually has — a no-GitHub project
 /// gets no git talk. Old configs without this section load all-false.
+///
+/// `voice` used to live here. It is now unconditional — every env speaks, and
+/// silence is a runtime setting (`aello voice mute`), not a property of the
+/// blueprint. Serde ignores the leftover `voice = …` in an existing config on
+/// load, and the next save drops it.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Capabilities {
     /// Maintain a project-level CLAUDE.md (in the project dir, not the env).
@@ -21,16 +26,11 @@ pub struct Capabilities {
     /// Keep README.md current.
     #[serde(default)]
     pub readme: bool,
-    /// Speak each response's `TL;DR:` line aloud (text-to-speech `Stop` hook).
-    #[serde(default)]
-    pub voice: bool,
 }
 
 impl Capabilities {
     /// True if anything `/sync` covers is enabled — i.e. there's a reason to seed
-    /// the skill. Deliberately excludes `voice`: it maintains no project file and
-    /// contributes no `/sync` section, so a voice-only blueprint must not get a
-    /// `/sync` skill with nothing in it.
+    /// the skill.
     pub fn any(&self) -> bool {
         self.project_md || self.github || self.changelog || self.docs || self.readme
     }

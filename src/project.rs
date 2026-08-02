@@ -162,16 +162,16 @@ pub fn place(
 
     let settings = env_dir.join("settings.json");
     if !settings.exists() {
-        std::fs::write(&settings, settings_json(&inst.model, caps))
+        std::fs::write(&settings, settings_json(&inst.model))
             .context("could not write settings.json")?;
     } else {
         // Existing env: never clobber a (possibly user-edited) settings.json, but
         // self-heal the SessionEnd hook into it so envs placed before it existed
         // start capturing /clear + exit sessions.
         ensure_session_end_hook(&settings)?;
-        // Same for the voice hook, in both directions — so `aello edit <name>
-        // --voice` / `--no-voice` takes effect on an already-placed env.
-        sync_voice_hooks(&settings, caps.voice)?;
+        // Same for the voice hook, so an env placed before voice was universal
+        // starts speaking on its next run.
+        sync_voice_hooks(&settings)?;
     }
 
     // Global persona — set once, never clobbered (the user may have edited it).
@@ -183,10 +183,8 @@ pub fn place(
     }
 
     // The voice hook speaks the trailing TL;DR line, so the persona has to ask
-    // for one. Appended (never clobbering) so enabling voice later still works.
-    if caps.voice {
-        ensure_tldr_instruction(env_dir)?;
-    }
+    // for one. Appended (never clobbering) so an existing persona keeps its text.
+    ensure_tldr_instruction(env_dir)?;
 
     // Always refresh the hook script so updates (e.g. AELLO_CONTEXTDB support)
     // propagate to existing envs on the next run.
@@ -197,17 +195,14 @@ pub fn place(
         .context("could not write session-end.py")?;
 
     // Voice hook + its two siblings, refreshed like the others so fixes reach
-    // existing envs. Only written when the cap is on; turning it off just
-    // deregisters them in settings.json (the files are inert unreferenced).
-    if caps.voice {
-        let hooks = env_dir.join("hooks");
-        std::fs::write(hooks.join("speak.py"), SPEAK_SCRIPT)
-            .context("could not write speak.py")?;
-        std::fs::write(hooks.join("duck.py"), DUCK_SCRIPT)
-            .context("could not write duck.py")?;
-        std::fs::write(hooks.join("win_audio.ps1"), WIN_AUDIO_SCRIPT)
-            .context("could not write win_audio.ps1")?;
-    }
+    // existing envs.
+    let hooks = env_dir.join("hooks");
+    std::fs::write(hooks.join("speak.py"), SPEAK_SCRIPT)
+        .context("could not write speak.py")?;
+    std::fs::write(hooks.join("duck.py"), DUCK_SCRIPT)
+        .context("could not write duck.py")?;
+    std::fs::write(hooks.join("win_audio.ps1"), WIN_AUDIO_SCRIPT)
+        .context("could not write win_audio.ps1")?;
 
     // Regenerate the tailored /sync skill from current caps (or remove it if the
     // blueprint no longer maintains anything).
@@ -452,23 +447,19 @@ fn ensure_gitignore_entry(project: &Path, entry: &str) -> Result<()> {
 }
 
 /// settings.json for an isolated Claude env: subscription auth (no keys, no env
-/// block), bypass permissions, and the transcript hooks. With the `voice` cap,
-/// a `Stop` hook that speaks the response and a second `SessionEnd` group that
-/// hands the leased voice back to the pool.
-pub fn settings_json(model: &str, caps: &Capabilities) -> String {
+/// block), bypass permissions, the transcript hooks, a `Stop` hook that speaks
+/// the response and a second `SessionEnd` group that hands the leased voice back
+/// to the pool. Every env speaks; silence is `aello voice mute`, not placement.
+pub fn settings_json(model: &str) -> String {
     let py = if cfg!(windows) { "python" } else { "python3" };
     // `$CLAUDE_CONFIG_DIR` — not a path to any checkout — is the whole point:
     // the hook travels with the env, so moving a repo can't silence it. The
     // quotes are escaped for JSON here, since this is assembled as text.
     let speak = format!("{py} \\\"$CLAUDE_CONFIG_DIR/hooks/speak.py\\\"");
-    let (stop, voice_end) = if caps.voice {
-        (
-            format!("\n    \"Stop\": [{{\"hooks\":[{{\"type\":\"command\",\"command\":\"{speak}\"}}]}}],"),
-            format!(",\n      {{\"hooks\":[{{\"type\":\"command\",\"command\":\"{speak}\"}}]}}"),
-        )
-    } else {
-        (String::new(), String::new())
-    };
+    let stop =
+        format!("\n    \"Stop\": [{{\"hooks\":[{{\"type\":\"command\",\"command\":\"{speak}\"}}]}}],");
+    let voice_end =
+        format!(",\n      {{\"hooks\":[{{\"type\":\"command\",\"command\":\"{speak}\"}}]}}");
     format!(
         r#"{{
   "model": {},
@@ -492,18 +483,20 @@ pub fn settings_json(model: &str, caps: &Capabilities) -> String {
 /// other `speak.py` in settings.json was installed by hand against a checkout.
 const OWNED_SPEAK: &str = "$CLAUDE_CONFIG_DIR/hooks/speak.py";
 
-/// Register (or deregister) the voice hook in an existing `settings.json`,
-/// matching the `voice` capability. `speak.py` branches on the event it's given,
-/// so one command serves both: `Stop` speaks the response, `SessionEnd` returns
-/// the leased voice to the pool. Idempotent in both directions.
+/// Register the voice hook in an existing `settings.json`. `speak.py` branches
+/// on the event it's given, so one command serves both: `Stop` speaks the
+/// response, `SessionEnd` returns the leased voice to the pool. Idempotent.
 ///
-/// Enabling also **migrates**: a hand-installed hook pointing at a checkout
+/// This also **migrates**: a hand-installed hook pointing at a checkout
 /// (`python "C:/…/revoiced/speak.py"`) is replaced by the env-relative one. That
-/// path is the problem the capability exists to solve — leaving it would keep
+/// path is the problem the vendored hook exists to solve — leaving it would keep
 /// every env coupled to one directory, and adding ours beside it would speak
-/// each response twice. Disabling only removes ours; a hook the user wrote by
-/// hand is theirs to keep.
-fn sync_voice_hooks(settings: &Path, want: bool) -> Result<()> {
+/// each response twice.
+///
+/// There is no deregister branch: every env speaks. Silence is a runtime
+/// setting the hook itself reads (`aello voice mute`), so an env is never made
+/// quiet by rewriting its settings.
+fn sync_voice_hooks(settings: &Path) -> Result<()> {
     let Ok(text) = std::fs::read_to_string(settings) else {
         return Ok(());
     };
@@ -523,36 +516,24 @@ fn sync_voice_hooks(settings: &Path, want: bool) -> Result<()> {
 
     let mut changed = false;
     for event in ["Stop", "SessionEnd"] {
-        if want {
-            if let Some(serde_json::Value::Array(arr)) = hooks.get_mut(event) {
-                let before = arr.len();
-                arr.retain(|g| !legacy(g));
-                changed |= arr.len() != before;
-            }
-            if hooks.get(event).is_some_and(|e| registers_command(e, OWNED_SPEAK)) {
-                continue;
-            }
-            let group = serde_json::json!({
-                "hooks": [{
-                    "type": "command",
-                    "command": format!("{py} \"{OWNED_SPEAK}\""),
-                }]
-            });
-            match hooks.get_mut(event) {
-                Some(serde_json::Value::Array(arr)) => arr.push(group),
-                _ => {
-                    hooks.insert(event.to_string(), serde_json::json!([group]));
-                }
-            }
-        } else {
-            let Some(serde_json::Value::Array(arr)) = hooks.get_mut(event) else { continue };
+        if let Some(serde_json::Value::Array(arr)) = hooks.get_mut(event) {
             let before = arr.len();
-            arr.retain(|g| !owned(g));
-            if arr.len() == before {
-                continue;
-            }
-            if arr.is_empty() {
-                hooks.remove(event);
+            arr.retain(|g| !legacy(g));
+            changed |= arr.len() != before;
+        }
+        if hooks.get(event).is_some_and(|e| registers_command(e, OWNED_SPEAK)) {
+            continue;
+        }
+        let group = serde_json::json!({
+            "hooks": [{
+                "type": "command",
+                "command": format!("{py} \"{OWNED_SPEAK}\""),
+            }]
+        });
+        match hooks.get_mut(event) {
+            Some(serde_json::Value::Array(arr)) => arr.push(group),
+            _ => {
+                hooks.insert(event.to_string(), serde_json::json!([group]));
             }
         }
         changed = true;
@@ -674,21 +655,17 @@ mod tests {
 
     #[test]
     fn settings_json_is_valid() {
-        let s = settings_json("sonnet", &Capabilities::default());
+        let s = settings_json("sonnet");
         let v: serde_json::Value = serde_json::from_str(&s).expect("valid JSON");
         assert_eq!(v["model"], "sonnet");
         assert_eq!(v["permissions"]["defaultMode"], "bypassPermissions");
         assert!(v["hooks"]["PostCompact"].is_array());
         assert!(v["hooks"]["SessionEnd"].is_array());
-        // No voice cap: nothing speaks.
-        assert!(v["hooks"]["Stop"].is_null());
-        assert!(!registers_command(&v["hooks"]["SessionEnd"], "speak.py"));
     }
 
     #[test]
-    fn voice_cap_registers_the_stop_and_release_hooks() {
-        let caps = Capabilities { voice: true, ..Default::default() };
-        let s = settings_json("sonnet", &caps);
+    fn every_env_registers_the_stop_and_release_hooks() {
+        let s = settings_json("sonnet");
         let v: serde_json::Value = serde_json::from_str(&s).expect("valid JSON");
         // Stop speaks the response; SessionEnd hands the leased voice back —
         // alongside aello's own transcript hook, which must survive.
@@ -768,11 +745,12 @@ mod tests {
     }
 
     #[test]
-    fn voice_cap_seeds_all_three_scripts_and_the_tldr_instruction() {
+    fn every_env_seeds_all_three_scripts_and_the_tldr_instruction() {
         let proj = tempfile::tempdir().unwrap();
         let env = env_dir(proj.path(), "coder");
         let inst = Instance { name: "coder".into(), model: "opus".into() };
-        let caps = Capabilities { voice: true, ..Default::default() };
+        // No capabilities at all: the voice is not one of them any more.
+        let caps = Capabilities::default();
 
         place(&env, &inst, Some("# persona\n"), &caps).unwrap();
 
@@ -785,34 +763,28 @@ mod tests {
         let persona = std::fs::read_to_string(env.join("CLAUDE.md")).unwrap();
         assert!(persona.starts_with("# persona"));
         assert!(persona.contains("TL;DR"));
-        // voice alone is not a /sync capability, so no skill is seeded.
+        // The voice is not a /sync capability, so no skill is seeded.
         assert!(!env.join("skills/sync/SKILL.md").exists());
     }
 
     #[test]
-    fn voice_cap_off_seeds_nothing() {
+    fn voice_hooks_self_heal_into_an_env_placed_before_they_existed() {
         let proj = tempfile::tempdir().unwrap();
         let env = env_dir(proj.path(), "coder");
         let inst = Instance { name: "coder".into(), model: "opus".into() };
+        let caps = Capabilities::default();
 
-        place(&env, &inst, Some("# persona\n"), &Capabilities::default()).unwrap();
-
-        assert!(!env.join("hooks/speak.py").exists());
-        let persona = std::fs::read_to_string(env.join("CLAUDE.md")).unwrap();
-        assert!(!persona.contains("TL;DR"));
-    }
-
-    #[test]
-    fn voice_hooks_self_heal_on_and_off_for_a_placed_env() {
-        let proj = tempfile::tempdir().unwrap();
-        let env = env_dir(proj.path(), "coder");
-        let inst = Instance { name: "coder".into(), model: "opus".into() };
-        let off = Capabilities::default();
-        let on = Capabilities { voice: true, ..Default::default() };
-
-        // Placed without voice, then enabled later (`aello edit --voice`).
-        place(&env, &inst, Some("# persona\n"), &off).unwrap();
-        place(&env, &inst, Some("# persona\n"), &on).unwrap();
+        // An env as they existed before the voice was universal: a settings.json
+        // that place() must not clobber, with no Stop hook in it.
+        std::fs::create_dir_all(&env).unwrap();
+        std::fs::write(
+            env.join("settings.json"),
+            r#"{"model":"opus","effortLevel":"high","hooks":{"SessionEnd":[
+                 {"hooks":[{"type":"command","command":"python \"$CLAUDE_CONFIG_DIR/hooks/session-end.py\""}]}
+               ]}}"#,
+        )
+        .unwrap();
+        place(&env, &inst, Some("# persona\n"), &caps).unwrap();
 
         let read = || -> serde_json::Value {
             serde_json::from_str(&std::fs::read_to_string(env.join("settings.json")).unwrap())
@@ -821,27 +793,22 @@ mod tests {
         let v = read();
         assert!(registers_command(&v["hooks"]["Stop"], "speak.py"));
         assert!(registers_command(&v["hooks"]["SessionEnd"], "speak.py"));
-        // aello's own transcript hook is untouched by the voice edit.
+        // aello's own transcript hook is untouched, and so is a user-added key —
+        // the heal is a merge, never a regenerate.
         assert!(registers_command(&v["hooks"]["SessionEnd"], "session-end.py"));
+        assert_eq!(v["effortLevel"], "high");
         // The persona picked up the instruction it was placed without.
         assert!(std::fs::read_to_string(env.join("CLAUDE.md")).unwrap().contains("TL;DR"));
 
-        // Re-placing with voice on is idempotent — no duplicate hook groups.
-        place(&env, &inst, Some("# persona\n"), &on).unwrap();
+        // Re-placing is idempotent — no duplicate hook groups.
+        place(&env, &inst, Some("# persona\n"), &caps).unwrap();
         let v = read();
         assert_eq!(v["hooks"]["Stop"].as_array().unwrap().len(), 1);
         assert_eq!(v["hooks"]["SessionEnd"].as_array().unwrap().len(), 2);
-
-        // And `--no-voice` deregisters it without disturbing session-end.py.
-        place(&env, &inst, Some("# persona\n"), &off).unwrap();
-        let v = read();
-        assert!(v["hooks"]["Stop"].is_null());
-        assert!(!registers_command(&v["hooks"]["SessionEnd"], "speak.py"));
-        assert!(registers_command(&v["hooks"]["SessionEnd"], "session-end.py"));
     }
 
     #[test]
-    fn enabling_voice_migrates_a_hand_installed_absolute_path_hook() {
+    fn placement_migrates_a_hand_installed_absolute_path_hook() {
         let proj = tempfile::tempdir().unwrap();
         let env = env_dir(proj.path(), "coder");
         std::fs::create_dir_all(&env).unwrap();
@@ -857,8 +824,7 @@ mod tests {
         .unwrap();
 
         let inst = Instance { name: "coder".into(), model: "opus".into() };
-        let on = Capabilities { voice: true, ..Default::default() };
-        place(&env, &inst, Some("# persona\n"), &on).unwrap();
+        place(&env, &inst, Some("# persona\n"), &Capabilities::default()).unwrap();
 
         let v: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(env.join("settings.json")).unwrap())
@@ -870,14 +836,6 @@ mod tests {
         assert!(!v["hooks"]["Stop"].to_string().contains("C:/checkout"));
         assert!(registers_command(&v["hooks"]["Stop"], OWNED_SPEAK));
         // An unrelated hook is left alone.
-        assert!(registers_command(&v["hooks"]["Stop"], "notify.py"));
-
-        // Disabling removes only ours; a hand-written hook would be the user's.
-        place(&env, &inst, Some("# persona\n"), &Capabilities::default()).unwrap();
-        let v: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(env.join("settings.json")).unwrap())
-                .unwrap();
-        assert!(!registers_command(&v["hooks"]["Stop"], "speak.py"));
         assert!(registers_command(&v["hooks"]["Stop"], "notify.py"));
     }
 

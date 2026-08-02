@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: 4c62a069-53fc-49ff-85fb-83bcc5a0da21
-  modified: 2026-08-01T11:01:17.263Z
+  modified: 2026-08-02T20:38:56.835Z
 ---
 
 aello's `voice` capability (added 2026-08-01) vendors its TTS hook from **revoiced**, a separate project of the user's. The design rationale lives in aello's `CLAUDE.md` + `docs/capabilities.md` — this note is only the things the repo can't tell you.
@@ -22,4 +22,8 @@ aello's `voice` capability (added 2026-08-01) vendors its TTS hook from **revoic
 
 6. **Verified working end to end 2026-08-01.** A fresh `voicetest` project spoke its TL;DR aloud using preset `negras`, while the revoiced env minutes earlier had `Andrew calm` — i.e. the per-session leasing really does give concurrent envs different voices. The generated `settings.json` contained `$CLAUDE_CONFIG_DIR/hooks/speak.py` in both `Stop` and the second `SessionEnd` group, with no absolute path anywhere in the file.
 
-7. **Existing envs do not adopt `voice` on their own.** The self-heal (`sync_voice_hooks`) only runs inside `place()`, i.e. on the next `aello run` of that env, and only via a freshly `cargo install`ed binary — the same constraint as universal skills in [[aello-dev-gotchas]] #4. The user had ~39 envs with the hook wired in by hand against an absolute path; enabling the cap *replaces* that entry rather than adding beside it, so migration doesn't double-speak, but each env still has to be re-run once. See [[aello-architecture-decisions]].
+7. **Existing envs do not adopt hook changes on their own.** The self-heal (`sync_voice_hooks`) only runs inside `place()`, i.e. on the next `aello run` of that env, and only via a freshly `cargo install`ed binary — the same constraint as universal skills in [[aello-dev-gotchas]] #4. It *replaces* a hand-wired entry rather than adding beside it, so migration doesn't double-speak, but each env still has to be re-run once. See [[aello-architecture-decisions]].
+
+8. **The voice stopped being a capability on 2026-08-02 — every env speaks, unconditionally.** The user's reasoning: they would never want a project mute, and if they did they would mute it at runtime. So `--voice`/`--no-voice`, the TUI row and the wizard question are gone, `Capabilities` is five bools, and `sync_voice_hooks` has no deregister branch. Before this, only a blueprint with `voice = true` ever got a vendored hook (exactly five did), which is why ~42 envs were still hand-wired to the absolute path `…/structuredwork/revoiced/revoiced/speak.py` and quietly stayed that way — that asymmetry confused two sessions in a row, so do not reason from an old note about it. **All 38 aello-placed envs were backfilled by hand the same day**, verified 38/38 wired with zero absolute paths left. Config lives at `%APPDATA%\aello\config\config.toml` — note the extra `config/` level, `find` in the obvious places misses it.
+
+9. **Upstream `speak.py` imports `focus` and `notify`, but guarded, specifically so aello can keep vendoring three files.** Added upstream in `a86023a` (`try` / `ImportError` → `SimpleNamespace` stubs) after aello hit it. Both are station-side and must **never** be vendored — `notify` raises Windows toasts pointing at the station and registers a `revoiced://` handler under `HKCU`, which has no business running from inside 40 env dirs. Same rule as `kie.py`, `launch.py`, `serve.py`. When re-vendoring, take the three files from a **commit sha**, never the working tree: revoiced's tree is often dirty mid-session, and a note describing its shape can be stale by the time it's read (it was, twice — both times claiming "no new sibling import" while there were two).

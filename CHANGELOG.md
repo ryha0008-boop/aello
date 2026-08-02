@@ -41,6 +41,15 @@
   emits plain HTML in `site/out/` for any static host.
 
 ### Changed
+- **Every env speaks — the voice is no longer a capability.** `--voice` and
+  `--no-voice` are gone from `add` and `edit`, the row is gone from the TUI
+  checklist and the `init` wizard, and every placed env now gets the speak hooks
+  and the TL;DR persona section unconditionally. Choosing it per blueprint bought
+  nothing, and the moment you actually want silence — a machine that has started
+  talking — is a runtime decision: `aello voice mute` (or `M` in the TUI) covers
+  every env at once and is reversible in one keystroke. Existing envs pick the
+  hooks up on their next `aello run`, and a `voice = …` left in your config is
+  ignored on load and dropped on the next save.
 - **The voice hooks are re-vendored from upstream `revoiced`** (`a86023a`). A
   voice-enabled env now gets **its own voice per environment** rather than per
   working directory: several blueprints sharing one repo no longer sound alike,

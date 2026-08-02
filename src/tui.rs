@@ -77,7 +77,6 @@ const CAP_ROWS: &[(&str, &str)] = &[
     ("changelog", "keep CHANGELOG.md current"),
     ("docs", "keep docs/ current"),
     ("readme", "keep README.md current"),
-    ("voice", "speak each response's TL;DR aloud"),
 ];
 
 fn cap_toggle(caps: &mut Capabilities, i: usize) {
@@ -87,7 +86,6 @@ fn cap_toggle(caps: &mut Capabilities, i: usize) {
         2 => caps.changelog = !caps.changelog,
         3 => caps.docs = !caps.docs,
         4 => caps.readme = !caps.readme,
-        5 => caps.voice = !caps.voice,
         _ => {}
     }
 }
@@ -99,7 +97,6 @@ fn cap_enabled(caps: &Capabilities, i: usize) -> bool {
         2 => caps.changelog,
         3 => caps.docs,
         4 => caps.readme,
-        5 => caps.voice,
         _ => false,
     }
 }
