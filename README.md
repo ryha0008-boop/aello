@@ -128,7 +128,7 @@ aello github-setup [--name <repo>] [--public] [--yes]   # create + push the repo
 aello docs [name]                              # print bundled reference docs (no name lists them)
 aello voice <mute|unmute|stop|status> [--project]       # off switch for the voice
 aello completions <bash|zsh|fish|powershell|elvish>     # print a shell completion script
-aello update                                   # self-update to the latest release
+aello update [--force]                         # self-update (--force reinstalls the current version)
 ```
 
 - `completions` prints a script to stdout for tab-completing blueprint names and flags. Load it, e.g.:
@@ -146,7 +146,7 @@ aello update                                   # self-update to the latest relea
 
 ### TUI keys
 
-`↑/↓` move · `↵` run · `F` filter · `S` sessions · `A` add (guided) · `E` edit (guided) · `D` delete · `C` contextdb folder · `M` mute voice · `L` login · `U` update · `?` docs · `Q` quit.
+`↑/↓` move · `↵` run · `F` filter · `S` sessions · `A` add (guided) · `E` edit (guided) · `D` delete · `C` contextdb folder · `M` mute voice · `L` login · `U` update · `?` docs · `Q` quit. Command keys are case-insensitive, and `Ctrl+C` quits from anywhere. In the docs reader (`?`), `Home`/`End` jump to the start and end of a page.
 
 `M` toggles the same machine-wide mute as `aello voice mute` — it silences every env, not just the selected blueprint, and cuts off whatever is speaking. While muted the footer reads `VOICE: MUTED`, so a silent machine doesn't look like a broken hook.
 

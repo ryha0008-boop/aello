@@ -101,7 +101,11 @@ enum Commands {
         yes: bool,
     },
     /// Update aello to the latest build from GitHub.
-    Update,
+    Update {
+        /// Reinstall even when already on the published version.
+        #[arg(long)]
+        force: bool,
+    },
     /// Print a shell completion script (bash, zsh, fish, powershell, elvish).
     Completions {
         /// Shell to generate completions for.
@@ -223,7 +227,7 @@ fn main() {
         Some(Commands::Init) => cmd_init(),
         Some(Commands::Login) => cmd_login(),
         Some(Commands::GithubSetup { name, public, yes }) => github::run(name, public, yes),
-        Some(Commands::Update) => update::run(),
+        Some(Commands::Update { force }) => update::run(force),
         Some(Commands::Completions { shell }) => cmd_completions(shell),
         Some(Commands::Docs { name }) => cmd_docs(name),
         Some(Commands::Voice { action }) => match action {
@@ -247,6 +251,14 @@ pub(crate) fn validate_name(name: &str) -> Result<()> {
     }
     if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
         bail!("name '{name}' must contain only ASCII letters, digits, '-' or '_'");
+    }
+    // Bounded so an over-long name fails here with a clear message rather than
+    // deep inside create_dir_all with a raw OS error. `.claude-env-<name>` and
+    // `claude-internal/<name>/` both nest under the project path, so the real
+    // ceiling is well below any filesystem limit anyway.
+    const MAX_NAME: usize = 64;
+    if name.len() > MAX_NAME {
+        bail!("name is {} characters — keep it to {MAX_NAME} or fewer", name.len());
     }
     // The github cap creates a BARE `claude-internal/<name>/` component, so a
     // Windows reserved device name (CON, NUL, COM1…) would make create_dir_all
@@ -275,13 +287,18 @@ const MODEL_ALIASES: &[&str] = &["opus", "sonnet", "haiku", "default"];
 /// Reject typo'd models before they reach settings.json. Accept a known alias
 /// (case-insensitive) or any full `claude-*` model id (forward-compatible with
 /// new releases without an exact-version allowlist).
-pub(crate) fn validate_model(model: &str) -> Result<()> {
+///
+/// Returns the **normalised** value — trimmed and lowercased — because that is
+/// what was actually validated. Callers used to validate a normalised copy and
+/// then store the raw string, so `--model " opus "` passed the check and
+/// reached settings.json verbatim.
+pub(crate) fn validate_model(model: &str) -> Result<String> {
     let m = model.trim().to_lowercase();
     if m.is_empty() {
         bail!("model cannot be empty");
     }
     if MODEL_ALIASES.contains(&m.as_str()) || m.strip_prefix("claude-").is_some_and(|r| !r.is_empty()) {
-        return Ok(());
+        return Ok(m);
     }
     bail!(
         "unknown model '{model}'. Use an alias ({}) or a full model id like claude-opus-4-8",
@@ -296,7 +313,7 @@ fn cmd_add(
     caps: Capabilities,
 ) -> Result<()> {
     validate_name(&name)?;
-    validate_model(&model)?;
+    let model = validate_model(&model)?;
     // Catch a typo'd built-in / missing template path at add time, not first run.
     if let Some(cm) = &claude_md {
         templates::resolve(cm)?;
@@ -391,6 +408,11 @@ fn tri(on: bool, off: bool, current: bool, flag: &str) -> Result<bool> {
 }
 
 fn cmd_edit(args: EditArgs) -> Result<()> {
+    // Re-gate the name on the read path, the way cmd_remove and run_blueprint
+    // already do. The name reaches the filesystem as a bare `.claude-env-<name>`
+    // component, and a hand-edited config.toml is the one way an unvalidated one
+    // gets in — defence in depth, not a live exploit.
+    validate_name(&args.name)?;
     let mut cfg = config::load()?;
     let Some(idx) = cfg.blueprints.iter().position(|b| b.name == args.name) else {
         bail!("no blueprint named '{}'", args.name);
@@ -420,8 +442,7 @@ fn cmd_edit(args: EditArgs) -> Result<()> {
     let mut changed = false;
 
     if let Some(model) = args.model {
-        validate_model(&model)?;
-        bp.model = model;
+        bp.model = validate_model(&model)?;
         changed = true;
     }
     if let Some(cm) = args.claude_md {
@@ -447,6 +468,17 @@ fn cmd_edit(args: EditArgs) -> Result<()> {
         if moved {
             println!("Renamed the placed env dir + mirror in this project to '{new}'.");
         }
+        // A rename only touches THIS project. There is no placement registry —
+        // Config holds blueprints, contextdb and the token, nothing about where a
+        // blueprint has been placed — so aello cannot find the others. Say so,
+        // because `run <new>` in one of them silently scaffolds a fresh env
+        // beside the old one rather than failing.
+        println!(
+            "Note: only this project was updated. If '{}' is placed elsewhere, run 
+             `aello edit {new} --rename {new}` in each of those directories to move 
+             its env dir too — until then they keep the old name on disk.",
+            args.name
+        );
     }
 
     if !changed {
@@ -465,14 +497,12 @@ fn cmd_run(
     prompt: Option<String>,
     extra: Vec<String>,
 ) -> Result<()> {
+    // Only consulted to resolve a bare `aello run`; run_blueprint re-loads and is
+    // the one that validates, so an existence check here would be a second read
+    // of the same file for no gain.
     let cfg = config::load()?;
     let bp_name = match name {
-        Some(n) => {
-            if cfg.find(&n).is_none() {
-                bail!("no blueprint named '{n}'");
-            }
-            n
-        }
+        Some(n) => n,
         None => match cfg.blueprints.as_slice() {
             [one] => one.name.clone(),
             [] => bail!("no blueprints — add one with: aello add <name> --model <model>"),
@@ -506,14 +536,15 @@ pub(crate) fn run_blueprint(
     let inst = Instance { name: bp.name.clone(), model: bp.model.clone() };
 
     // Resolve the global persona: a built-in template name or a file path.
+    // Fail rather than warn. `add` and `edit` both reject an unresolvable
+    // persona outright, and a warning here went to stderr moments before Claude's
+    // alternate screen wiped it — so the one case that matters, a persona file
+    // moved or deleted after the blueprint was created, launched a silently
+    // persona-less agent that looked fine.
     let claude_md = match &bp.claude_md {
-        Some(spec) => match templates::resolve(spec) {
-            Ok(c) => Some(c),
-            Err(e) => {
-                eprintln!("warning: {e:#} — skipping CLAUDE.md");
-                None
-            }
-        },
+        Some(spec) => Some(templates::resolve(spec).with_context(|| {
+            format!("blueprint '{name}' has an unusable persona — fix it with: aello edit {name} --claude-md <coder|sysadmin|path>")
+        })?),
         None => None,
     };
 
@@ -580,7 +611,7 @@ fn cmd_init() -> Result<()> {
     let name = prompt("Blueprint name", "coder")?;
     validate_name(&name)?;
     let model = prompt("Model (opus/sonnet/haiku or a claude-* id)", "sonnet")?;
-    validate_model(&model)?;
+    let model = validate_model(&model)?;
     let persona = prompt_optional("Persona (coder/sysadmin/path, blank for none)")?;
     if let Some(p) = &persona {
         templates::resolve(p)?; // fail now on a bad name/path, not on first run
@@ -595,6 +626,15 @@ fn cmd_init() -> Result<()> {
         readme: prompt_bool("  README.md", false)?,
     };
 
+    // Re-read immediately before mutating. The `cfg` above was loaded before a
+    // run of interactive prompts with no time bound on it, and saving that stale
+    // snapshot would discard anything written meanwhile — most plausibly an
+    // `aello login` in another terminal, whose token is the one thing here that
+    // is expensive to lose. Every other command reloads right before it writes.
+    let mut cfg = config::load()?;
+    if cfg.find_name_conflict(&name).is_some() {
+        bail!("blueprint '{name}' was created while you were answering — nothing written");
+    }
     cfg.blueprints.push(Blueprint {
         name: name.clone(),
         model,
@@ -779,6 +819,26 @@ mod tests {
         for m in ["", "opu", "sonnett", "gpt-4", "opus4", "claude-"] {
             assert!(validate_model(m).is_err(), "{m:?} should be rejected");
         }
+    }
+
+    #[test]
+    fn validate_model_returns_the_normalised_value() {
+        // The check ran against a trimmed+lowercased copy while callers stored
+        // the raw string, so `--model " opus "` validated and then reached
+        // settings.json verbatim, quotes and all.
+        assert_eq!(validate_model("  opus  ").unwrap(), "opus");
+        assert_eq!(validate_model("SONNET").unwrap(), "sonnet");
+        assert_eq!(validate_model(" Claude-Opus-4-8 ").unwrap(), "claude-opus-4-8");
+    }
+
+    #[test]
+    fn over_long_names_are_rejected() {
+        // Previously accepted here and failed later inside create_dir_all with a
+        // raw OS error naming a path the user never typed.
+        assert!(validate_name(&"a".repeat(64)).is_ok());
+        let long = "a".repeat(65);
+        let err = validate_name(&long).unwrap_err().to_string();
+        assert!(err.contains("65 characters"), "unhelpful message: {err}");
     }
 
     #[test]

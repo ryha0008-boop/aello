@@ -136,20 +136,18 @@ enum Mode {
     /// the name step is skipped and each step is pre-seeded from the original,
     /// and the final step updates in place instead of pushing a new blueprint.
     /// `orig_model` is the blueprint's stored model (may be a full `claude-*`
-    /// id / `default` that the curated picker can't represent); `model_touched`
-    /// records whether the user actually moved the picker. On edit, if they
-    /// didn't, `orig_model` is preserved verbatim instead of being downgraded to
-    /// the highlighted curated alias.
-    AddModel { name: String, sel: usize, edit: bool, orig_model: String, model_touched: bool },
+    /// id / `default` that the curated picker can't represent). On edit, if the
+    /// picker ends where it opened, `orig_model` is preserved verbatim instead of
+    /// being downgraded to the highlighted curated alias.
+    AddModel { name: String, sel: usize, edit: bool, orig_model: String },
     /// Pick the global persona (none / built-in template). `orig_persona` +
-    /// `persona_touched` preserve a custom persona path on edit the same way.
+    /// and the same end-position comparison preserve a custom persona path.
     AddPersona {
         name: String,
         model: String,
         sel: usize,
         edit: bool,
         orig_persona: Option<String>,
-        persona_touched: bool,
     },
     /// Toggle the capabilities, then create/save. `persona` is the chosen template.
     AddCaps { name: String, model: String, persona: Option<String>, sel: usize, caps: Capabilities, edit: bool },
@@ -345,7 +343,7 @@ pub fn run() -> Result<()> {
         match result? {
             PostExit::Quit => return Ok(()),
             PostExit::Update => {
-                crate::update::run()?;
+                crate::update::run(false)?;
                 // Re-launch the freshly-installed binary so the TUI reopens on
                 // the new version instead of just closing.
                 if let Some(exe) = exe {
@@ -394,7 +392,16 @@ fn setup() -> Result<Term> {
         let _ = disable_raw_mode();
         return Err(e.into());
     }
-    Ok(Terminal::new(CrosstermBackend::new(stdout))?)
+    // Terminal::new queries the backend for its size, so it can fail too. Its
+    // `?` used to escape run() past the point where restore() is called, leaving
+    // the shell in raw mode on the alternate screen with no TUI — and there is
+    // no Drop impl anywhere to catch it.
+    Terminal::new(CrosstermBackend::new(stdout)).map_err(|e| {
+        let mut out = io::stdout();
+        let _ = execute!(out, LeaveAlternateScreen);
+        let _ = disable_raw_mode();
+        e.into()
+    })
 }
 
 fn restore(terminal: &mut Term) {
@@ -535,7 +542,7 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                         let sel = model_index(&b.model);
                         let orig_model = b.model.clone();
                         app.status.clear();
-                        app.mode = Mode::AddModel { name, sel, edit: true, orig_model, model_touched: false };
+                        app.mode = Mode::AddModel { name, sel, edit: true, orig_model };
                     } else {
                         app.status = "NO BLUEPRINTS TO EDIT".into();
                     }
@@ -570,7 +577,6 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                                 sel: 0,
                                 edit: false,
                                 orig_model: String::new(),
-                                model_touched: false,
                             }
                         }
                         Err(e) => app.status = e.to_string().to_uppercase(),
@@ -578,23 +584,25 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                 }
                 _ => {}
             },
-            Mode::AddModel { name, sel, edit, orig_model, model_touched } => match code {
+            Mode::AddModel { name, sel, edit, orig_model } => match code {
                 KeyCode::Esc => {
                     app.mode = Mode::Normal;
                     app.status = "CANCELLED".into();
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
                     *sel = (*sel + 1).min(MODELS.len() - 1);
-                    *model_touched = true;
                 }
                 KeyCode::Up | KeyCode::Char('k') => {
                     *sel = sel.saturating_sub(1);
-                    *model_touched = true;
                 }
                 KeyCode::Enter => {
                     let edit = *edit;
                     let name = name.clone();
-                    let model = resolved_edit(edit, *model_touched, orig_model, MODELS[*sel].0.to_string());
+                    // Compare the final position with where the picker opened,
+                    // rather than trusting a one-way latch: browsing down and
+                    // back is not a choice to change anything.
+                    let moved = *sel != model_index(orig_model);
+                    let model = resolved_edit(edit, moved, orig_model, MODELS[*sel].0.to_string());
                     // On edit, pre-select the blueprint's current persona and
                     // remember it so a custom path survives an untouched picker.
                     let (sel, orig_persona) = if edit {
@@ -607,22 +615,20 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                     } else {
                         (0, None)
                     };
-                    app.mode = Mode::AddPersona { name, model, sel, edit, orig_persona, persona_touched: false };
+                    app.mode = Mode::AddPersona { name, model, sel, edit, orig_persona };
                 }
                 _ => {}
             },
-            Mode::AddPersona { name, model, sel, edit, orig_persona, persona_touched } => match code {
+            Mode::AddPersona { name, model, sel, edit, orig_persona } => match code {
                 KeyCode::Esc => {
                     app.mode = Mode::Normal;
                     app.status = "CANCELLED".into();
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
                     *sel = (*sel + 1).min(PERSONAS.len() - 1);
-                    *persona_touched = true;
                 }
                 KeyCode::Up | KeyCode::Char('k') => {
                     *sel = sel.saturating_sub(1);
-                    *persona_touched = true;
                 }
                 KeyCode::Enter => {
                     let edit = *edit;
@@ -630,7 +636,8 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                     let model = model.clone();
                     // Index 0 is "none"; others are built-in template names.
                     let picked = (*sel != 0).then(|| PERSONAS[*sel].0.to_string());
-                    let persona = resolved_edit(edit, *persona_touched, orig_persona, picked);
+                    let moved = *sel != persona_index(orig_persona.as_deref());
+                    let persona = resolved_edit(edit, moved, orig_persona, picked);
                     // On edit, start from the blueprint's current capabilities.
                     let caps = if edit {
                         let cfg = config::load()?;
@@ -653,14 +660,26 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                 KeyCode::Enter => {
                     let mut cfg = config::load()?;
                     let mut added: Option<String> = None;
-                    if *edit {
-                        if let Some(b) = cfg.blueprints.iter_mut().find(|b| b.name == *name) {
-                            b.model = model.clone();
-                            b.claude_md = persona.clone();
-                            b.caps = caps.clone();
+    if *edit {
+                        // Say so rather than reporting a save that changed
+                        // nothing: the blueprint can be removed in another
+                        // terminal while these three modals are open.
+                        match cfg.blueprints.iter_mut().find(|b| b.name == *name) {
+                            Some(b) => {
+                                b.model = model.clone();
+                                b.claude_md = persona.clone();
+                                b.caps = caps.clone();
+                                config::save(&cfg)?;
+                                app.status = format!("UPDATED '{name}'");
+                            }
+                            None => {
+                                app.status = format!("'{name}' NO LONGER EXISTS — NOTHING SAVED");
+                            }
                         }
-                        config::save(&cfg)?;
-                        app.status = format!("UPDATED '{name}'");
+                    } else if cfg.find_name_conflict(name).is_some() {
+                        // Checked at the name step too, but three interactive
+                        // modals separate that check from this write.
+                        app.status = format!("'{name}' ALREADY EXISTS — NOTHING SAVED");
                     } else {
                         cfg.blueprints.push(Blueprint {
                             name: name.clone(),
@@ -693,7 +712,17 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                         let mut cfg = config::load()?;
                         cfg.blueprints.retain(|b| b.name != target);
                         config::save(&cfg)?;
-                        app.status = format!("REMOVED '{target}'");
+                        // The CLI says this; the TUI said nothing, so a deleted
+                        // blueprint looked like it took its env dir with it. The
+                        // tracked mirror is named too — `aello remove --purge`
+                        // clears both, and the CLI's own note omits the mirror.
+                        let cwd = std::env::current_dir().unwrap_or_default();
+                        let left = project::env_dir(&cwd, &target).exists();
+                        app.status = if left {
+                            format!("REMOVED '{target}' — ENV DIR + claude-internal/{target} REMAIN (aello remove {target} --purge)")
+                        } else {
+                            format!("REMOVED '{target}'")
+                        };
                     }
                     app.mode = Mode::Normal;
                     app.reload()?;
@@ -727,12 +756,25 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                         KeyCode::Char(c) if !chord => buf.push(c),
                         KeyCode::Enter => {
                             let name = buf.trim();
-                            if !name.is_empty() {
+                            // Reject what the filesystem will reject, with a
+                            // reason. These were accepted and the failure then
+                            // swallowed by `.is_ok()`, so the box just closed.
+                            const ILLEGAL: &[char] =
+                                &['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
+                            if name.is_empty() {
+                                app.status = "FOLDER NAME CANNOT BE EMPTY".into();
+                            } else if name.contains(ILLEGAL) {
+                                app.status = "FOLDER NAME CONTAINS AN ILLEGAL CHARACTER".into();
+                            } else {
                                 let target = dir.join(name);
-                                if std::fs::create_dir_all(&target).is_ok() {
-                                    *dir = target;
-                                    *entries = list_dirs(dir);
-                                    *sel = 0;
+                                match std::fs::create_dir_all(&target) {
+                                    Ok(()) => {
+                                        *dir = target;
+                                        *entries = list_dirs(dir);
+                                        *sel = 0;
+                                        app.status.clear();
+                                    }
+                                    Err(e) => app.status = format!("COULD NOT CREATE: {e}"),
                                 }
                             }
                             *new = None;
@@ -808,6 +850,10 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                 KeyCode::PageDown | KeyCode::Char(' ') => {
                     *scroll = scroll.saturating_add(10).min(app.help_scroll_max.get());
                 }
+                // Jump to the ends. Without these, a mis-estimated cap left the
+                // tail of a doc permanently out of reach with no way to force it.
+                KeyCode::End | KeyCode::Char('g') => *scroll = app.help_scroll_max.get(),
+                KeyCode::Home => *scroll = 0,
                 _ => {}
             },
         }
@@ -831,18 +877,18 @@ fn draw(f: &mut Frame, app: &App) {
     match &app.mode {
         Mode::Normal => {}
         Mode::AddName { buf } => draw_add_name(f, buf),
-        Mode::AddModel { name, sel, edit, orig_model, model_touched } => {
+        Mode::AddModel { name, sel, edit, orig_model } => {
             // If editing and the stored model can't be shown in the curated
             // picker (a full id / `default`) and the user hasn't changed it,
             // tell them it will be kept — the highlighted row isn't the truth.
             let keep = (*edit
-                && !*model_touched
+                && *sel == model_index(orig_model)
                 && !MODELS.iter().any(|(id, _)| id == orig_model))
             .then_some(orig_model.as_str());
             draw_add_model(f, name, *sel, *edit, keep);
         }
-        Mode::AddPersona { name, sel, edit, orig_persona, persona_touched, .. } => {
-            let keep = if *edit && !*persona_touched {
+        Mode::AddPersona { name, sel, edit, orig_persona, .. } => {
+            let keep = if *edit && *sel == persona_index(orig_persona.as_deref()) {
                 match orig_persona {
                     Some(p) if !PERSONAS.iter().any(|(id, _)| id == p) => Some(p.as_str()),
                     _ => None,
@@ -1208,6 +1254,263 @@ fn draw_config(f: &mut Frame, dir: &Path, entries: &[String], sel: usize, new: &
     f.render_widget(Paragraph::new(lines).style(Style::default().bg(SURFACE_HI)), inner);
 }
 
+
+
+fn draw_sessions(f: &mut Frame, name: &str, items: &[sessions::Session], sel: usize) {
+    let shown = items.len().min(12);
+    let inner = modal(f, &format!("RESUME // {}", name.to_uppercase()), 66, shown as u16 + 5);
+
+    let mut lines = vec![Line::from(Span::styled(
+        format!("  {} session(s) — newest first", items.len()),
+        Style::default().fg(MUTED),
+    ))];
+    for (i, s) in items.iter().take(shown).enumerate() {
+        let kb = s.size.div_ceil(1024);
+        let short: String = s.id.chars().take(8).collect();
+        let label = format!("{:<8}  {}  {:>5} KB", short, sessions::format_utc(s.modified), kb);
+        if i == sel {
+            lines.push(Line::from(Span::styled(
+                format!(" › {label}"),
+                Style::default().bg(ORANGE_HOT).fg(Color::Black).add_modifier(Modifier::BOLD),
+            )));
+        } else {
+            lines.push(Line::from(Span::styled(format!("   {label}"), Style::default().fg(TEXT))));
+        }
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  [↑/↓] SELECT · [ENTER] RESUME · [ESC] CANCEL",
+        Style::default().fg(DIM),
+    )));
+
+    f.render_widget(Paragraph::new(lines).style(Style::default().bg(SURFACE_HI)), inner);
+}
+
+// ── Docs reader ──────────────────────────────────────────────────────────────
+
+/// Full-screen reader for the bundled docs: a list of docs on the left, the
+/// selected doc's rendered content (scrollable) on the right.
+fn draw_help(
+    f: &mut Frame,
+    docs: &[docs::Doc],
+    sel: usize,
+    scroll: u16,
+    scroll_max: &std::cell::Cell<u16>,
+) {
+    let area = f.area();
+    f.render_widget(Clear, area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(ORANGE_HOT))
+        .title(Span::styled(
+            " DOCS // REFERENCE ",
+            Style::default().fg(ORANGE_HOT).add_modifier(Modifier::BOLD),
+        ))
+        .title_bottom(
+            Line::from(Span::styled(
+                " [↑/↓] SCROLL · [TAB/←→] DOC · [ESC] CLOSE ",
+                Style::default().fg(DIM),
+            ))
+            .centered(),
+        )
+        .style(Style::default().bg(SURFACE));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(22), Constraint::Min(20)])
+        .split(inner);
+
+    // Left: doc list (titles), current highlighted.
+    let list: Vec<Line> = docs
+        .iter()
+        .enumerate()
+        .map(|(i, d)| {
+            if i == sel {
+                Line::from(Span::styled(
+                    format!(" › {} ", d.title),
+                    Style::default().bg(ORANGE_HOT).fg(Color::Black).add_modifier(Modifier::BOLD),
+                ))
+            } else {
+                Line::from(Span::styled(format!("   {}", d.title), Style::default().fg(TEXT)))
+            }
+        })
+        .collect();
+    f.render_widget(Paragraph::new(list).style(Style::default().bg(SURFACE_HI)), cols[0]);
+
+    // Right: rendered content, scrolled.
+    let content = docs.get(sel).map(|d| render_markdown(d.body)).unwrap_or_default();
+
+    // Cap the scroll at the wrapped content height minus the viewport, so the
+    // last line can reach the bottom but you can't scroll into empty space. The
+    // paragraph wraps at the text width (pane minus the horizontal padding of 2
+    // each side), so a long line occupies several visual rows — counting raw
+    // lines (the old cap) stopped short on every wrapped doc.
+    // ratatui wraps greedily on word boundaries, so a line never occupies FEWER
+    // rows than ceil(width / text_w) but often occupies more — a long word that
+    // doesn't fit pushes to the next row and leaves the tail of the previous one
+    // empty. Estimating from the character count alone therefore under-counted,
+    // capped the scroll short, and made the last rows of a doc unreachable
+    // (measured: up to 11 rows lost on capabilities.md at 80 columns).
+    //
+    // Model the greedy break instead: walk the words and start a new row when the
+    // next one doesn't fit. Cheap, and exact for the common case.
+    let text_w = cols[1].width.saturating_sub(4).max(1) as usize;
+    let rows: usize = content
+        .iter()
+        .map(|l| {
+            let text = l.spans.iter().map(|s| s.content.as_ref()).collect::<String>();
+            if text.trim().is_empty() {
+                return 1;
+            }
+            let mut rows = 1usize;
+            let mut used = 0usize;
+            for word in text.split_whitespace() {
+                let w = word.chars().count();
+                let need = if used == 0 { w } else { w + 1 };
+                if used + need > text_w && used > 0 {
+                    rows += 1;
+                    used = w.min(text_w);
+                } else {
+                    used += need;
+                }
+                // A single word longer than the pane wraps hard across rows.
+                if w > text_w {
+                    rows += (w - 1) / text_w;
+                    used = w % text_w;
+                }
+            }
+            rows
+        })
+        .sum();
+    let rows = rows.min(u16::MAX as usize) as u16;
+    scroll_max.set(rows.saturating_sub(cols[1].height));
+
+    let para = Paragraph::new(content)
+        .scroll((scroll, 0))
+        .wrap(Wrap { trim: false })
+        .block(Block::default().padding(Padding::horizontal(2)))
+        .style(Style::default().bg(SURFACE));
+    f.render_widget(para, cols[1]);
+}
+
+/// Render markdown into styled lines for the docs reader. Handles headings,
+/// bullets, fenced code blocks, and inline `code`/**bold**/[links]. Not a full
+/// markdown engine — just enough to read well in the kinetic style.
+fn render_markdown(body: &str) -> Vec<Line<'static>> {
+    let mut out = Vec::new();
+    let mut in_code = false;
+    for raw in body.lines() {
+        if raw.trim_start().starts_with("```") {
+            in_code = !in_code; // fence toggles a code block; the fence line is dropped
+            continue;
+        }
+        if in_code {
+            out.push(Line::from(Span::styled(format!("  {raw}"), Style::default().fg(GREEN))));
+        } else if let Some(h) = raw.strip_prefix("### ") {
+            out.push(Line::from(Span::styled(h.to_string(), Style::default().fg(AMBER).add_modifier(Modifier::BOLD))));
+        } else if let Some(h) = raw.strip_prefix("## ") {
+            out.push(Line::from(Span::styled(h.to_uppercase(), Style::default().fg(ORANGE).add_modifier(Modifier::BOLD))));
+        } else if let Some(h) = raw.strip_prefix("# ") {
+            out.push(Line::from(Span::styled(
+                h.to_uppercase(),
+                Style::default().fg(ORANGE_HOT).add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+            )));
+        } else if let Some(item) = bullet(raw) {
+            let mut spans = vec![Span::styled("  • ", Style::default().fg(AMBER))];
+            spans.extend(inline(item));
+            out.push(Line::from(spans));
+        } else {
+            out.push(Line::from(inline(raw)));
+        }
+    }
+    out
+}
+
+/// Text after a `- ` / `* ` list marker (leading indent ignored), else None.
+fn bullet(line: &str) -> Option<&str> {
+    let t = line.trim_start();
+    t.strip_prefix("- ").or_else(|| t.strip_prefix("* "))
+}
+
+/// Parse a single line of inline markdown into styled spans, handling
+/// `**bold**`, `` `code` ``, and `[label](url)` (label only). Everything else
+/// is plain text.
+fn inline(text: &str) -> Vec<Span<'static>> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut buf = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        // `code`
+        if chars[i] == '`' {
+            if let Some(end) = find(&chars, i + 1, &['`']) {
+                push_text(&mut spans, &mut buf);
+                spans.push(Span::styled(slice(&chars, i + 1, end), Style::default().fg(GREEN)));
+                i = end + 1;
+                continue;
+            }
+        }
+        // **bold**
+        if chars[i] == '*' && chars.get(i + 1) == Some(&'*') {
+            if let Some(end) = find(&chars, i + 2, &['*', '*']) {
+                push_text(&mut spans, &mut buf);
+                spans.push(Span::styled(
+                    slice(&chars, i + 2, end),
+                    Style::default().fg(TEXT).add_modifier(Modifier::BOLD),
+                ));
+                i = end + 2;
+                continue;
+            }
+        }
+        // [label](url) — render the label, drop the url
+        if chars[i] == '[' {
+            if let Some(close) = find(&chars, i + 1, &[']']) {
+                if chars.get(close + 1) == Some(&'(') {
+                    if let Some(paren) = find(&chars, close + 2, &[')']) {
+                        push_text(&mut spans, &mut buf);
+                        spans.push(Span::styled(
+                            slice(&chars, i + 1, close),
+                            Style::default().fg(AMBER).add_modifier(Modifier::UNDERLINED),
+                        ));
+                        i = paren + 1;
+                        continue;
+                    }
+                }
+            }
+        }
+        buf.push(chars[i]);
+        i += 1;
+    }
+    push_text(&mut spans, &mut buf);
+    if spans.is_empty() {
+        spans.push(Span::raw("")); // keep blank lines as real (empty) lines
+    }
+    spans
+}
+
+/// First index >= `from` where `chars` matches `pat`, else None.
+fn find(chars: &[char], from: usize, pat: &[char]) -> Option<usize> {
+    if pat.is_empty() || from + pat.len() > chars.len() {
+        return None;
+    }
+    (from..=chars.len() - pat.len()).find(|&j| chars[j..j + pat.len()] == *pat)
+}
+
+/// Owned String of `chars[start..end]`.
+fn slice(chars: &[char], start: usize, end: usize) -> String {
+    chars[start..end].iter().collect()
+}
+
+/// Flush the plain-text accumulator as a TEXT-styled span.
+fn push_text(spans: &mut Vec<Span<'static>>, buf: &mut String) {
+    if !buf.is_empty() {
+        spans.push(Span::styled(std::mem::take(buf), Style::default().fg(TEXT)));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1350,231 +1653,5 @@ mod tests {
         assert_eq!(model_index("claude-opus-4-8"), 0);
         assert_eq!(persona_index(None), 0);
         assert_eq!(persona_index(Some("/custom/path.md")), 0);
-    }
-}
-
-fn draw_sessions(f: &mut Frame, name: &str, items: &[sessions::Session], sel: usize) {
-    let shown = items.len().min(12);
-    let inner = modal(f, &format!("RESUME // {}", name.to_uppercase()), 66, shown as u16 + 5);
-
-    let mut lines = vec![Line::from(Span::styled(
-        format!("  {} session(s) — newest first", items.len()),
-        Style::default().fg(MUTED),
-    ))];
-    for (i, s) in items.iter().take(shown).enumerate() {
-        let kb = s.size.div_ceil(1024);
-        let short: String = s.id.chars().take(8).collect();
-        let label = format!("{:<8}  {}  {:>5} KB", short, sessions::format_utc(s.modified), kb);
-        if i == sel {
-            lines.push(Line::from(Span::styled(
-                format!(" › {label}"),
-                Style::default().bg(ORANGE_HOT).fg(Color::Black).add_modifier(Modifier::BOLD),
-            )));
-        } else {
-            lines.push(Line::from(Span::styled(format!("   {label}"), Style::default().fg(TEXT))));
-        }
-    }
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "  [↑/↓] SELECT · [ENTER] RESUME · [ESC] CANCEL",
-        Style::default().fg(DIM),
-    )));
-
-    f.render_widget(Paragraph::new(lines).style(Style::default().bg(SURFACE_HI)), inner);
-}
-
-// ── Docs reader ──────────────────────────────────────────────────────────────
-
-/// Full-screen reader for the bundled docs: a list of docs on the left, the
-/// selected doc's rendered content (scrollable) on the right.
-fn draw_help(
-    f: &mut Frame,
-    docs: &[docs::Doc],
-    sel: usize,
-    scroll: u16,
-    scroll_max: &std::cell::Cell<u16>,
-) {
-    let area = f.area();
-    f.render_widget(Clear, area);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(ORANGE_HOT))
-        .title(Span::styled(
-            " DOCS // REFERENCE ",
-            Style::default().fg(ORANGE_HOT).add_modifier(Modifier::BOLD),
-        ))
-        .title_bottom(
-            Line::from(Span::styled(
-                " [↑/↓] SCROLL · [TAB/←→] DOC · [ESC] CLOSE ",
-                Style::default().fg(DIM),
-            ))
-            .centered(),
-        )
-        .style(Style::default().bg(SURFACE));
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    let cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(22), Constraint::Min(20)])
-        .split(inner);
-
-    // Left: doc list (titles), current highlighted.
-    let list: Vec<Line> = docs
-        .iter()
-        .enumerate()
-        .map(|(i, d)| {
-            if i == sel {
-                Line::from(Span::styled(
-                    format!(" › {} ", d.title),
-                    Style::default().bg(ORANGE_HOT).fg(Color::Black).add_modifier(Modifier::BOLD),
-                ))
-            } else {
-                Line::from(Span::styled(format!("   {}", d.title), Style::default().fg(TEXT)))
-            }
-        })
-        .collect();
-    f.render_widget(Paragraph::new(list).style(Style::default().bg(SURFACE_HI)), cols[0]);
-
-    // Right: rendered content, scrolled.
-    let content = docs.get(sel).map(|d| render_markdown(d.body)).unwrap_or_default();
-
-    // Cap the scroll at the wrapped content height minus the viewport, so the
-    // last line can reach the bottom but you can't scroll into empty space. The
-    // paragraph wraps at the text width (pane minus the horizontal padding of 2
-    // each side), so a long line occupies several visual rows — counting raw
-    // lines (the old cap) stopped short on every wrapped doc.
-    let text_w = cols[1].width.saturating_sub(4).max(1) as usize;
-    let rows: usize = content
-        .iter()
-        .map(|l| {
-            let w = l.width();
-            if w == 0 { 1 } else { w.div_ceil(text_w) }
-        })
-        .sum();
-    let rows = rows.min(u16::MAX as usize) as u16;
-    scroll_max.set(rows.saturating_sub(cols[1].height));
-
-    let para = Paragraph::new(content)
-        .scroll((scroll, 0))
-        .wrap(Wrap { trim: false })
-        .block(Block::default().padding(Padding::horizontal(2)))
-        .style(Style::default().bg(SURFACE));
-    f.render_widget(para, cols[1]);
-}
-
-/// Render markdown into styled lines for the docs reader. Handles headings,
-/// bullets, fenced code blocks, and inline `code`/**bold**/[links]. Not a full
-/// markdown engine — just enough to read well in the kinetic style.
-fn render_markdown(body: &str) -> Vec<Line<'static>> {
-    let mut out = Vec::new();
-    let mut in_code = false;
-    for raw in body.lines() {
-        if raw.trim_start().starts_with("```") {
-            in_code = !in_code; // fence toggles a code block; the fence line is dropped
-            continue;
-        }
-        if in_code {
-            out.push(Line::from(Span::styled(format!("  {raw}"), Style::default().fg(GREEN))));
-        } else if let Some(h) = raw.strip_prefix("### ") {
-            out.push(Line::from(Span::styled(h.to_string(), Style::default().fg(AMBER).add_modifier(Modifier::BOLD))));
-        } else if let Some(h) = raw.strip_prefix("## ") {
-            out.push(Line::from(Span::styled(h.to_uppercase(), Style::default().fg(ORANGE).add_modifier(Modifier::BOLD))));
-        } else if let Some(h) = raw.strip_prefix("# ") {
-            out.push(Line::from(Span::styled(
-                h.to_uppercase(),
-                Style::default().fg(ORANGE_HOT).add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-            )));
-        } else if let Some(item) = bullet(raw) {
-            let mut spans = vec![Span::styled("  • ", Style::default().fg(AMBER))];
-            spans.extend(inline(item));
-            out.push(Line::from(spans));
-        } else {
-            out.push(Line::from(inline(raw)));
-        }
-    }
-    out
-}
-
-/// Text after a `- ` / `* ` list marker (leading indent ignored), else None.
-fn bullet(line: &str) -> Option<&str> {
-    let t = line.trim_start();
-    t.strip_prefix("- ").or_else(|| t.strip_prefix("* "))
-}
-
-/// Parse a single line of inline markdown into styled spans, handling
-/// `**bold**`, `` `code` ``, and `[label](url)` (label only). Everything else
-/// is plain text.
-fn inline(text: &str) -> Vec<Span<'static>> {
-    let chars: Vec<char> = text.chars().collect();
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    let mut buf = String::new();
-    let mut i = 0;
-    while i < chars.len() {
-        // `code`
-        if chars[i] == '`' {
-            if let Some(end) = find(&chars, i + 1, &['`']) {
-                push_text(&mut spans, &mut buf);
-                spans.push(Span::styled(slice(&chars, i + 1, end), Style::default().fg(GREEN)));
-                i = end + 1;
-                continue;
-            }
-        }
-        // **bold**
-        if chars[i] == '*' && chars.get(i + 1) == Some(&'*') {
-            if let Some(end) = find(&chars, i + 2, &['*', '*']) {
-                push_text(&mut spans, &mut buf);
-                spans.push(Span::styled(
-                    slice(&chars, i + 2, end),
-                    Style::default().fg(TEXT).add_modifier(Modifier::BOLD),
-                ));
-                i = end + 2;
-                continue;
-            }
-        }
-        // [label](url) — render the label, drop the url
-        if chars[i] == '[' {
-            if let Some(close) = find(&chars, i + 1, &[']']) {
-                if chars.get(close + 1) == Some(&'(') {
-                    if let Some(paren) = find(&chars, close + 2, &[')']) {
-                        push_text(&mut spans, &mut buf);
-                        spans.push(Span::styled(
-                            slice(&chars, i + 1, close),
-                            Style::default().fg(AMBER).add_modifier(Modifier::UNDERLINED),
-                        ));
-                        i = paren + 1;
-                        continue;
-                    }
-                }
-            }
-        }
-        buf.push(chars[i]);
-        i += 1;
-    }
-    push_text(&mut spans, &mut buf);
-    if spans.is_empty() {
-        spans.push(Span::raw("")); // keep blank lines as real (empty) lines
-    }
-    spans
-}
-
-/// First index >= `from` where `chars` matches `pat`, else None.
-fn find(chars: &[char], from: usize, pat: &[char]) -> Option<usize> {
-    if pat.is_empty() || from + pat.len() > chars.len() {
-        return None;
-    }
-    (from..=chars.len() - pat.len()).find(|&j| chars[j..j + pat.len()] == *pat)
-}
-
-/// Owned String of `chars[start..end]`.
-fn slice(chars: &[char], start: usize, end: usize) -> String {
-    chars[start..end].iter().collect()
-}
-
-/// Flush the plain-text accumulator as a TEXT-styled span.
-fn push_text(spans: &mut Vec<Span<'static>>, buf: &mut String) {
-    if !buf.is_empty() {
-        spans.push(Span::styled(std::mem::take(buf), Style::default().fg(TEXT)));
     }
 }

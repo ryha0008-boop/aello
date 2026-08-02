@@ -42,9 +42,14 @@ fn read_state(dir: &Path) -> serde_json::Value {
 
 /// Write state back the way the hook does — to a temp file, then rename — so a
 /// worker reading concurrently never sees a half-written file.
+///
+/// The temp name carries this process id. Both languages used to stage through
+/// the same fixed `state.tmp`, so aello and a `speak.py` worker writing at once
+/// could interleave into one file and rename the result into place — and both
+/// readers fall back to empty defaults on a corrupt state, losing the pool.
 fn write_state(dir: &Path, v: &serde_json::Value) -> Result<()> {
     std::fs::create_dir_all(dir).context("could not create the voice state dir")?;
-    let tmp = dir.join("state.tmp");
+    let tmp = dir.join(format!("state.{}.tmp", std::process::id()));
     std::fs::write(&tmp, serde_json::to_string_pretty(v)?)
         .context("could not write the voice state")?;
     std::fs::rename(&tmp, dir.join("state.json")).context("could not replace the voice state")
@@ -85,11 +90,16 @@ pub fn mute(project_only: bool) -> Result<()> {
             .insert(target.clone(), serde_json::Value::Bool(true));
         write_state(&dir, &state)?;
         println!("muted: {target}");
-    } else {
-        obj.insert("global".into(), serde_json::Value::Bool(true));
-        write_state(&dir, &state)?;
-        println!("muted (all projects)");
+        // Deliberately no stop token here. It is machine-wide, so bumping it for
+        // a per-project mute cut off whatever another project was saying — and
+        // dropped every other project's queued line too, since workers re-check
+        // the token after taking the speaker lock. speak.py has always scoped it
+        // this way; only a global mute silences what is already playing.
+        return Ok(());
     }
+    obj.insert("global".into(), serde_json::Value::Bool(true));
+    write_state(&dir, &state)?;
+    println!("muted (all projects)");
     // Muting should also stop the sentence already playing, not just the next.
     bump_stop_token(&dir)
 }

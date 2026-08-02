@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "serve": "npx --yes serve out"
   },
   "dependencies": {
     "next": "16.2.12",

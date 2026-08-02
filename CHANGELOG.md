@@ -76,6 +76,53 @@
   SessionEnd hook archives the matching per-blueprint file.
 
 ### Fixed
+- **`aello update` no longer re-downloads and reinstalls a version you already
+  have.** It never compared versions, so every run pulled the whole multi-MB
+  asset and rewrote the running binary — which on Windows means renaming the live
+  exe aside, and hard-fails when a second aello is running. `--force` reinstalls
+  deliberately. A failed release-API fetch is now an error instead of a silent
+  success, so `aello update && …` can't carry on as though it were current; all
+  three network calls have timeouts (a stalled server used to hang it forever);
+  and the Windows replace stages the new binary before moving the old one aside,
+  so a failed write can't leave a truncated exe at the install path.
+- **A blueprint whose persona file has moved or been deleted now fails on `run`
+  instead of launching without it.** `add` and `edit` both reject an unusable
+  persona, but `run` warned to stderr — moments before Claude's alternate screen
+  wiped it — and carried on with no persona at all.
+- **`--model " opus "` no longer reaches `settings.json` verbatim.** The value was
+  validated as trimmed and lowercased, then the raw string was stored.
+- Over-long blueprint names are rejected with a clear message instead of failing
+  later inside `create_dir_all` with a raw OS error.
+- `aello init` re-reads the config after its prompts, so a token captured by an
+  `aello login` in another terminal while you were answering is no longer
+  discarded.
+- **A `Stop` hook of your own whose command merely contains `speak.py`** (say
+  `tools/my_speak.py`) is no longer deleted on every `aello run` — the match is
+  anchored on a path boundary now. It took any unrelated command in the same
+  group with it.
+- **`aello voice mute --project` no longer cuts off another project's audio.** The
+  stop token is machine-wide; only a global mute should use it.
+- Concurrent writes to the shared voice state can no longer corrupt it: aello and
+  the hook were staging through the same fixed temp filename.
+- **The TUI docs reader (`?`) can reach the end of a page.** The scroll cap
+  under-counted wrapped rows, making the last lines of longer docs unreachable;
+  `Home`/`End` (and `g`) now jump to either end.
+- The TUI no longer leaves your terminal in raw mode on the alternate screen if
+  it fails to start after switching screens.
+- The TUI reports when a delete leaves the env dir and `claude-internal/` mirror
+  behind, when an edit's target vanished mid-flow (it used to claim success), and
+  why creating a contextdb folder failed instead of silently closing the box.
+- Editing a blueprint in the TUI no longer discards a full `claude-*` model id or
+  a custom persona path just because you scrolled the picker and came back.
+- `aello edit --rename` now says that only the current project was updated, since
+  a blueprint placed elsewhere keeps its old env dir there.
+- `aello login` distinguishes `claude setup-token` failing from its output being
+  unparseable, instead of inviting you to paste a token that was never issued.
+- **`claude` installed via npm is found on Windows.** `claude.cmd` is a shim, and
+  only `claude.exe` was ever looked for, so a working install reported "claude is
+  not installed".
+- The transcript hooks no longer crash with a traceback when the contextdb
+  directory can't be created.
 - **The `/handoff` note is now actually read on boot, and then deleted.** The
   skill has always told the agent the note is "read on boot, then deleted" and
   stamped a banner saying so, but nothing ever read it — there was no

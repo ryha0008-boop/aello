@@ -34,7 +34,9 @@
 
 .card[data-accent='true'] {
   background: var(--color-canvas-green-subtle);
-  border-color: rgba(95, 237, 131, 0.35);
+  /* --color-accent-bright at 35%, rather than its channels inlined: the fill
+     above and this border are one visual element and should track one token. */
+  border-color: color-mix(in srgb, var(--color-accent-bright) 35%, transparent);
 }
 
 .flag {

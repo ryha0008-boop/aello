@@ -13,6 +13,29 @@ pub fn git_identity(name: &str) -> (String, String) {
 
 /// Spawn `claude` with `CLAUDE_CONFIG_DIR` set to the env dir, inheriting the
 /// terminal. Subscription auth — no API keys are set. Returns the exit code.
+/// The `claude` executable to spawn.
+///
+/// On Windows, `Command::new("claude")` resolves only `claude.exe` — an
+/// npm-installed Claude Code is a `claude.cmd` shim, which is invisible to it, so
+/// a perfectly working install reported "claude is not installed". Probe PATH for
+/// the shim forms and fall back to the bare name everywhere else.
+fn claude_exe() -> std::ffi::OsString {
+    #[cfg(windows)]
+    {
+        if let Ok(path) = std::env::var("PATH") {
+            for dir in std::env::split_paths(&path) {
+                for ext in ["exe", "cmd", "bat"] {
+                    let cand = dir.join(format!("claude.{ext}"));
+                    if cand.is_file() {
+                        return cand.into_os_string();
+                    }
+                }
+            }
+        }
+    }
+    std::ffi::OsString::from("claude")
+}
+
 pub fn launch(
     env_dir: &Path,
     name: &str,
@@ -22,7 +45,7 @@ pub fn launch(
     contextdb: &Path,
     oauth_token: Option<&str>,
 ) -> Result<i32> {
-    let mut c = Command::new("claude");
+    let mut c = Command::new(claude_exe());
     c.env("CLAUDE_CONFIG_DIR", env_dir);
     // Unified transcript folder for the PostCompact hook.
     c.env("AELLO_CONTEXTDB", contextdb);

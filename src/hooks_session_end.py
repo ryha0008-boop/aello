@@ -39,7 +39,12 @@ if base:
     contextdb_dir = os.path.join(base, project, agent)
 else:
     contextdb_dir = os.path.join(env_dir, "contextdb")
-os.makedirs(contextdb_dir, exist_ok=True)
+# Every other risky call here fails silently; this one didn't, so an unwritable
+# contextdb crashed the hook with a traceback into the session instead.
+try:
+    os.makedirs(contextdb_dir, exist_ok=True)
+except Exception:
+    sys.exit(0)
 
 ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 session = data.get("session_id", "unknown")[:8]

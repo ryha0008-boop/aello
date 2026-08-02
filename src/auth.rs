@@ -4,7 +4,7 @@
 //! CLAUDE_CODE_OAUTH_TOKEN — concurrency-safe, unlike copied `.credentials.json`
 //! (whose refresh tokens rotate and break parallel envs).
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 
@@ -42,10 +42,21 @@ pub fn capture_setup_token() -> Result<Option<String>> {
             captured.push('\n');
         }
     }
-    child.wait().context("'claude setup-token' failed")?;
+    let status = child.wait().context("'claude setup-token' failed")?;
 
     if let Some(tok) = extract_token(&captured) {
         return Ok(Some(tok));
+    }
+
+    // Distinguish "the command failed" from "the command worked but we couldn't
+    // parse it". Discarding the exit status meant a hard failure — claude not
+    // logged in, a network error — was reported as a parse problem, and the user
+    // was invited to paste a token that was never issued.
+    if !status.success() {
+        bail!(
+            "'claude setup-token' exited with {} and printed no usable token —              run it directly to see why",
+            status.code().map(|c| c.to_string()).unwrap_or_else(|| "a signal".into())
+        );
     }
 
     // Couldn't parse it from stdout — let the user paste it.

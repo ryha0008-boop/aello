@@ -19,7 +19,10 @@ const hubotSans = Hubot_Sans({
 })
 
 export const metadata: Metadata = {
-  metadataBase: new URL('https://github.com/ryha0008-boop/aello'),
+  // The site's own origin — relative og:image/canonical URLs resolve against
+  // this, and pointing it at the repo made every one of them resolve to a
+  // github.com path that does not exist.
+  metadataBase: new URL('https://ryha0008-boop.github.io/aello/'),
   title: 'aello — isolated Claude Code environments',
   description:
     'aello gives every Claude Code agent its own config dir, persona, and skills, placed into any project with one command. Like a venv, for agents.',

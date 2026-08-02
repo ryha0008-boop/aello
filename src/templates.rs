@@ -10,8 +10,13 @@ use anyhow::{Context, Result};
 const CODER: &str = include_str!("../templates/coder.md");
 const SYSADMIN: &str = include_str!("../templates/sysadmin.md");
 
-/// Names of the built-in templates, for help text and the TUI picker.
-#[allow(dead_code)] // used by the TUI persona picker in Increment 3
+/// Names of the built-in templates.
+///
+/// The TUI keeps its own `PERSONAS` list (it carries a description per row and a
+/// "none" entry this list has no place for), so nothing reads this at runtime —
+/// its one job is to be the thing `tui::tests::personas_match_builtins` compares
+/// against, which is what stops the two drifting when a template is added.
+#[allow(dead_code)] // referenced only by the TUI's guard test
 pub const BUILTINS: &[&str] = &["coder", "sysadmin"];
 
 /// Content of a built-in template by name, or None if not a builtin.

@@ -12,6 +12,7 @@ my-project/
 │   ├── CLAUDE.md             #   global persona (set once)
 │   ├── hooks/post-compact.py
 │   ├── hooks/session-end.py
+│   ├── hooks/session-start.py #   reads + deletes <name>.HANDOFF.md / .NOTE.md
 │   ├── hooks/speak.py        #   the voice — + duck.py, win_audio.ps1
 │   ├── skills/sync/SKILL.md  #   generated from this blueprint's capabilities
 │   ├── skills/handoff/SKILL.md       # universal — resume note to self

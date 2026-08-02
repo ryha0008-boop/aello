@@ -1,8 +1,19 @@
 .hero {
   padding-block: var(--base-size-80) var(--brand-Hero-regular-padding);
   background:
-    radial-gradient(60rem 32rem at 12% -10%, rgba(8, 135, 43, 0.16), transparent 60%),
-    radial-gradient(48rem 28rem at 92% 4%, rgba(80, 73, 194, 0.14), transparent 62%);
+    /* Derived from the tokens rather than restating their channels: these were
+       the literal RGB of --color-accent-emphasis and --color-decorative-purple-mid,
+       so retuning either token silently left the hero glow behind. */
+    radial-gradient(
+      60rem 32rem at 12% -10%,
+      color-mix(in srgb, var(--color-accent-emphasis) 16%, transparent),
+      transparent 60%
+    ),
+    radial-gradient(
+      48rem 28rem at 92% 4%,
+      color-mix(in srgb, var(--color-decorative-purple-mid) 14%, transparent),
+      transparent 62%
+    );
 }
 
 .title {
@@ -63,7 +74,10 @@
 }
 
 .secondary:hover {
-  background: rgba(255, 255, 255, 0.16);
+  /* Was an invented rgba(255,255,255,0.16) with no token behind it. The glass
+     scale tops out at --color-canvas-glass-medium; lifting from the dark-glass
+     base to that still reads as a hover without inventing a step. */
+  background: var(--color-canvas-glass-medium);
   border-color: var(--color-border-subtle);
 }
 

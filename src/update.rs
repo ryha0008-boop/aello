@@ -10,19 +10,46 @@ use anyhow::{Context, Result};
 const RELEASE_API: &str = "https://api.github.com/repos/ryha0008-boop/aello/releases/latest";
 const RELEASES_PAGE: &str = "https://github.com/ryha0008-boop/aello/releases";
 
-pub fn run() -> Result<()> {
+/// An HTTP agent with explicit timeouts. ureq's default read timeout is
+/// unbounded, so a server that accepted the connection and then stalled hung
+/// `aello update` indefinitely with no way out but Ctrl+C.
+fn agent() -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(15))
+        .timeout_read(std::time::Duration::from_secs(120))
+        .timeout_write(std::time::Duration::from_secs(30))
+        .build()
+}
+
+pub fn run(force: bool) -> Result<()> {
     let ua = format!("aello/{}", env!("CARGO_PKG_VERSION"));
+    let http = agent();
     print!("Fetching latest build... ");
     std::io::Write::flush(&mut std::io::stdout()).ok();
 
-    let release: serde_json::Value = match ureq::get(RELEASE_API).set("User-Agent", &ua).call() {
+    let release: serde_json::Value = match http.get(RELEASE_API).set("User-Agent", &ua).call() {
         Ok(r) => r.into_json().context("failed to parse release JSON")?,
         Err(e) => {
-            println!("failed ({e})");
-            println!("Download manually from: {RELEASES_PAGE}");
-            return Ok(());
+            // Hard error, not Ok(()): returning success here made
+            // `aello update && something-that-needs-the-new-build` carry on as
+            // though it were current.
+            println!("failed");
+            return Err(anyhow::anyhow!(e))
+                .with_context(|| format!("could not reach the release API — download manually from: {RELEASES_PAGE}"));
         }
     };
+
+    // Nothing to do when we are already on the published version. Without this
+    // every `aello update` re-downloaded a multi-MB asset and rewrote the running
+    // binary — on Windows that means renaming the live exe aside, which hard-fails
+    // if a second aello is running, so the redundant case was not merely wasteful.
+    let tag = release["tag_name"].as_str().unwrap_or("");
+    let latest = tag.strip_prefix('v').unwrap_or(tag);
+    if !force && !latest.is_empty() && latest == env!("CARGO_PKG_VERSION") {
+        println!("ok");
+        println!("Already on {latest} — nothing to do. (Use --force to reinstall.)");
+        return Ok(());
+    }
 
     // Asset naming: aello-<arch>-<os>[.exe]. Only the CI-built targets exist.
     let expected = match (std::env::consts::OS, std::env::consts::ARCH) {
@@ -56,7 +83,8 @@ pub fn run() -> Result<()> {
     println!("ok");
     println!("Downloading {expected}{}...", if sha.is_empty() { String::new() } else { format!(" ({sha})") });
 
-    let reader = ureq::get(url)
+    let reader = http
+        .get(url)
         .set("User-Agent", &ua)
         .call()
         .context("download failed")?
@@ -86,7 +114,7 @@ pub fn run() -> Result<()> {
     // against it before installing (TLS alone doesn't protect against a hijacked
     // release asset). Verify-if-present so releases predating SHA256SUMS still
     // update, just without the extra check.
-    verify_checksum(assets, expected, &buf, &ua)?;
+    verify_checksum(&http, assets, expected, &buf, &ua)?;
 
     let exe = std::env::current_exe().context("could not find current exe path")?;
     replace_binary(&exe, &buf)?;
@@ -100,6 +128,7 @@ pub fn run() -> Result<()> {
 /// present-but-missing-our-file checksum is a hard failure: we must not install
 /// a binary the release's own manifest disagrees with.
 fn verify_checksum(
+    http: &ureq::Agent,
     assets: &[serde_json::Value],
     filename: &str,
     buf: &[u8],
@@ -113,7 +142,8 @@ fn verify_checksum(
         println!("(no SHA256SUMS in release — skipping checksum verification)");
         return Ok(());
     };
-    let sums = ureq::get(sums_url)
+    let sums = http
+        .get(sums_url)
         .set("User-Agent", ua)
         .call()
         .context("failed to fetch SHA256SUMS")?
@@ -170,11 +200,23 @@ fn replace_binary(exe: &std::path::Path, buf: &[u8]) -> Result<()> {
         old.push(format!(".old-{nanos}"));
         let old = std::path::PathBuf::from(old);
 
-        std::fs::rename(exe, &old)
-            .context("could not rename current binary — close any other running aello, then retry")?;
-        if let Err(e) = std::fs::write(exe, buf) {
+        // Stage the new binary beside the target BEFORE moving the running one
+        // aside, so a failure part-way through a multi-MB write can never leave
+        // the install path holding a truncated exe.
+        let dir = exe.parent().unwrap_or_else(|| std::path::Path::new("."));
+        let tmp = dir.join(format!(".aello-update-{}", std::process::id()));
+        std::fs::write(&tmp, buf).with_context(|| {
+            format!("failed to stage the new binary in {}", dir.display())
+        })?;
+
+        std::fs::rename(exe, &old).inspect_err(|_| {
+            let _ = std::fs::remove_file(&tmp);
+        })
+        .context("could not rename current binary — close any other running aello, then retry")?;
+        if let Err(e) = std::fs::rename(&tmp, exe) {
             let _ = std::fs::rename(&old, exe); // restore on failure
-            return Err(e).context("failed to write new binary");
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e).context("failed to move the new binary into place");
         }
     }
     // Unix can't write() over a running executable (ETXTBSY). Write the new

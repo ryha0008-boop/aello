@@ -590,7 +590,18 @@ fn sync_voice_hooks(settings: &Path) -> Result<()> {
     };
 
     let owned = |g: &serde_json::Value| group_has_command(g, OWNED_SPEAK);
-    let legacy = |g: &serde_json::Value| group_has_command(g, "speak.py") && !owned(g);
+    // Anchored on a path boundary, not a bare substring. `contains("speak.py")`
+    // also matched a user's own `my_speak.py` or `tools/fastspeak.pyx`, and the
+    // retain below drops the whole GROUP — so an unrelated sibling command in it
+    // went too. This runs on every `aello run`, not once at enable, so a hook
+    // added later would have been removed on the next launch.
+    let legacy = |g: &serde_json::Value| {
+        !owned(g)
+            && (group_has_command(g, "/speak.py")
+                || group_has_command(g, r"\speak.py")
+                || group_has_command(g, "\"speak.py")
+                || group_has_command(g, " speak.py"))
+    };
 
     let mut changed = false;
     for event in ["Stop", "SessionEnd"] {
@@ -961,6 +972,37 @@ mod tests {
         assert_eq!(v["effortLevel"], "high");
         assert!(registers_command(&v["hooks"]["SessionEnd"], "session-end.py"));
         assert!(registers_command(&v["hooks"]["Stop"], "speak.py"));
+    }
+
+    #[test]
+    fn a_foreign_hook_merely_containing_speak_py_survives() {
+        // The predicate was an unanchored contains("speak.py"), and `retain`
+        // drops the whole GROUP — so a user's own my_speak.py took an unrelated
+        // sibling command with it, on every run rather than once at enable.
+        let proj = tempfile::tempdir().unwrap();
+        let env = env_dir(proj.path(), "coder");
+        std::fs::create_dir_all(&env).unwrap();
+        std::fs::write(
+            env.join("settings.json"),
+            r#"{"hooks":{"Stop":[
+                 {"hooks":[
+                   {"type":"command","command":"python tools/my_speak.py"},
+                   {"type":"command","command":"python unrelated.py"}
+                 ]}
+               ]}}"#,
+        )
+        .unwrap();
+
+        let inst = Instance { name: "coder".into(), model: "opus".into() };
+        place(&env, &inst, None, &Capabilities::default()).unwrap();
+        place(&env, &inst, None, &Capabilities::default()).unwrap(); // and again
+
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(env.join("settings.json")).unwrap())
+                .unwrap();
+        assert!(registers_command(&v["hooks"]["Stop"], "my_speak.py"), "foreign hook deleted");
+        assert!(registers_command(&v["hooks"]["Stop"], "unrelated.py"), "sibling deleted");
+        assert!(registers_command(&v["hooks"]["Stop"], OWNED_SPEAK), "ours not installed");
     }
 
     #[test]
