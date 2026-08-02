@@ -85,7 +85,7 @@ NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if IS_WIN else {}
 # comparing it against the value here is how a vendored copy learns it has
 # fallen behind. Station-only changes leave it alone: a version that moves for
 # reasons the hook never executes trains everyone to ignore the warning.
-HOOK_VERSION = 4
+HOOK_VERSION = 5
 
 MAX_CHARS = int(os.environ.get("REVOICED_MAX_CHARS", "1200"))
 KEEP = int(os.environ.get("REVOICED_HISTORY", "200"))

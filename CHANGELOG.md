@@ -81,17 +81,17 @@
   no error at all, and only the station registered one — so on such a machine
   every env was silently notification-less, the same failure as the incomplete
   vendor one layer out. Launching an env now runs the vendored
-  `notify.py --register` (no test toast, idempotent), but **only when nothing has
-  claimed the `revoiced:` protocol yet**: registering also points that protocol at
-  an `action.py` next to whichever copy ran it, and an env's `hooks/` has none, so
-  doing it unconditionally would break both toast buttons on precisely the
-  machines where a station had them working.
+  `notify.py --register` (no test toast, idempotent). At `HOOK_VERSION = 5` that
+  claims the toast identity and leaves the `revoiced:` protocol to a copy with an
+  `action.py` to serve it — an env has none, so it can't take a working toast
+  button away from the station.
 - **"Skip this one" now skips that one.** A toast stays in Windows' notification
   centre for three days, and the skip link named no turn — so pressing the button
   on an old notification cut off whatever happened to be speaking at that moment,
   which across dozens of envs is usually another env's line. Re-vendored the voice
   hook at `HOOK_VERSION = 4`: the URI carries the turn id and the station refuses
-  a stale one. Existing envs pick it up on their next `run`. The drift check now
+  a stale one. Vendored at `HOOK_VERSION = 5`; existing envs pick it up on their
+  next `run`. The drift check now
   covers **all five** vendored files rather than only `speak.py` — `HOOK_VERSION`
   lives in `speak.py` alone, so a re-vendor touching just `duck.py` or
   `win_audio.ps1` used to slip past it.

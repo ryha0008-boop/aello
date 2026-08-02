@@ -87,10 +87,28 @@ def _handler_argv() -> list:
     return [str(quiet if quiet.exists() else exe), str(HERE / "action.py"), "%1"]
 
 
+def serves_protocol() -> bool:
+    """Whether this copy can actually handle a `revoiced://…` link.
+
+    aello vendors the five hook-path files into each env dir, and `action.py`
+    is not one of them - it belongs to the station. `HERE` is wherever *this*
+    notify.py sits, so a copy in an env dir would otherwise point the machine's
+    only `revoiced:` handler at a file that does not exist, killing both toast
+    buttons everywhere and re-breaking them on each launch with a different
+    env's path. A copy that cannot serve the protocol must not claim it.
+    """
+    return (HERE / "action.py").exists()
+
+
 def register() -> str:
     """Register the protocol and the toast identity. Returns '' or a reason.
 
     Idempotent, and safe to call on a machine where it has already been done.
+
+    The two halves are registered independently on purpose. The AUMID is just
+    an identity - any copy may claim it, and a toast sent under an unregistered
+    one is dropped by Windows with no error - while the protocol is a promise to
+    run something, and only a copy with `action.py` beside it can keep that.
     """
     if not IS_WIN:
         return "registration is Windows-only"
@@ -101,13 +119,15 @@ def register() -> str:
     argv = _handler_argv()
     command = " ".join(f'"{a}"' if a != "%1" else '"%1"' for a in argv)
     try:
-        with winreg.CreateKey(winreg.HKEY_CURRENT_USER,
-                              rf"Software\Classes\{SCHEME}") as k:
-            winreg.SetValueEx(k, None, 0, winreg.REG_SZ, f"URL:{SCHEME}")
-            winreg.SetValueEx(k, "URL Protocol", 0, winreg.REG_SZ, "")
-        with winreg.CreateKey(winreg.HKEY_CURRENT_USER,
-                              rf"Software\Classes\{SCHEME}\shell\open\command") as k:
-            winreg.SetValueEx(k, None, 0, winreg.REG_SZ, command)
+        if serves_protocol():
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER,
+                                  rf"Software\Classes\{SCHEME}") as k:
+                winreg.SetValueEx(k, None, 0, winreg.REG_SZ, f"URL:{SCHEME}")
+                winreg.SetValueEx(k, "URL Protocol", 0, winreg.REG_SZ, "")
+            with winreg.CreateKey(
+                    winreg.HKEY_CURRENT_USER,
+                    rf"Software\Classes\{SCHEME}\shell\open\command") as k:
+                winreg.SetValueEx(k, None, 0, winreg.REG_SZ, command)
         # The name and icon a toast is shown under. Without this it borrows
         # whichever application's id was used to send it.
         with winreg.CreateKey(winreg.HKEY_CURRENT_USER,
@@ -220,7 +240,13 @@ if __name__ == "__main__":
     # three-file vendor caused, one layer out. No test toast: this runs at setup
     # time, where a pop-up would be noise.
     if "--register" in sys.argv[1:]:
-        print(register() or "registered")
+        # Say which half was written. A copy without action.py registers the
+        # identity only, and that is the normal case for a vendored one - it is
+        # not a failure, but it is not the whole thing either.
+        print(register() or ("registered" if serves_protocol()
+                             else "registered identity only - no action.py "
+                                  "beside this copy, so the protocol is left "
+                                  "to whoever can serve it"))
         raise SystemExit(0)
 
     reason = why_not()

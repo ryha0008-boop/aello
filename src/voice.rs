@@ -186,52 +186,29 @@ pub fn status() -> Result<()> {
     Ok(())
 }
 
-/// The registry key the revoiced protocol handler lives under, if anything has
-/// claimed it. Per-user, so registering never needs admin.
-#[cfg(windows)]
-const PROTOCOL_KEY: &str = r"HKCU\Software\Classes\revoiced\shell\open\command";
-
-/// Whether aello should claim the toast identity itself. `claimed` is `None`
-/// when the query couldn't run at all — unknown state, so leave it alone.
-#[cfg(any(windows, test))]
-fn should_register(claimed: Option<bool>) -> bool {
-    claimed == Some(false)
-}
-
-/// Register the toast identity on a machine where nothing else has.
+/// Claim the toast identity for this machine.
 ///
 /// Windows drops a notification sent under an unregistered AppUserModelID with
 /// no error whatsoever, so a machine that runs aello envs but never starts the
-/// revoiced station has desktop notifications off everywhere and nothing says
-/// so — the same failure shape as the three-file vendor, one layer out.
-/// `notify.py --register` writes the protocol and the toast identity, prints
-/// `registered`, raises no test toast, and is idempotent.
+/// revoiced station had desktop notifications off everywhere and nothing said so
+/// — the same failure shape as the three-file vendor, one layer out.
+/// `notify.py --register` claims it: no test toast, idempotent, safe to run on
+/// every launch.
 ///
-/// Only when the protocol is unclaimed, though. `register()` also points that
-/// protocol at an `action.py` *next to whichever copy ran it*, and an env's
-/// `hooks/` has no `action.py` — aello vendors the five hook-path files, not the
-/// station. Run unconditionally, it would repoint both toast buttons at a file
-/// that isn't there on every launch, on exactly the machines where the station
-/// had them working. An unclaimed protocol means no station has ever run here,
-/// which is the case the flag exists for: the buttons need a station to talk to
-/// anyway, and the station reclaims the protocol the first time it starts.
+/// Unconditional, and only since upstream `9d085c8`. `register()` used to write
+/// the `revoiced:` protocol alongside the identity, pointed at an `action.py`
+/// *beside whichever copy ran it* — and an env's `hooks/` has none, since aello
+/// vendors the five hook-path files and not the station. It now writes the two
+/// halves independently: the identity from anywhere, the protocol only from a
+/// copy that has an `action.py` to serve it with. So this can no longer take a
+/// working handler away from the station.
 ///
-/// Best-effort throughout. A missing `python`, a locked registry or a hook that
-/// errors is not worth failing a launch over.
+/// Best-effort. A missing `python` or a hook that errors is not worth failing a
+/// launch over.
 #[cfg(windows)]
 pub fn ensure_notify_registered(env_dir: &Path) {
     use std::process::{Command, Stdio};
 
-    let claimed = Command::new("reg")
-        .args(["query", PROTOCOL_KEY])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .ok()
-        .map(|s| s.success());
-    if !should_register(claimed) {
-        return;
-    }
     let _ = Command::new("python")
         .arg(env_dir.join("hooks").join("notify.py"))
         .arg("--register")
@@ -248,15 +225,6 @@ pub fn ensure_notify_registered(_env_dir: &Path) {}
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Claim it only when the query ran and found nothing. A station's
-    /// registration must survive, and so must an unreadable registry.
-    #[test]
-    fn only_an_unclaimed_protocol_is_registered() {
-        assert!(should_register(Some(false)));
-        assert!(!should_register(Some(true)));
-        assert!(!should_register(None));
-    }
 
     #[test]
     fn mute_flag_round_trips_and_preserves_unknown_keys() {
