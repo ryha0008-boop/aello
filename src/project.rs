@@ -9,15 +9,35 @@ const POST_COMPACT_SCRIPT: &str = include_str!("hooks_post_compact.py");
 const SESSION_END_SCRIPT: &str = include_str!("hooks_session_end.py");
 const SESSION_START_SCRIPT: &str = include_str!("hooks_session_start.py");
 
-/// The `voice` capability's text-to-speech hook (vendored from the `revoiced`
-/// project). `speak.py` imports `duck` as a sibling and shells out to
-/// `win_audio.ps1` next to it, so all three land in `<env>/hooks/` together.
+/// The text-to-speech hook (vendored from the `revoiced` project). `speak.py`
+/// imports `duck`, `focus` and `notify` as siblings and shells out to
+/// `win_audio.ps1` next to it, so all five land in `<env>/hooks/` together.
 /// Vendoring them per-env is what removes the absolute path to a checkout;
 /// their shared state (voice pool, leases, mute) lives in a machine-wide data
 /// dir, so every env still queues behind one playback lock.
+///
+/// `focus` and `notify` used to be left out, because `speak.py` guards those
+/// two imports and a partial copy still speaks. It does — silently, with
+/// desktop notifications off in every env, which is how they were broken for
+/// two hours without anything saying so. Guarded does not mean optional: vendor
+/// all five.
 const SPEAK_SCRIPT: &str = include_str!("hooks_speak.py");
 const DUCK_SCRIPT: &str = include_str!("hooks_duck.py");
+const FOCUS_SCRIPT: &str = include_str!("hooks_focus.py");
+const NOTIFY_SCRIPT: &str = include_str!("hooks_notify.py");
 const WIN_AUDIO_SCRIPT: &str = include_str!("hooks_win_audio.ps1");
+
+/// The `HOOK_VERSION` of the vendored copy above. Upstream bumps its constant
+/// whenever one of the five hook-path files changes, so comparing the two is
+/// how this copy learns it has fallen behind — see the test at the bottom of
+/// this file, which fails if a re-vendor moves the scripts without moving this.
+///
+/// A version, not a commit sha: revoiced's CI commits a `VERSION` bump on every
+/// push to main, so local work rebases onto that and every unpushed sha is
+/// rewritten. A recorded sha goes stale by itself; a recorded version cannot.
+/// Surfaced by `aello voice status`, so checking a machine does not mean
+/// finding an env dir and running Python in it.
+pub const HOOK_VERSION: u32 = 3;
 
 /// Starter memory seeded on first placement so a fresh env boots with the
 /// user's working-style note already loaded in `/context`. The body is bundled;
@@ -244,13 +264,18 @@ pub fn place(
     std::fs::write(env_dir.join("hooks").join("session-start.py"), SESSION_START_SCRIPT)
         .context("could not write session-start.py")?;
 
-    // Voice hook + its two siblings, refreshed like the others so fixes reach
-    // existing envs.
+    // Voice hook + its four siblings, refreshed like the others so fixes reach
+    // existing envs. All five, always: a copy missing `notify.py` speaks but
+    // never raises a desktop notification, and says nothing about it.
     let hooks = env_dir.join("hooks");
     std::fs::write(hooks.join("speak.py"), SPEAK_SCRIPT)
         .context("could not write speak.py")?;
     std::fs::write(hooks.join("duck.py"), DUCK_SCRIPT)
         .context("could not write duck.py")?;
+    std::fs::write(hooks.join("focus.py"), FOCUS_SCRIPT)
+        .context("could not write focus.py")?;
+    std::fs::write(hooks.join("notify.py"), NOTIFY_SCRIPT)
+        .context("could not write notify.py")?;
     std::fs::write(hooks.join("win_audio.ps1"), WIN_AUDIO_SCRIPT)
         .context("could not write win_audio.ps1")?;
 
@@ -883,7 +908,7 @@ mod tests {
     }
 
     #[test]
-    fn every_env_seeds_all_three_scripts_and_the_tldr_instruction() {
+    fn every_env_seeds_all_five_scripts_and_the_tldr_instruction() {
         let proj = tempfile::tempdir().unwrap();
         let env = env_dir(proj.path(), "coder");
         let inst = Instance { name: "coder".into(), model: "opus".into() };
@@ -892,10 +917,14 @@ mod tests {
 
         place(&env, &inst, Some("# persona\n"), &caps).unwrap();
 
-        // speak.py imports duck as a sibling and shells out to win_audio.ps1 next
-        // to it, so a partial copy would break at runtime, not at placement.
+        // speak.py imports duck, focus and notify as siblings and shells out to
+        // win_audio.ps1 next to it. A partial copy would break at runtime, not
+        // at placement — and for focus/notify it does not break at all, it just
+        // goes quiet, which is why all five are asserted here.
         assert!(env.join("hooks/speak.py").exists());
         assert!(env.join("hooks/duck.py").exists());
+        assert!(env.join("hooks/focus.py").exists());
+        assert!(env.join("hooks/notify.py").exists());
         assert!(env.join("hooks/win_audio.ps1").exists());
         // The persona must ask for the line the hook speaks.
         let persona = std::fs::read_to_string(env.join("CLAUDE.md")).unwrap();
@@ -903,6 +932,37 @@ mod tests {
         assert!(persona.contains("TL;DR"));
         // The voice is not a /sync capability, so no skill is seeded.
         assert!(!env.join("skills/sync/SKILL.md").exists());
+    }
+
+    /// The drift check. Upstream moves `HOOK_VERSION` whenever one of the five
+    /// hook-path files changes, so a re-vendor that forgets to move the constant
+    /// here fails this rather than shipping a copy nobody can date.
+    #[test]
+    fn the_recorded_hook_version_matches_the_vendored_script() {
+        let line = SPEAK_SCRIPT
+            .lines()
+            .find(|l| l.starts_with("HOOK_VERSION"))
+            .expect("vendored speak.py has no HOOK_VERSION");
+        let vendored: u32 = line
+            .split('=')
+            .nth(1)
+            .and_then(|v| v.trim().parse().ok())
+            .expect("HOOK_VERSION is not an integer");
+        assert_eq!(
+            vendored, HOOK_VERSION,
+            "re-vendored speak.py is version {vendored} but project.rs still records {HOOK_VERSION}"
+        );
+    }
+
+    /// `speak.py` guards the `focus` and `notify` imports so a partial copy
+    /// still speaks — which is exactly how a three-file vendor turned desktop
+    /// notifications off everywhere without failing. Both must be bundled.
+    #[test]
+    fn the_optional_siblings_are_vendored_not_left_to_the_import_guard() {
+        assert!(SPEAK_SCRIPT.contains("import focus as focusing"));
+        assert!(SPEAK_SCRIPT.contains("import notify as notifying"));
+        assert!(FOCUS_SCRIPT.contains("def terminal_window"));
+        assert!(NOTIFY_SCRIPT.contains("def show("));
     }
 
     #[test]

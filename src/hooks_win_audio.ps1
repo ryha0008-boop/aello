@@ -40,8 +40,22 @@ if ($Mode -eq 'toast') {
         $waited++
     }
     $player.Play()
+    # Open() resolves the duration asynchronously and can miss the budget above
+    # on a slow load, so keep looking while it plays: without this the Stop()
+    # below lands immediately and the line is dropped in silence.
+    $waited = 0
+    while (-not $player.NaturalDuration.HasTimeSpan -and $waited -lt 100) {
+        Start-Sleep -Milliseconds 100
+        $waited++
+    }
     if ($player.NaturalDuration.HasTimeSpan) {
-        Start-Sleep -Milliseconds ([int]($player.NaturalDuration.TimeSpan.TotalMilliseconds + 500))
+        $left = $player.NaturalDuration.TimeSpan.TotalMilliseconds - $player.Position.TotalMilliseconds
+        if ($left -lt 0) { $left = 0 }
+        Start-Sleep -Milliseconds ([int]($left + 500))
+    } else {
+        # Still nothing 10s in. Play a fixed stretch rather than nothing at
+        # all - a line cut short is heard, a line stopped at once is not.
+        Start-Sleep -Seconds 20
     }
     $player.Stop()
     $player.Close()

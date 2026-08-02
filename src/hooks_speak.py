@@ -45,16 +45,29 @@ import duck as ducking
 # vendors it into an env dir - and a partial copy must still speak rather than
 # ImportError on every response. Absent, they degrade to exactly what they
 # already return off Windows: no window, no pid, no toast. Every caller handles
-# that case today, so there is nothing else to guard.
+# that case today.
+#
+# But the degradation must be *loud*. A three-file vendor into every env dir
+# turned notifications off everywhere for two hours, and because the fallback
+# said nothing, it was reported as broken twice and measured as healthy twice -
+# the tests ran this repo's copy, which has its siblings, rather than the copy
+# the hook executes. MISSING is what makes that visible: it is recorded on every
+# turn and printed by --status.
+MISSING = []
 try:
     import focus as focusing
 except ImportError:
+    MISSING.append("focus")
     focusing = SimpleNamespace(window_pids=lambda: set(),
+                               window_names=lambda: set(),
+                               window_name_counts=lambda: {},
+                               name_key=lambda t: (t or "").strip().lower(),
                                terminal_pid=lambda: 0,
                                terminal_window=lambda *a, **k: None)
 try:
     import notify as notifying
 except ImportError:
+    MISSING.append("notify")
     notifying = SimpleNamespace(show=lambda *a, **k: False)
 
 HERE = Path(__file__).resolve().parent
@@ -67,10 +80,27 @@ IS_MAC = sys.platform == "darwin"
 # you were doing, every single time. Every subprocess here is headless.
 NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if IS_WIN else {}
 
+# Bumped whenever anything on the hook path changes - this file, duck.py or
+# win_audio.ps1. aello vendors those three and records the value it copied, so
+# comparing it against the value here is how a vendored copy learns it has
+# fallen behind. Station-only changes leave it alone: a version that moves for
+# reasons the hook never executes trains everyone to ignore the warning.
+HOOK_VERSION = 3
+
 MAX_CHARS = int(os.environ.get("REVOICED_MAX_CHARS", "1200"))
 KEEP = int(os.environ.get("REVOICED_HISTORY", "200"))
 ENFORCE = os.environ.get("REVOICED_ENFORCE", "1") != "0"
 LEASE_TTL = float(os.environ.get("REVOICED_LEASE_TTL", "43200"))  # 12h
+# How long a lease is believed on its own word, before its terminal has to
+# still be on screen for it to count as running. Long enough that an agent
+# thinking hard is never called dead; short enough that a window you closed
+# stops claiming to be running while you are still looking at the page.
+LEASE_GRACE = float(os.environ.get("REVOICED_LEASE_GRACE", "300"))  # 5min
+# The longest a single line may hold the speaker lock. That lock is machine-wide
+# and heartbeated for exactly as long as the player lives, so a player that
+# never exits silences every env on the box and nothing else ever gives up.
+# 0 turns the cap off. A full-length line is well under a minute of speech.
+PLAY_MAX = float(os.environ.get("REVOICED_PLAY_MAX", "300"))  # 5min
 
 # Used when the pool is empty, so a fresh install still speaks.
 DEFAULT_PRESET = {
@@ -252,17 +282,60 @@ def dead_leases(leases: dict) -> list:
     does not fire it - so a finished agent read as "running" in the station for
     the full 12 hours. A lease with no recorded pid, or one taken off Windows,
     falls back to the TTL alone.
+
+    The pid is not enough on its own, and on this desktop it is worth nothing:
+    Windows Terminal hosts every window in one process, so every session records
+    the same pid and it stays alive while any terminal anywhere is open. A
+    closed window was indistinguishable from a busy one. So a lease that has
+    gone quiet is also checked against the titles on screen, and dropped when
+    nothing out there is called what it is. Only after GRACE, and only when
+    there are titles to check against: an agent mid-turn must never be judged
+    dead, and no evidence still means alive.
     """
     now = time.time()
     alive = focusing.window_pids()
+    counts = focusing.window_name_counts()
+    titles = set(counts)
     out = []
+
+    def named(l):
+        return {focusing.name_key(l.get("title") or ""),
+                focusing.name_key(l.get("project") or "")} - {""}
+
     for sid, l in leases.items():
-        if now - float(l.get("last_used", 0)) > LEASE_TTL:
+        idle = now - float(l.get("last_used", 0))
+        if idle > LEASE_TTL:
             out.append(sid)
             continue
         pid = int(l.get("pid") or 0)
         if pid and alive and pid not in alive:
             out.append(sid)
+            continue
+        if titles and idle > LEASE_GRACE:
+            want = named(l)
+            if want and not (want & titles):
+                out.append(sid)
+
+    # More leases on one profile than it has windows. Two windows on one profile
+    # are two runs and both are kept - but close a terminal with the X and open
+    # another for the same project and the first lease lives on, because no
+    # SessionEnd fires and the name it recorded still matches the window that
+    # replaced it. That read as "2 running" beside a profile with one terminal.
+    # Newest first, so the survivors are the ones that spoke most recently.
+    if counts:
+        groups = {}
+        for sid, l in leases.items():
+            if sid not in out:
+                groups.setdefault(l.get("key") or l.get("cwd"), []).append((sid, l))
+        for group in groups.values():
+            if len(group) < 2:
+                continue
+            room = max((counts.get(n, 0) for n in named(group[0][1])), default=0)
+            if not room or len(group) <= room:
+                continue                       # no evidence, or room for them all
+            group.sort(key=lambda g: float(g[1].get("last_used", 0)), reverse=True)
+            out += [sid for sid, l in group[room:]
+                    if now - float(l.get("last_used", 0)) > LEASE_GRACE]
     return out
 
 
@@ -293,18 +366,60 @@ def lease_preset(session: str, key: str, project: str, cwd: str = "",
         for sid in dead_leases(leases):
             leases.pop(sid, None)          # terminal died without releasing
 
+        # Whose window closing means this session is over. No title matched
+        # still leaves a usable pid, so ask for it directly rather than only
+        # through `window`.
+        pid = int((window or {}).get("pid") or 0) or focusing.terminal_pid()
+
+        # A session that ended in /clear keeps its lease - that is what stops
+        # the station blinking out - so retire it here, as the session that
+        # replaced it speaks for the first time. Only ones actually marked
+        # cleared: two windows on one profile are two live runs and both must
+        # survive, and the pid cannot tell them apart because Windows Terminal
+        # gives every window the same one.
+        for sid in [s for s, l in leases.items()
+                    if s != session and l.get("cleared")
+                    and (l.get("key") or l.get("cwd")) == key]:
+            leases.pop(sid)
+
         chosen = pin_preset(key, presets, st["voices"])
         prev = leases.get(session, {})
         leases[session] = {"preset": chosen, "key": key, "cwd": cwd or key,
-                           "project": project,
-                           # Whose window closing means this session is over.
-                           # No title matched still leaves a usable pid, so ask
-                           # for it directly rather than only through `window`.
-                           "pid": int((window or {}).get("pid") or 0)
-                                  or focusing.terminal_pid(),
+                           "project": project, "pid": pid,
+                           # The window this ran in, by name. dead_leases has
+                           # nothing else to check once the pid is shared.
+                           "title": (window or {}).get("title") or "",
                            "acquired": prev.get("acquired", now), "last_used": now}
         write_state(st)
         return {p["id"]: p for p in presets}[chosen]
+
+
+# SessionEnd fires on /clear and /resume too, and neither ends anything you can
+# see: the terminal stays open and a new session takes over in it within
+# seconds. Releasing there dropped the project out of the station's running bar
+# until it next happened to speak, which is minutes of a window that never
+# stopped working reading as idle. What ends a run is the window closing, and
+# dead_leases() already watches for that.
+SESSION_CONTINUES = {"clear", "resume"}
+
+
+def mark_cleared(session: str) -> bool:
+    """Keep this session's lease, but record that it is a placeholder.
+
+    /clear ends a session and starts another in the same window. Dropping the
+    lease blanked the agent out of the station until it next spoke; keeping it
+    untouched left a second lease behind when the replacement arrived. Marked,
+    it survives until the session that replaced it speaks - and if none ever
+    does, dead_leases sees a lease with no window on screen and drops it.
+    """
+    with lock("state", stale=5.0, timeout=15.0):
+        st = read_state()
+        l = st["leases"].get(session)
+        if not l:
+            return False
+        l["cleared"] = time.time()
+        write_state(st)
+        return True
 
 
 def release_lease(session: str) -> bool:
@@ -599,12 +714,17 @@ def run_cancellable(cmd: list, job_id: str, session: str, stop_at_start: str,
     if IS_WIN:
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
     proc = subprocess.Popen(cmd, **kwargs)
+    # Cancellation is cooperative, so a player that hangs is never asked to
+    # stand down by anything - and the touch() below keeps its lock looking
+    # alive the whole time. The deadline is the only thing that ends it.
+    deadline = time.time() + PLAY_MAX if PLAY_MAX > 0 else float("inf")
     while proc.poll() is None:
         time.sleep(0.2)
         touch("speaker")
         if (session_token(session) not in ("", job_id)
                 or stop_token() != stop_at_start
-                or skip_token() != skip_at_start):
+                or skip_token() != skip_at_start
+                or time.time() > deadline):
             proc.terminate()
             try:
                 proc.wait(timeout=3)
@@ -639,6 +759,11 @@ def worker(job_file: Path) -> None:
         "voice": (preset.get("name") or preset.get("voice")) if have_audio
                  else "system fallback voice",
         "audio": str(mp3) if have_audio else None,
+        # Absent on a complete copy, so the field itself is the alarm: it names
+        # the siblings this copy was vendored without, and therefore what it
+        # silently is not doing - no toast without notify, no window titles
+        # without focus.
+        **({"missing": list(MISSING)} if MISSING else {}),
     })
 
     stop_at_start = stop_token()
@@ -648,7 +773,13 @@ def worker(job_file: Path) -> None:
     duck_file = RUN / "duck.json"
     ducking.recover(duck_file)      # a previous worker may have died mid-duck
 
-    with lock("speaker", stale=5.0, timeout=600.0):
+    with lock("speaker", stale=5.0, timeout=600.0) as held:
+        # Timing out here means ten minutes of queue ahead of a line two
+        # sentences long: it is stale, and playing it anyway would talk over
+        # whoever does hold the lock. Only reachable if a player outlives
+        # PLAY_MAX, which is now capped.
+        if not held:
+            return
         if session_token(job["session"]) not in ("", job["id"]):
             return
         if stop_token() != stop_at_start:
@@ -708,9 +839,14 @@ def hook() -> None:
     except ValueError:
         return
 
-    # SessionEnd: hand the voice back to the pool.
+    # SessionEnd: hand the voice back to the pool, unless the terminal carries
+    # on without it.
     if data.get("hook_event_name") == "SessionEnd":
-        release_lease(data.get("session_id") or "default")
+        session = data.get("session_id") or "default"
+        if data.get("reason") in SESSION_CONTINUES:
+            mark_cleared(session)
+        else:
+            release_lease(session)
         return
 
     cwd = data.get("cwd") or os.getcwd()
@@ -799,6 +935,12 @@ def main() -> None:
         return
 
     cmd = args[0]
+    if cmd == "--hook-version":
+        # For aello: read it from the copy it vendored and compare with this
+        # repo's, without importing a module whose imports may not be there.
+        print(HOOK_VERSION)
+        return
+
     if cmd == "--worker":
         worker(Path(args[1]))
         return
@@ -807,11 +949,15 @@ def main() -> None:
         session = args[1] if len(args) > 1 else ""
         if not session:                      # called as a SessionEnd hook
             try:
-                session = json.loads(
-                    sys.stdin.buffer.read().decode("utf-8-sig", "replace") or "{}"
-                ).get("session_id", "")
+                data = json.loads(
+                    sys.stdin.buffer.read().decode("utf-8-sig", "replace") or "{}")
             except ValueError:
-                session = ""
+                data = {}
+            if data.get("reason") in SESSION_CONTINUES:
+                session = data.get("session_id", "")
+                print("kept" if session and mark_cleared(session) else "no lease")
+                return
+            session = data.get("session_id", "")
         print("released" if session and release_lease(session) else "no lease")
         return
 
@@ -882,6 +1028,10 @@ def main() -> None:
             print(f"  {l.get('project','?'):22} preset={l.get('preset')} "
                   f"idle={mins:.0f}m  session={sid[:8]}")
     elif cmd == "--status":
+        print(f"hook version  : {HOOK_VERSION}"
+              + ("  INCOMPLETE COPY - no "
+                 + ", ".join(f"{m}.py" for m in MISSING) + " beside it"
+                 if MISSING else ""))
         print(f"global mute   : {state['global']}")
         print(f"muted projects: {[p for p, v in state['projects'].items() if v] or 'none'}")
         print(f"pool          : {len(state['presets'])} preset(s), "

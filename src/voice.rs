@@ -172,6 +172,7 @@ pub fn status() -> Result<()> {
     let presets = state.get("presets").and_then(|p| p.as_array()).map_or(0, |a| a.len());
     let leases = state.get("leases").and_then(|l| l.as_object()).map_or(0, |o| o.len());
 
+    println!("hook version  : {}", crate::project::HOOK_VERSION);
     println!("state         : {}", dir.join("state.json").display());
     println!("global mute   : {muted}");
     println!(
