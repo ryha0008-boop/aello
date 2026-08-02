@@ -76,6 +76,34 @@
   SessionEnd hook archives the matching per-blueprint file.
 
 ### Fixed
+- **The `/handoff` note is now actually read on boot, and then deleted.** The
+  skill has always told the agent the note is "read on boot, then deleted" and
+  stamped a banner saying so, but nothing ever read it — there was no
+  `SessionStart` hook, so the file sat at the project root dirtying `git status`
+  and being re-archived verbatim by every later session. A new `SessionStart`
+  hook delivers it (and `<name>.NOTE.md`, the cross-env inbox from `/note`) into
+  the session, then removes the file. Deleting is safe because `SessionEnd`
+  already archived the content to contextdb.
+- **`aello edit <name> --rename` accepts a case-only change** (`coder` →
+  `Coder`). On Windows and macOS the destination "already exists" because on a
+  case-insensitive filesystem it *is* the source, so the rename bailed while
+  naming the source as the obstruction — the feature was unreachable on both
+  platforms aello ships binaries for. The case-flip is now routed through a temp
+  name.
+- **`--rename` carries the `<name>.HANDOFF.md` and `<name>.NOTE.md` files with
+  it.** Both are addressed by blueprint name and both consumers key off the new
+  one, so a pending resume note or cross-env inbox was left orphaned under a name
+  nothing would ever look for again. An existing file at the destination is never
+  clobbered.
+- **The tracked `claude-internal/<name>/` mirror is cleared when the `github`
+  capability is dropped.** It was only ever written from inside the `github`
+  branch, so turning the cap off froze the folder in git forever — still carrying
+  a git-flavoured `/sync` skill the blueprint no longer had — with
+  `aello remove --purge` the only way to clear it. Another blueprint's mirror in
+  the same repo is left untouched.
+- A hook event whose value in `settings.json` isn't an array is now left alone
+  rather than overwritten, matching every other self-heal, and a `settings.json`
+  that doesn't parse as JSON now says so on stderr instead of skipping in silence.
 - **`aello edit <name> --model` now actually reaches an env that has already been
   placed.** `settings.json` is the only thing that tells Claude Code which model
   to use, and it was written only when it didn't already exist — so editing the

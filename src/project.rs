@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 const POST_COMPACT_SCRIPT: &str = include_str!("hooks_post_compact.py");
 const SESSION_END_SCRIPT: &str = include_str!("hooks_session_end.py");
+const SESSION_START_SCRIPT: &str = include_str!("hooks_session_start.py");
 
 /// The `voice` capability's text-to-speech hook (vendored from the `revoiced`
 /// project). `speak.py` imports `duck` as a sibling and shells out to
@@ -90,22 +91,44 @@ pub fn rename_placed(project: &Path, old: &str, new: &str) -> Result<bool> {
     // a `bail!` there left the env dir already moved while cmd_edit's `?` skipped
     // config::save — config still said <old>, disk said <new>, and `run <old>`
     // then re-scaffolded a fresh env, orphaning the renamed one.
-    if new_env.exists() {
+    //
+    // A pure case-flip (`coder` → `Coder`) is exempt: on Windows and macOS the
+    // default filesystem is case-insensitive, so `.claude-env-Coder`.exists() is
+    // true because it *is* `.claude-env-coder` — the source was being reported as
+    // the obstruction, and `aello edit coder --rename Coder` could never run on
+    // the two platforms aello ships binaries for.
+    let case_flip = old.eq_ignore_ascii_case(new);
+    if !case_flip && new_env.exists() {
         bail!("{} already exists — cannot rename", new_env.display());
     }
-    if old_mirror.exists() && new_mirror.exists() {
+    if !case_flip && old_mirror.exists() && new_mirror.exists() {
         bail!("{} already exists — cannot rename", new_mirror.display());
     }
 
-    std::fs::rename(&old_env, &new_env)
+    rename_dir(&old_env, &new_env, case_flip)
         .with_context(|| format!("could not move env dir to {}", new_env.display()))?;
 
     // Move the tracked mirror too, when the github cap seeded one. On any
     // failure here, roll the env-dir move back so disk and config stay in sync.
     if old_mirror.exists() {
-        if let Err(e) = std::fs::rename(&old_mirror, &new_mirror) {
-            let _ = std::fs::rename(&new_env, &old_env);
+        if let Err(e) = rename_dir(&old_mirror, &new_mirror, case_flip) {
+            let _ = rename_dir(&new_env, &old_env, case_flip);
             return Err(e).with_context(|| format!("could not move mirror to {}", new_mirror.display()));
+        }
+    }
+
+    // The transient root-level files are addressed by blueprint name, and both
+    // consumers key strictly off the new one — the SessionStart/SessionEnd hooks
+    // derive it from CLAUDE_CONFIG_DIR, and /handoff is told to write exactly
+    // `<name>.HANDOFF.md`. Left behind, a pending resume note or cross-env inbox
+    // would be addressed to a name that no longer exists, with no producer and no
+    // reader. Best-effort: never clobber another env's file, and never fail the
+    // rename over one.
+    for suffix in ["HANDOFF.md", "NOTE.md"] {
+        let from = project.join(format!("{old}.{suffix}"));
+        let to = project.join(format!("{new}.{suffix}"));
+        if from.exists() && (case_flip || !to.exists()) {
+            let _ = std::fs::rename(&from, &to);
         }
     }
 
@@ -117,6 +140,28 @@ pub fn rename_placed(project: &Path, old: &str, new: &str) -> Result<bool> {
             .context("could not update .aello.toml after rename")?;
     }
     Ok(true)
+}
+
+/// Rename a directory, routing a case-only change through a temp name.
+///
+/// `fs::rename` to a name differing only in case is a no-op (or an error) on a
+/// case-insensitive filesystem — source and destination are the same directory —
+/// so the two-step is the portable way to actually change the case on disk.
+fn rename_dir(from: &Path, to: &Path, case_flip: bool) -> std::io::Result<()> {
+    if !case_flip {
+        return std::fs::rename(from, to);
+    }
+    let mut tmp = from.to_path_buf();
+    tmp.set_file_name(format!(
+        ".aello-rename-{}-{}",
+        std::process::id(),
+        from.file_name().and_then(|n| n.to_str()).unwrap_or("env")
+    ));
+    std::fs::rename(from, &tmp)?;
+    std::fs::rename(&tmp, to).inspect_err(|_| {
+        // Never leave the directory parked under the temp name.
+        let _ = std::fs::rename(&tmp, from);
+    })
 }
 
 /// Mark the env as onboarded so interactive `claude` skips its first-run
@@ -168,7 +213,8 @@ pub fn place(
         // Existing env: never clobber a (possibly user-edited) settings.json, but
         // self-heal the SessionEnd hook into it so envs placed before it existed
         // start capturing /clear + exit sessions.
-        ensure_session_end_hook(&settings)?;
+        ensure_own_hook(&settings, "SessionEnd", "session-end.py")?;
+        ensure_own_hook(&settings, "SessionStart", "session-start.py")?;
         // Same for the voice hook, so an env placed before voice was universal
         // starts speaking on its next run.
         sync_voice_hooks(&settings)?;
@@ -195,6 +241,8 @@ pub fn place(
         .context("could not write post-compact.py")?;
     std::fs::write(env_dir.join("hooks").join("session-end.py"), SESSION_END_SCRIPT)
         .context("could not write session-end.py")?;
+    std::fs::write(env_dir.join("hooks").join("session-start.py"), SESSION_START_SCRIPT)
+        .context("could not write session-start.py")?;
 
     // Voice hook + its two siblings, refreshed like the others so fixes reach
     // existing envs.
@@ -344,11 +392,18 @@ fn scaffold_project(
                 .context("could not create .github/workflows dir")?;
             std::fs::write(&wf, VERSION_WORKFLOW).context("could not write version.yml")?;
         }
-        // Seed the tracked claude-internal/ mirror so the env's skills, memory,
-        // and persona are version-controlled from the first commit. Deliberately
-        // NOT added to the .claude-env-* gitignore line — this folder is tracked.
-        mirror_env_internal(project, env_dir, blueprint)?;
     }
+    // Seed the tracked claude-internal/ mirror so the env's skills, memory, and
+    // persona are version-controlled from the first commit. Deliberately NOT
+    // added to the .claude-env-* gitignore line — this folder is tracked.
+    //
+    // Runs outside the `github` gate on purpose. Inside it, dropping the cap
+    // froze the folder in git forever: the old github-flavoured /sync skill (git
+    // sections, Bash tool) stayed committed and the memory/persona snapshots
+    // stopped tracking the env, with `remove --purge` the only way to clear it.
+    // With the cap off there is nothing to mirror *into* git, so the pass runs in
+    // prune-only mode and clears what a previous github placement left behind.
+    mirror_env_internal(project, env_dir, blueprint, caps.github)?;
     Ok(())
 }
 
@@ -359,8 +414,26 @@ fn scaffold_project(
 /// snapshot is renamed to `persona.CLAUDE.md` so Claude Code never auto-loads it
 /// as a second persona. Namespacing per blueprint keeps multi-blueprint repos
 /// from clobbering each other's mirror.
-fn mirror_env_internal(project: &Path, env_dir: &Path, blueprint: &str) -> Result<()> {
+///
+/// With `track` false (the `github` cap is off) the whole folder is removed
+/// instead: nothing here is committed, so a mirror left from an earlier github
+/// placement is stale content that only `remove --purge` could otherwise clear.
+fn mirror_env_internal(
+    project: &Path,
+    env_dir: &Path,
+    blueprint: &str,
+    track: bool,
+) -> Result<()> {
     let dest = project.join("claude-internal").join(blueprint);
+    if !track {
+        if dest.exists() {
+            std::fs::remove_dir_all(&dest)
+                .context("could not prune the claude-internal mirror")?;
+        }
+        // Leave `claude-internal/` itself alone — another blueprint in this repo
+        // may still be mirroring into its own namespaced subfolder.
+        return Ok(());
+    }
     copy_dir_all(&env_dir.join("skills"), &dest.join("skills"))
         .context("could not mirror skills into claude-internal")?;
     let mem = env_dir
@@ -380,9 +453,11 @@ fn mirror_env_internal(project: &Path, env_dir: &Path, blueprint: &str) -> Resul
 
 /// One-way *sync* of `src` into `dst`: copy every regular file/subdir from `src`,
 /// then delete anything in `dst` that no longer exists in `src`. Pruning keeps
-/// the tracked mirror from accumulating orphaned files — e.g. a deleted memory
-/// note, or the `sync` skill after the `github` cap is dropped — which a copy-only
-/// mirror would keep committing forever. Symlinks are skipped: the env is the
+/// the tracked mirror from accumulating orphaned files — a deleted memory note,
+/// or a skill the blueprint no longer seeds — which a copy-only mirror would keep
+/// committing forever. (Dropping the `github` cap is handled a level up, in
+/// `mirror_env_internal`, which removes the folder outright rather than diffing
+/// it.) Symlinks are skipped: the env is the
 /// single source of truth and must not pull foreign content into git. A missing
 /// `src` prunes `dst` entirely (nothing left to mirror).
 fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
@@ -470,6 +545,7 @@ pub fn settings_json(model: &str) -> String {
     "defaultMode": "bypassPermissions"
   }},
   "hooks": {{{stop}
+    "SessionStart": [{{"hooks":[{{"type":"command","command":"{py} \"$CLAUDE_CONFIG_DIR/hooks/session-start.py\""}}]}}],
     "PostCompact": [{{"hooks":[{{"type":"command","command":"{py} \"$CLAUDE_CONFIG_DIR/hooks/post-compact.py\""}}]}}],
     "SessionEnd": [
       {{"hooks":[{{"type":"command","command":"{py} \"$CLAUDE_CONFIG_DIR/hooks/session-end.py\""}}]}}{voice_end}
@@ -502,7 +578,7 @@ fn sync_voice_hooks(settings: &Path) -> Result<()> {
     let Ok(text) = std::fs::read_to_string(settings) else {
         return Ok(());
     };
-    let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&text) else {
+    let Ok(mut v) = parse_settings(settings, &text) else {
         return Ok(());
     };
     let py = if cfg!(windows) { "python" } else { "python3" };
@@ -534,9 +610,12 @@ fn sync_voice_hooks(settings: &Path) -> Result<()> {
         });
         match hooks.get_mut(event) {
             Some(serde_json::Value::Array(arr)) => arr.push(group),
-            _ => {
+            // Absent is ours to create; a non-array is a value the user put
+            // there by hand, and every sibling heal skips rather than clobber.
+            None => {
                 hooks.insert(event.to_string(), serde_json::json!([group]));
             }
+            Some(_) => continue,
         }
         changed = true;
     }
@@ -562,7 +641,7 @@ fn ensure_model(settings: &Path, model: &str) -> Result<()> {
     let Ok(text) = std::fs::read_to_string(settings) else {
         return Ok(());
     };
-    let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&text) else {
+    let Ok(mut v) = parse_settings(settings, &text) else {
         return Ok(());
     };
     let Some(obj) = v.as_object_mut() else {
@@ -595,16 +674,17 @@ fn ensure_tldr_instruction(env_dir: &Path) -> Result<()> {
     std::fs::write(&path, out).context("could not add the TL;DR instruction to CLAUDE.md")
 }
 
-/// Self-heal: ensure an existing `settings.json` registers the SessionEnd hook.
-/// `settings.json` is written only once (never clobbered), so envs placed before
-/// SessionEnd existed would otherwise never pick it up. Idempotent — keyed on
-/// aello's own command, not on the `SessionEnd` key, so a third-party SessionEnd
-/// hook doesn't block the heal; aello's group is appended alongside it.
-fn ensure_session_end_hook(settings: &Path) -> Result<()> {
+/// Self-heal: ensure an existing `settings.json` registers one of aello's own
+/// transcript hooks. `settings.json` is written only once (never clobbered), so
+/// envs placed before a hook existed would otherwise never pick it up. Idempotent
+/// — keyed on aello's own script name, not on the event key, so a third-party
+/// hook on the same event doesn't block the heal; aello's group is appended
+/// alongside it.
+fn ensure_own_hook(settings: &Path, event: &str, script: &str) -> Result<()> {
     let Ok(text) = std::fs::read_to_string(settings) else {
         return Ok(());
     };
-    let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&text) else {
+    let Ok(mut v) = parse_settings(settings, &text) else {
         return Ok(());
     };
     let py = if cfg!(windows) { "python" } else { "python3" };
@@ -615,15 +695,15 @@ fn ensure_session_end_hook(settings: &Path) -> Result<()> {
     let group = serde_json::json!({
         "hooks": [{
             "type": "command",
-            "command": format!("{py} \"$CLAUDE_CONFIG_DIR/hooks/session-end.py\""),
+            "command": format!("{py} \"$CLAUDE_CONFIG_DIR/hooks/{script}\""),
         }]
     });
-    match hooks.get_mut("SessionEnd") {
+    match hooks.get_mut(event) {
         None => {
-            hooks.insert("SessionEnd".into(), serde_json::json!([group]));
+            hooks.insert(event.into(), serde_json::json!([group]));
         }
         Some(existing) => {
-            if registers_command(existing, "session-end.py") {
+            if registers_command(existing, script) {
                 return Ok(());
             }
             let Some(arr) = existing.as_array_mut() else { return Ok(()) };
@@ -631,7 +711,23 @@ fn ensure_session_end_hook(settings: &Path) -> Result<()> {
         }
     }
     std::fs::write(settings, serde_json::to_string_pretty(&v)?)
-        .context("could not update settings.json with SessionEnd hook")
+        .with_context(|| format!("could not update settings.json with the {event} hook"))
+}
+
+/// Parse a settings.json, saying so on stderr when it can't be read as JSON.
+///
+/// Every self-heal treats an unparseable file as "leave it alone" — the right
+/// call, since the alternative is overwriting something the user is mid-edit on.
+/// But doing it in silence meant a typo'd settings.json quietly cost you the
+/// hooks with no hint of why, so the skip is now at least audible.
+fn parse_settings(path: &Path, text: &str) -> Result<serde_json::Value> {
+    serde_json::from_str(text).inspect_err(|e| {
+        eprintln!(
+            "warning: {} is not valid JSON ({e}) — leaving it untouched; \
+             aello's hooks can't be kept current until it parses",
+            path.display()
+        );
+    }).map_err(Into::into)
 }
 
 /// True when a settings.json hook-event value (an array of `{hooks:[{command}]}`
@@ -734,7 +830,7 @@ mod tests {
         )
         .unwrap();
 
-        ensure_session_end_hook(&settings).unwrap();
+        ensure_own_hook(&settings, "SessionEnd", "session-end.py").unwrap();
         let v: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
         // SessionEnd inserted, PostCompact and model preserved.
@@ -744,7 +840,7 @@ mod tests {
 
         // Idempotent: a second pass does not duplicate or alter it.
         let before = std::fs::read_to_string(&settings).unwrap();
-        ensure_session_end_hook(&settings).unwrap();
+        ensure_own_hook(&settings, "SessionEnd", "session-end.py").unwrap();
         assert_eq!(before, std::fs::read_to_string(&settings).unwrap());
     }
 
@@ -760,7 +856,7 @@ mod tests {
         )
         .unwrap();
 
-        ensure_session_end_hook(&settings).unwrap();
+        ensure_own_hook(&settings, "SessionEnd", "session-end.py").unwrap();
         let v: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
         let groups = v["hooks"]["SessionEnd"].as_array().unwrap();
@@ -771,7 +867,7 @@ mod tests {
 
         // Idempotent: a second pass does not append again.
         let before = std::fs::read_to_string(&settings).unwrap();
-        ensure_session_end_hook(&settings).unwrap();
+        ensure_own_hook(&settings, "SessionEnd", "session-end.py").unwrap();
         assert_eq!(before, std::fs::read_to_string(&settings).unwrap());
     }
 
@@ -1046,14 +1142,54 @@ mod tests {
         let ci = proj.path().join("claude-internal").join("demo");
         assert!(ci.join("skills/sync/SKILL.md").exists());
 
-        // Drop the sync skill from the live env, then re-mirror.
-        std::fs::remove_dir_all(env.join("skills/sync")).unwrap();
-        mirror_env_internal(proj.path(), &env, "demo").unwrap();
+        // Delete a memory note from the live env, then re-place. (A memory note
+        // is the reachable case: the earlier version of this test hand-deleted
+        // the /sync skill, a state production can't reach — the skill is only
+        // removed when no caps are left, which implies github is off, which used
+        // to mean the mirror never ran at all.)
+        let mem = env
+            .join("projects")
+            .join(crate::sessions::encode_project_path(proj.path()))
+            .join("memory");
+        std::fs::write(mem.join("scratch.md"), "temporary\n").unwrap();
+        place(&env, &Instance { name: "demo".into(), model: "haiku".into() }, Some("# p"), &caps).unwrap();
+        assert!(ci.join("memory/scratch.md").exists(), "new note reaches the mirror");
+
+        std::fs::remove_file(mem.join("scratch.md")).unwrap();
+        place(&env, &Instance { name: "demo".into(), model: "haiku".into() }, Some("# p"), &caps).unwrap();
 
         // The orphaned copy is gone; the rest of the mirror survives.
-        assert!(!ci.join("skills/sync").exists(), "stale skill should be pruned");
+        assert!(!ci.join("memory/scratch.md").exists(), "stale note should be pruned");
+        assert!(ci.join("skills/sync/SKILL.md").exists(), "skills still mirrored");
         assert!(ci.join("memory/MEMORY.md").exists(), "memory still mirrored");
         assert!(ci.join("persona.CLAUDE.md").exists(), "persona still mirrored");
+    }
+
+    #[test]
+    fn dropping_the_github_cap_clears_the_tracked_mirror() {
+        // Inside the `github` gate, `mirror_env_internal` was never called once
+        // the cap went off — so the folder froze in git forever, still carrying a
+        // github-flavoured /sync skill (git sections, the Bash tool) that the
+        // blueprint no longer has. `remove --purge` was the only way out.
+        let proj = tempfile::tempdir().unwrap();
+        let env = env_dir(proj.path(), "demo");
+        let inst = Instance { name: "demo".into(), model: "haiku".into() };
+        let ci = proj.path().join("claude-internal").join("demo");
+
+        place(&env, &inst, Some("# p"), &Capabilities { github: true, ..Default::default() }).unwrap();
+        assert!(ci.join("skills/sync/SKILL.md").exists());
+
+        // `aello edit demo --no-github` — another cap stays on, so the blueprint
+        // still has a /sync skill; it just must not be tracked any more.
+        place(&env, &inst, Some("# p"), &Capabilities { readme: true, ..Default::default() }).unwrap();
+        assert!(!ci.exists(), "the mirror should not survive the cap being dropped");
+        // The live env is untouched — the mirror is a copy, never the source.
+        assert!(env.join("skills/sync/SKILL.md").exists());
+        // A sibling blueprint's mirror is not collateral damage.
+        let other = proj.path().join("claude-internal").join("other");
+        std::fs::create_dir_all(&other).unwrap();
+        place(&env, &inst, Some("# p"), &Capabilities { readme: true, ..Default::default() }).unwrap();
+        assert!(other.exists(), "another blueprint's mirror must survive");
     }
 
     #[test]
@@ -1094,6 +1230,93 @@ mod tests {
         place(&env, &inst, None, &Capabilities::default()).unwrap();
         assert_eq!(std::fs::read_to_string(&index).unwrap(), "- my own memory\n");
         assert!(!ws.exists()); // not re-seeded while a MEMORY.md exists
+    }
+
+    #[test]
+    fn rename_allows_a_case_only_change() {
+        // On Windows/macOS the default filesystem is case-insensitive, so the
+        // destination "already exists" — it *is* the source. The guard named the
+        // source as the obstruction and the documented feature was unreachable on
+        // both platforms aello ships binaries for.
+        let proj = tempfile::tempdir().unwrap();
+        let env = env_dir(proj.path(), "coder");
+        let inst = Instance { name: "coder".into(), model: "opus".into() };
+        place(&env, &inst, Some("# p"), &Capabilities { github: true, ..Default::default() }).unwrap();
+
+        assert!(rename_placed(proj.path(), "coder", "Coder").unwrap());
+
+        let renamed = env_dir(proj.path(), "Coder");
+        assert!(renamed.join("settings.json").exists());
+        assert_eq!(load_instance(&renamed).unwrap().name, "Coder");
+        // No temp directory is left parked in the project.
+        let leftovers: Vec<_> = std::fs::read_dir(proj.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with(".aello-rename-"))
+            .collect();
+        assert!(leftovers.is_empty(), "temp dir left behind: {leftovers:?}");
+    }
+
+    #[test]
+    fn rename_carries_the_handoff_and_note_files() {
+        // Both are addressed by blueprint name and both consumers key off the new
+        // one, so a note left under the old name has no producer and no reader.
+        let proj = tempfile::tempdir().unwrap();
+        let env = env_dir(proj.path(), "coder");
+        place(&env, &Instance { name: "coder".into(), model: "opus".into() }, None, &Capabilities::default())
+            .unwrap();
+        std::fs::write(proj.path().join("coder.HANDOFF.md"), "resume me\n").unwrap();
+        std::fs::write(proj.path().join("coder.NOTE.md"), "inbox\n").unwrap();
+
+        rename_placed(proj.path(), "coder", "reviewer").unwrap();
+
+        assert!(!proj.path().join("coder.HANDOFF.md").exists());
+        assert_eq!(
+            std::fs::read_to_string(proj.path().join("reviewer.HANDOFF.md")).unwrap(),
+            "resume me\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(proj.path().join("reviewer.NOTE.md")).unwrap(),
+            "inbox\n"
+        );
+    }
+
+    #[test]
+    fn rename_never_clobbers_another_envs_inbox() {
+        let proj = tempfile::tempdir().unwrap();
+        let env = env_dir(proj.path(), "coder");
+        place(&env, &Instance { name: "coder".into(), model: "opus".into() }, None, &Capabilities::default())
+            .unwrap();
+        std::fs::write(proj.path().join("coder.NOTE.md"), "mine\n").unwrap();
+        std::fs::write(proj.path().join("reviewer.NOTE.md"), "theirs\n").unwrap();
+
+        rename_placed(proj.path(), "coder", "reviewer").unwrap();
+
+        // The occupied destination wins; the rename still succeeds.
+        assert_eq!(
+            std::fs::read_to_string(proj.path().join("reviewer.NOTE.md")).unwrap(),
+            "theirs\n"
+        );
+    }
+
+    #[test]
+    fn place_registers_the_session_start_hook_and_script() {
+        let proj = tempfile::tempdir().unwrap();
+        let env = env_dir(proj.path(), "coder");
+        let inst = Instance { name: "coder".into(), model: "opus".into() };
+
+        // An env from before SessionStart existed: settings.json is never
+        // clobbered, so the hook has to be healed into it.
+        std::fs::create_dir_all(&env).unwrap();
+        std::fs::write(env.join("settings.json"), r#"{"model":"opus"}"#).unwrap();
+        place(&env, &inst, None, &Capabilities::default()).unwrap();
+
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(env.join("settings.json")).unwrap())
+                .unwrap();
+        assert!(registers_command(&v["hooks"]["SessionStart"], "session-start.py"));
+        assert!(env.join("hooks/session-start.py").exists());
     }
 
     #[test]
