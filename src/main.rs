@@ -550,6 +550,11 @@ pub(crate) fn run_blueprint(
 
     project::place(&env, &inst, claude_md.as_deref(), &bp.caps)?;
 
+    // The env now has notify.py; make sure the machine can actually show what it
+    // sends. Only claims the toast identity if nothing else has — see the
+    // function for why running it unconditionally would break a station's.
+    voice::ensure_notify_registered(&env);
+
     // Concurrency-safe shared login: pass the long-lived OAuth token to the env.
     // No token configured → Claude prompts its own login in this env.
     if cfg.oauth_token.is_some() {

@@ -76,6 +76,16 @@
   SessionEnd hook archives the matching per-blueprint file.
 
 ### Fixed
+- **Desktop notifications now work on a machine that has never run the revoiced
+  station.** Windows drops a toast sent under an unregistered AppUserModelID with
+  no error at all, and only the station registered one — so on such a machine
+  every env was silently notification-less, the same failure as the incomplete
+  vendor one layer out. Launching an env now runs the vendored
+  `notify.py --register` (no test toast, idempotent), but **only when nothing has
+  claimed the `revoiced:` protocol yet**: registering also points that protocol at
+  an `action.py` next to whichever copy ran it, and an env's `hooks/` has none, so
+  doing it unconditionally would break both toast buttons on precisely the
+  machines where a station had them working.
 - **"Skip this one" now skips that one.** A toast stays in Windows' notification
   centre for three days, and the skip link named no turn — so pressing the button
   on an old notification cut off whatever happened to be speaking at that moment,
