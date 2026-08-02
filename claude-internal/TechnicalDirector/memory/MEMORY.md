@@ -5,4 +5,4 @@
 - [working style](working-style.md) — user does not read plans, give decisions to choose from
 - [aello dev gotchas](aello-dev-gotchas.md) — Windows locked-exe install fix; print mode skips memory but does fire hooks; universal skills don't backfill and an older binary undoes a hand-backfill; aello update can't ship branch work; gh issue view needs --json; Claude cwd-encoding folds all non-alphanumerics to '-'; config.toml has an extra config/ level; SessionStart additionalContext works; screenshotting a page without downloading a browser
 - [aello open source](aello-open-source.md) — license/contributor/domain decisions; stay pseudonymous; Tier-1 done
-- [aello voice capability](aello-voice-capability.md) — where revoiced lives, the shared state.json contract, edge-tts is global, voice is now unconditional, vendor all FIVE hook files, HOOK_VERSION is the drift check
+- [aello voice capability](aello-voice-capability.md) — where revoiced lives, the shared state.json contract, edge-tts is global, voice is now unconditional, vendor all FIVE hook files, HOOK_VERSION is the drift check (now 4), re-vendor = re-backfill 39 envs, toast identity only if unclaimed
