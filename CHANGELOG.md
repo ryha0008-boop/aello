@@ -41,6 +41,16 @@
   emits plain HTML in `site/out/` for any static host.
 
 ### Changed
+- **The voice hooks are re-vendored from upstream `revoiced`** (`a86023a`). A
+  voice-enabled env now gets **its own voice per environment** rather than per
+  working directory: several blueprints sharing one repo no longer sound alike,
+  and an agent that works in a subfolder stays the same speaker instead of
+  becoming a second project. Identity is read from `CLAUDE_CONFIG_DIR`, which
+  aello already exports, and falls back to the old directory-keyed behaviour when
+  it is absent. Also picked up: em dashes in a `TL;DR:` are no longer spoken as
+  mojibake on Windows, and a mute set while the hook was mid-write is no longer
+  silently dropped. Still three files — upstream's optional `focus`/`notify`
+  siblings are station-side and deliberately not vendored.
 - Releases are now **versioned**. Every build publishes an immutable `vX.Y.Z`
   release (binaries + `SHA256SUMS`) alongside the existing rolling `latest` tag,
   so you can pin or roll back to a specific version and package managers have a

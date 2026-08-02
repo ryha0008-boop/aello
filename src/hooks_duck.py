@@ -37,11 +37,15 @@ def duck(level: float, store: Path) -> bool:
 
     # Never duck twice without restoring in between: the second call would read
     # the already-lowered volume as the original, multiply the reduction, and
-    # leave audio permanently quiet once restored.
+    # leave audio permanently quiet once restored. A fresh file means somebody
+    # is speaking and it is their duck; a stale one is a worker that died, and
+    # it is put back *here* rather than assumed to have been handled elsewhere.
+    # Falling through to duck on top of it is exactly how volumes spiral.
     try:
         prev = json.loads(store.read_text(encoding="utf-8"))
         if time.time() - float(prev.get("at", 0)) <= STALE:
             return False
+        restore(store)
     except (OSError, ValueError, TypeError):
         pass
 
@@ -60,7 +64,12 @@ def duck(level: float, store: Path) -> bool:
             if current <= 0.0:
                 continue                   # already silent, leave it alone
             saved[str(s.Process.pid)] = current
-            vol.SetMasterVolume(current * level, None)
+            # Never land on exactly zero unless that is what was asked for.
+            # A session at 0.0 is skipped by the guard above for good, so it
+            # can never be saved and never be put back - it is the one value
+            # this cannot recover from, and repeated ducking converges on it.
+            target = current * level
+            vol.SetMasterVolume(max(target, 0.01) if level > 0 else 0.0, None)
         except Exception:
             continue
     if not saved:
