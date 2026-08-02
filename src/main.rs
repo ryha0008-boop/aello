@@ -116,7 +116,7 @@ enum Commands {
         /// Doc to print (slug, e.g. `concepts`). Omit to list available docs.
         name: Option<String>,
     },
-    /// Mute or unmute the voice capability (applies to every env).
+    /// Mute or unmute the voice (applies to every env).
     Voice {
         #[command(subcommand)]
         action: VoiceAction,

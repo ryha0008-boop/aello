@@ -60,7 +60,7 @@ On a fresh env, aello also marks onboarding complete (`hasCompletedOnboarding` i
 
 ## contextdb (transcripts)
 
-aello seeds two transcript hooks. **PostCompact** saves each compaction summary; **SessionEnd** captures a session that ends without compacting — `/clear` or a plain exit — which PostCompact would otherwise miss entirely (a `/clear`-heavy workflow never compacts). The SessionEnd record archives the `/handoff` note (`<blueprint>.HANDOFF.md`, otherwise deleted on next boot) plus a pointer to the full transcript; it skips subagent sessions so the tree isn't flooded. Both land in a unified tree:
+aello seeds three session hooks. **PostCompact** saves each compaction summary; **SessionEnd** captures a session that ends without compacting — `/clear` or a plain exit — which PostCompact would otherwise miss entirely (a `/clear`-heavy workflow never compacts). The SessionEnd record archives the `/handoff` note (`<blueprint>.HANDOFF.md`) plus a pointer to the full transcript; it skips subagent sessions so the tree isn't flooded. The two archives land in a unified tree:
 
 ```
 <contextdb>/<project>/<blueprint>/<timestamp>_<session>.jsonl       # PostCompact
@@ -68,3 +68,5 @@ aello seeds two transcript hooks. **PostCompact** saves each compaction summary;
 ```
 
 The root is per-machine, defaults to `~/aello/contextdb`, and is configurable from the TUI (`C`). aello passes it to Claude as `AELLO_CONTEXTDB`; if unset, the hooks fall back to a local folder inside the env.
+
+**SessionStart** is the third, and it reads rather than writes. On boot it delivers `<blueprint>.HANDOFF.md` (your `/handoff` note to yourself) and `<blueprint>.NOTE.md` (a `/note` left by another env sharing the repo) into the new session, then **deletes** them. That is what makes those skills' promise true — before it existed nothing consumed either file, so they sat at the project root dirtying `git status` and SessionEnd re-archived the same stale note every session. Deleting is safe because SessionEnd has already archived the content.

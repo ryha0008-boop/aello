@@ -1,6 +1,6 @@
 ---
 name: aello-voice-capability
-description: "Cross-project facts behind aello's --voice cap — where revoiced lives, the shared state dir that is the contract boundary, edge-tts is global on this machine, and why existing envs don't adopt it automatically"
+description: "Cross-project facts behind aello's voice — where revoiced lives, the shared state dir that is the contract boundary, edge-tts is global on this machine, why the voice stopped being a capability, and why focus/notify must never be vendored"
 metadata: 
   node_type: memory
   type: project

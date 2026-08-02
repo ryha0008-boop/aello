@@ -3,6 +3,6 @@
 - [aello CI + release](aello-ci-release.md) — auto patch-bump, 4 targets, both a vX.Y.Z tag and rolling latest, never draft a release, CI never touches Cargo.lock
 - [aello TUI design](aello-tui-design.md) — "Kinetic Command" palette + conventions
 - [working style](working-style.md) — user does not read plans, give decisions to choose from
-- [aello dev gotchas](aello-dev-gotchas.md) — Windows locked-exe install fix; print mode skips memory but does fire hooks; universal skills don't backfill; aello update can't ship branch work; gh issue view needs --json; Claude cwd-encoding folds all non-alphanumerics to '-'; screenshotting a page without downloading a browser
+- [aello dev gotchas](aello-dev-gotchas.md) — Windows locked-exe install fix; print mode skips memory but does fire hooks; universal skills don't backfill; aello update can't ship branch work; gh issue view needs --json; Claude cwd-encoding folds all non-alphanumerics to '-'; config.toml has an extra config/ level; SessionStart additionalContext works; screenshotting a page without downloading a browser
 - [aello open source](aello-open-source.md) — license/contributor/domain decisions; stay pseudonymous; Tier-1 done
-- [aello voice capability](aello-voice-capability.md) — where revoiced lives, the shared state.json contract, edge-tts is global, existing envs need a re-run
+- [aello voice capability](aello-voice-capability.md) — where revoiced lives, the shared state.json contract, edge-tts is global, voice is now unconditional, never vendor focus/notify
