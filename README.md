@@ -124,12 +124,13 @@ Those pages are generated from [`docs/`](docs/) in this repo, and the same files
 aello                                          # interactive TUI (no args)
 aello --version
 aello init                                     # first-run: login + first blueprint
-aello add <name> --model <m> [--claude-md <coder|none|path>]
+aello add <name> --model <m> [--claude-md <coder|none|custom|path>]
         [--role maintainer|contributor|standalone]
 aello list [--json]
 aello remove <name> [--yes] [--purge]         # --purge also deletes the placed env dir + mirror
 aello edit <name> [--rename <new>] [--model <m>] [--claude-md <coder|none|custom|path>]
         [--role maintainer|contributor|standalone]
+aello persona <name> --from <file> [--project <dir>]     # install a written persona into a placed env
 aello run [name] [--resume [id]] [-p <prompt>] [-- <extra args for claude>]
 aello login                                    # store the shared Claude token
 aello github-setup [--name <repo>] [--public] [--yes]   # create + push the repo via gh
@@ -148,6 +149,7 @@ aello update [--force]                         # self-update (--force reinstalls
   ```
 
 - `edit` changes a blueprint in place, including `--rename <new>` (validated, rejected if the name is taken) — which also moves the placed `.claude-env-<name>/` env dir and its `claude-internal/<name>/` mirror in the current project. `--role` swaps the role outright; omitting a flag leaves that field as-is. Changes apply on the next `run`; the global persona in an already-placed env is never re-clobbered.
+- `persona` replaces a placed env's `CLAUDE.md` with a persona you have written for that project, sets the blueprint to `custom` so aello stops seeding a template over it, and records the generation in `<env>/persona.gen` (`gen1 2026-08-03`). It is the only command that overwrites a persona — `run` never does. `aello list` then shows `custom` for that blueprint, so you can see at a glance which envs have a real persona.
 - `run` with no name uses the sole blueprint (errors if there are several).
 - `--resume` with no value continues the most recent session; `--resume <id>` resumes a specific one. The TUI (`S`) browses sessions to resume.
 - `-p "<prompt>"` runs headless and exits. Anything after `--` is passed straight to `claude`.
