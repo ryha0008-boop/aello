@@ -22,6 +22,40 @@
 
 ### Added
 - The README links the live docs site and carries a docs badge.
+- **`docs/upgrading.md`** (`aello docs upgrading`) — the page to point an
+  environment at the first time it meets 0.2: what migrates itself, the one case
+  that changes behaviour, the removed flags, and the pre-0.2-binary hazard.
+- **The SessionStart hook now opens every session by saying it is running under
+  aello** — which blueprint, that the env dir is rewritten on every run
+  (`.aello-keep` to pin a skill), that the seeded skills are the user's to type,
+  and that commits are attributed automatically. Nothing else told a session any
+  of this: the env dir is gitignored, the persona belongs to the user and usually
+  doesn't mention aello, and a project `CLAUDE.md` only exists for a maintainer —
+  so agents edited files the next launch silently overwrote. It lives on the hook
+  rather than in the persona because `place()` rewrites the hook every run, so it
+  reaches an env placed months ago without touching anything the user owns.
+  ~257 tokens per session.
+
+### Fixed
+- **contextdb archived transcripts by *path*, and the path stopped resolving.**
+  Claude Code deletes its own session files after `cleanupPeriodDays` (default
+  **30**), and the env dir holding them is gitignored and removed by
+  `aello remove --purge`. An audit on 2026-08-03 found **15% of 265 archives
+  already pointed at nothing**, with a clean cliff at the 30-day mark — 6–14%
+  dead under 30 days, 44% at 30–39. Nothing ever errored; the archive quietly
+  stopped being one.
+
+  SessionEnd now **copies** the transcript to `<ts>_<session>_transcript.jsonl`
+  beside the record and reports the result in a new `transcript_archived` field,
+  and placement sets `cleanupPeriodDays` to 365 — self-healed into existing envs
+  only when the key is absent, so a value you chose is left alone. Expect
+  contextdb to grow: transcripts are 1.3 MB at the median and tens of MB at the
+  tail.
+
+  The same audit confirmed **PostCompact is dormant, not broken** — it fires only
+  on compaction, which a 1M-context session ended with `/clear` never reaches
+  (265 SessionEnd records to zero PostCompact ones for any aello blueprint). It
+  stays seeded for workflows that do compact.
 
 ## [0.2.0]
 

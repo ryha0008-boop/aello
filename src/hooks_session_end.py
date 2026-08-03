@@ -3,7 +3,13 @@
 PostCompact only fires when a session compacts; a session ended with /clear (or a
 plain exit) never compacts, so its context would otherwise never reach contextdb.
 This hook captures those: it archives the self-contained <agent>.HANDOFF.md (written
-by the /handoff skill, deleted on next boot) plus a pointer to the full transcript.
+by the /handoff skill, deleted on next boot) plus a copy of the full transcript.
+
+In practice this hook does *all* the capturing. PostCompact fires only when a
+session compacts, and with a 1M context window ended by /clear that effectively
+never happens: on 2026-08-03 contextdb held 265 SessionEnd records and zero
+PostCompact records for any aello blueprint, the newest compaction capture being
+seven weeks old and from a pre-aello setup.
 """
 import sys
 import json
@@ -64,6 +70,34 @@ try:
 except Exception:
     pass
 
+# Copy the transcript rather than only pointing at it. Claude Code deletes its
+# own session files on a retention timer (default 30 days), and the env dir they
+# live in is gitignored and removed outright by `aello remove --purge` — so a
+# recorded path is a reference that quietly stops resolving. Measured on
+# 2026-08-03, 15% of 265 archives already dangled, with a clean cliff at the
+# 30-day mark. Copying makes the archive self-contained; the path is still
+# recorded next to it, because that is what `--resume` needs and a copy is not.
+transcript_path = data.get("transcript_path", "")
+archived = ""
+if transcript_path:
+    try:
+        dest = os.path.join(contextdb_dir, f"{ts}_{session}_transcript.jsonl")
+        # Stream it: transcripts run to tens of MB and this is a session-exit
+        # hook, so never hold one in memory. Source is opened BEFORE the
+        # destination on purpose — reversed, an unreadable transcript would
+        # leave a 0-byte file behind that looks like a successful archive.
+        with open(transcript_path, "rb") as src, open(dest, "wb") as out:
+            while True:
+                chunk = src.read(1 << 20)
+                if not chunk:
+                    break
+                out.write(chunk)
+        archived = os.path.basename(dest)
+    except Exception:
+        # A missing or unreadable transcript must not cost us the handoff note
+        # below, which is the part that cannot be recovered from anywhere else.
+        archived = ""
+
 entry = {
     "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     "agent": agent,
@@ -71,7 +105,10 @@ entry = {
     "trigger": data.get("reason", "unknown"),
     "kind": "session_end",
     "handoff": handoff,
-    "transcript": data.get("transcript_path", ""),
+    "transcript": transcript_path,
+    # Filename beside this record, or "" if the copy failed — so a reader can
+    # tell "archived here" from "only ever a pointer" without stat-ing anything.
+    "transcript_archived": archived,
 }
 
 try:

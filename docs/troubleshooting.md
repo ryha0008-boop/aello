@@ -76,6 +76,18 @@ Then the SessionStart hook didn't run, and the delivery half of `/handoff` is wh
 
 `aello run` re-heals both, so the fastest fix is to launch the env once.
 
+## contextdb has no PostCompact files
+
+Expected, and not a fault. `PostCompact` fires only when a session **compacts** — automatically, or via `/compact`. With a 1M context window and a workflow that ends sessions with `/clear`, compaction effectively never happens, so the file that hook would write is never written.
+
+`SessionEnd` is what actually fills contextdb in that workflow: it fires on `/clear`, logout and plain exit, and archives the `/handoff` note plus a copy of the transcript.
+
+## A contextdb record points at a transcript that isn't there
+
+Records written before the transcript was *copied* stored only its path, and Claude Code deletes its own session files after `cleanupPeriodDays` — **30 by default**. So old references stop resolving, silently.
+
+Two things changed: SessionEnd now copies the transcript next to the record (`<ts>_<session>_transcript.jsonl`, named in the record's `transcript_archived` field), and placement sets `cleanupPeriodDays` to 365. The retention is only filled in when the key is **absent**, so if you deliberately keep it short, that stands — and old records whose transcript is already gone cannot be recovered.
+
 ## An env has no memory of a previous session
 
 Two separate things get confused here:

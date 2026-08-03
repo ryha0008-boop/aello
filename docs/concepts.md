@@ -12,7 +12,7 @@ my-project/
 │   ├── CLAUDE.md             #   global persona (set once)
 │   ├── hooks/post-compact.py
 │   ├── hooks/session-end.py
-│   ├── hooks/session-start.py #   reads + deletes <name>.HANDOFF.md / .NOTE.md
+│   ├── hooks/session-start.py #   announces the env; reads + deletes HANDOFF/NOTE
 │   ├── hooks/speak.py        #   the voice — + duck, focus, notify, win_audio.ps1
 │   ├── skills/sync/SKILL.md  #   generated from this blueprint's role
 │   ├── skills/handoff/SKILL.md       # universal — resume note to self
@@ -80,13 +80,22 @@ On a fresh env, aello also marks onboarding complete (`hasCompletedOnboarding` i
 
 ## contextdb (transcripts)
 
-aello seeds three session hooks. **PostCompact** saves each compaction summary; **SessionEnd** captures a session that ends without compacting — `/clear` or a plain exit — which PostCompact would otherwise miss entirely (a `/clear`-heavy workflow never compacts). The SessionEnd record archives the `/handoff` note (`<blueprint>.HANDOFF.md`) plus a pointer to the full transcript; it skips subagent sessions so the tree isn't flooded. The two archives land in a unified tree:
+aello seeds three session hooks. **PostCompact** saves each compaction summary; **SessionEnd** captures a session that ends without compacting — `/clear` or a plain exit. The SessionEnd record archives the `/handoff` note (`<blueprint>.HANDOFF.md`), **a copy of the full transcript**, and the transcript's original path; it skips subagent sessions so the tree isn't flooded. The archives land in a unified tree:
 
 ```
 <contextdb>/<project>/<blueprint>/<timestamp>_<session>.jsonl       # PostCompact
 <contextdb>/<project>/<blueprint>/<timestamp>_<session>_end.jsonl   # SessionEnd
+<contextdb>/<project>/<blueprint>/<timestamp>_<session>_transcript.jsonl  # its transcript
 ```
 
 The root is per-machine, defaults to `~/aello/contextdb`, and is configurable from the TUI (`C`). aello passes it to Claude as `AELLO_CONTEXTDB`; if unset, the hooks fall back to a local folder inside the env.
 
+**In practice SessionEnd does all of it.** PostCompact fires only when a session compacts, and a 1M-context session that you end with `/clear` never gets close. Audited on 2026-08-03: contextdb held **265 SessionEnd records and zero PostCompact records** for any aello blueprint — the newest compaction capture was seven weeks old and from a pre-aello setup. PostCompact isn't broken; it's dormant, and it stays seeded for the workflows that do compact.
+
+**Why the transcript is copied and not just referenced.** It used to be a path only. Claude Code deletes its own session files after `cleanupPeriodDays` — **default 30** — and the env dir holding them is gitignored and removed outright by `aello remove --purge`. So the reference silently stopped resolving: in that same audit, 15% of archives already pointed at nothing, with a clean cliff at the 30-day mark (6–14% dead under 30 days, 44% at 30–39). Nothing errored; the archive just quietly stopped being one. Placement now also sets `cleanupPeriodDays` to 365 — filled in only when absent, so a value you chose is left alone — which keeps `--resume` working on old sessions too, something a copy can't do.
+
+The record's `transcript_archived` field names the copy beside it, or is empty if the copy failed — so you can tell "archived here" from "only ever a pointer" without checking the filesystem. Transcripts are large (median 1.3 MB, but tens of MB at the tail), so expect contextdb to grow accordingly.
+
 **SessionStart** is the third, and it reads rather than writes. On boot it delivers `<blueprint>.HANDOFF.md` (your `/handoff` note to yourself) and `<blueprint>.NOTE.md` (a `/note` left by another env sharing the repo) into the new session, then **deletes** them. That is what makes those skills' promise true — before it existed nothing consumed either file, so they sat at the project root dirtying `git status` and SessionEnd re-archived the same stale note every session. Deleting is safe because SessionEnd has already archived the content.
+
+It also opens **every** session with a short standing block saying the session is running under aello, which blueprint it is, that the env dir is rewritten on every run, and that the seeded skills are yours to type rather than the agent's to run. Nothing else tells a session any of that: the env dir is gitignored, the persona belongs to you and usually doesn't mention aello, and a project `CLAUDE.md` only exists for a maintainer. Without it, agents edited files in `.claude-env-*` that the next launch quietly overwrote.

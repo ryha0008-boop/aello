@@ -240,6 +240,8 @@ pub fn place(
         sync_voice_hooks(&settings)?;
         // And the model, so `aello edit <name> --model` actually reaches the env.
         ensure_model(&settings, &inst.model)?;
+        // Stop Claude Code deleting the transcripts contextdb points at.
+        ensure_cleanup_period(&settings)?;
     }
 
     // Global persona — set once, never clobbered (the user may have edited it).
@@ -584,6 +586,7 @@ pub fn settings_json(model: &str) -> String {
     format!(
         r#"{{
   "model": {},
+  "cleanupPeriodDays": {CLEANUP_PERIOD_DAYS},
   "skipDangerousModePermissionPrompt": true,
   "permissions": {{
     "defaultMode": "bypassPermissions"
@@ -692,6 +695,36 @@ fn sync_voice_hooks(settings: &Path) -> Result<()> {
 /// A key-scoped merge, deliberately not a regenerate: a real env's settings.json
 /// carries keys the user added by hand (`effortLevel`, `enabledPlugins`), and
 /// rewriting the file from a template would silently delete them.
+/// How long Claude Code keeps its own session transcripts. Its default is 30
+/// days, and contextdb's SessionEnd archive records the transcript by **path**,
+/// so at 30 days the reference silently stops resolving. Measured on 2026-08-03:
+/// 15% of 265 archives already dangled, with a clean cliff at the 30-day mark
+/// (6–14% dead under 30 days, 44% at 30–39). The archive now copies the
+/// transcript too, so this is belt-and-braces — but it also keeps `--resume`
+/// working on old sessions, which the copy does not.
+const CLEANUP_PERIOD_DAYS: u32 = 365;
+
+/// Self-heal the retention setting into an env placed before it existed. Only
+/// fills it in when **absent** — a value the user chose themselves is theirs,
+/// including a deliberately short one.
+fn ensure_cleanup_period(settings: &Path) -> Result<()> {
+    let Ok(text) = std::fs::read_to_string(settings) else {
+        return Ok(());
+    };
+    let Ok(mut v) = parse_settings(settings, &text) else {
+        return Ok(());
+    };
+    let Some(obj) = v.as_object_mut() else {
+        return Ok(());
+    };
+    if obj.contains_key("cleanupPeriodDays") {
+        return Ok(());
+    }
+    obj.insert("cleanupPeriodDays".into(), CLEANUP_PERIOD_DAYS.into());
+    std::fs::write(settings, serde_json::to_string_pretty(&v)?)
+        .context("could not update settings.json with the transcript retention")
+}
+
 fn ensure_model(settings: &Path, model: &str) -> Result<()> {
     let Ok(text) = std::fs::read_to_string(settings) else {
         return Ok(());
@@ -896,6 +929,87 @@ mod tests {
         let s = std::fs::read_to_string(env.join("settings.json")).unwrap();
         let v: serde_json::Value = serde_json::from_str(&s).unwrap();
         assert!(v["hooks"]["SessionEnd"].is_array());
+    }
+
+    /// contextdb records the transcript by path, and Claude Code deletes its own
+    /// session files after `cleanupPeriodDays` (default 30). Measured 2026-08-03:
+    /// 15% of 265 archives already pointed at nothing, with a clean cliff at the
+    /// 30-day mark. Nothing errors when that happens — the archive just quietly
+    /// stops being an archive.
+    #[test]
+    fn settings_keep_transcripts_past_claude_codes_default_retention() {
+        let s = settings_json("opus");
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        let days = v["cleanupPeriodDays"].as_u64().expect("cleanupPeriodDays must be set");
+        assert!(days > 30, "retention {days} is not longer than Claude Code's 30-day default");
+    }
+
+    #[test]
+    fn cleanup_period_self_heals_but_never_overrides_a_chosen_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = dir.path().join("settings.json");
+
+        // An env placed before this existed: the key is absent and gets filled in.
+        std::fs::write(&s, r#"{"model":"opus"}"#).unwrap();
+        ensure_cleanup_period(&s).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&s).unwrap()).unwrap();
+        assert_eq!(v["cleanupPeriodDays"].as_u64(), Some(CLEANUP_PERIOD_DAYS as u64));
+        assert_eq!(v["model"].as_str(), Some("opus"), "the rest of settings.json must survive");
+
+        // A value the user chose is theirs — including a deliberately short one.
+        std::fs::write(&s, r#"{"model":"opus","cleanupPeriodDays":7}"#).unwrap();
+        ensure_cleanup_period(&s).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&s).unwrap()).unwrap();
+        assert_eq!(v["cleanupPeriodDays"].as_u64(), Some(7), "a user's retention was overwritten");
+    }
+
+    /// SessionEnd does all the archiving in practice — PostCompact only fires on
+    /// compaction, which a 1M-context session ended with /clear never reaches.
+    /// So the transcript copy is the archive, not a nicety.
+    #[test]
+    fn session_end_hook_copies_the_transcript_it_records() {
+        let s = SESSION_END_SCRIPT;
+        assert!(s.contains("_transcript.jsonl"), "no transcript copy is written");
+        assert!(s.contains("transcript_archived"), "the record must say whether the copy landed");
+        // Streamed, not read into memory — these run to tens of MB at session exit.
+        assert!(s.contains("src.read("), "the copy must stream rather than slurp");
+        // The handoff note is the part that exists nowhere else; a failed copy
+        // must not take it down with it.
+        assert!(
+            s.find("archived = \"\"").is_some_and(|i| i > s.find("except Exception").unwrap()),
+            "a failed transcript copy must fall through, not abort the record"
+        );
+    }
+
+    /// The SessionStart hook is the only thing that tells a session it is running
+    /// under aello at all — the env dir is gitignored, the persona is the user's
+    /// and usually silent about it, and a project `CLAUDE.md` exists only for a
+    /// maintainer. Losing this block would not fail anything; sessions would just
+    /// quietly go back to hand-editing files the next launch overwrites, which is
+    /// what happened before it existed. Pin the parts that carry the meaning.
+    #[test]
+    fn session_start_hook_announces_the_aello_environment() {
+        let s = SESSION_START_SCRIPT;
+        for needle in [
+            "You are running under aello",
+            // The env dir is rewritten every run, and `.aello-keep` is the escape.
+            "aello run",
+            ".aello-keep",
+            // Skills are the user's to type — the rule an agent most often breaks.
+            "never yours to run",
+            // It must name *this* blueprint, not speak in the abstract.
+            "{agent}",
+        ] {
+            assert!(s.contains(needle), "session-start.py no longer says {needle:?}");
+        }
+        // Emitted on every session, not only when a handoff or note is waiting —
+        // the early `sys.exit(0)` used to skip it entirely.
+        assert!(
+            s.contains("context = standing"),
+            "the standing block must be emitted even with no handoff/note to deliver"
+        );
     }
 
     #[test]

@@ -1,4 +1,5 @@
-"""SessionStart hook — surfaces the /handoff resume note, then deletes it.
+"""SessionStart hook — tells the session it is running under aello, then
+surfaces the /handoff resume note and the /note inbox, deleting both.
 
 This is the consumer the /handoff skill has always promised. The skill tells the
 agent the note is "read on boot, then deleted", and writes a banner saying so,
@@ -12,6 +13,16 @@ is safe because SessionEnd already archived the note to contextdb, so the conten
 survives even if this session never uses it.
 
 Also delivers <agent>.NOTE.md, the cross-env inbox written by /note.
+
+The standing block is the other half. A session had no reliable way to learn it
+was running under aello at all: the env dir is gitignored, the persona is
+user-owned and often says nothing about it, and a project CLAUDE.md only exists
+for a maintainer. So agents edited files in `.claude-env-*` that the next launch
+overwrote, and ran seeded skills that are the user's alone to invoke. Announcing
+it here rather than in the persona is deliberate — the persona is the file most
+likely to be rewritten wholesale, while `place()` rewrites this script on every
+run, so the block reaches an env placed months ago without touching anything the
+user owns. Keep it short: it costs context on every single session.
 """
 import sys
 import json
@@ -56,14 +67,32 @@ for filename, heading in (
     except Exception:
         pass
 
-if not parts:
-    sys.exit(0)
+standing = f"""## You are running under aello
 
-context = (
-    "The following was left for you before this session started. It has been "
-    "read and the file deleted, so this is the only copy in front of you — act "
-    "on it, don't go looking for the file.\n\n" + "\n\n---\n\n".join(parts)
-)
+This session is an **aello** environment named `{agent}` — an isolated Claude Code
+setup whose config dir is `{env_dir}`.
+
+- That directory is **gitignored and rewritten on every `aello run`**. Don't
+  hand-edit its skills, settings or hooks; the next launch replaces them. To keep
+  an edited skill, put an empty `.aello-keep` file beside its `SKILL.md`.
+- The seeded skills — `/sync`, `/handoff`, `/note`, `/twosentences` — are **the
+  user's to type, never yours to run**. Opening one's `SKILL.md` and working
+  through its steps *is* running it. If you think a checkpoint is due, say so and
+  let the user invoke it.
+- Other blueprints may share this repo. The working tree is shared; config,
+  memory and session history are not. Commits you make are attributed to
+  `{agent}` automatically.
+- `aello docs` lists the reference docs, `aello docs <name>` prints one."""
+
+if parts:
+    delivered = (
+        "The following was left for you before this session started. It has been "
+        "read and the file deleted, so this is the only copy in front of you — act "
+        "on it, don't go looking for the file.\n\n" + "\n\n---\n\n".join(parts)
+    )
+    context = standing + "\n\n---\n\n" + delivered
+else:
+    context = standing
 
 print(json.dumps({
     "hookSpecificOutput": {
