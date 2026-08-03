@@ -23,6 +23,17 @@
   repeats, not prefixes). Only `speak.py` moved in all three.
 
 ### Fixed
+- **The README is for users again, and `docs/` is for developers.** The README had
+  filled up with detail that only makes sense once you've read the source — the
+  voice section alone ran to Windows toast-identity registration, per-OS state
+  directories and five-file vendoring, most of it a near-duplicate of a `docs/`
+  page that covered the same ground better. That section is now what a user needs
+  (it speaks, here's how to silence it, here's what to install), Concepts lost the
+  transcript path templates and hook internals, and the mechanism moved to a new
+  **`docs/voice.md`** — its own page, since the voice explicitly isn't a
+  capability and was sitting inside `capabilities.md` anyway. New pages under
+  `docs/` need no code change: they appear in `aello docs` and the TUI reader on
+  their own.
 - **The seeded skills now say they are yours to run, not the agent's.**
   `disable-model-invocation: true` stops the model calling one as a *tool*, but
   nothing stopped an agent opening the `SKILL.md` with `Read` and carrying out

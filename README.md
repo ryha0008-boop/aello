@@ -27,7 +27,7 @@ curl -fsSL https://raw.githubusercontent.com/ryha0008-boop/aello/main/install.sh
 
 Downloads the latest release into `~/.local/bin` (override with `AELLO_BIN_DIR`), makes it executable, clears the macOS quarantine flag, and prints a PATH hint if that dir isn't on your `$PATH`. Platforms without a prebuilt binary (e.g. arm64 Linux) exit with a build-from-source pointer.
 
-Every release also publishes an immutable `vX.Y.Z` tag if you'd rather pin a version — swap `latest` for `v0.1.54` in any download URL below. `aello update` always moves you to the newest release.
+Every release also publishes an immutable `vX.Y.Z` tag if you'd rather pin a version — swap `latest` for the tag you want in any download URL below. `aello update` always moves you to the newest release.
 
 ### Linux (x86_64) — manual
 
@@ -78,7 +78,7 @@ cargo install --path .
 ## Prerequisites
 
 - **Claude Code** on your `PATH` (`claude`). aello sets `CLAUDE_CONFIG_DIR` and launches it.
-- **Python** (`python3` on Linux/macOS, `python` on Windows) for the PostCompact and SessionEnd transcript hooks.
+- **Python 3** — used for the voice and for archiving session transcripts.
 - **git** / **gh** only if you use the `github` capability.
 
 ## Quick start
@@ -96,19 +96,24 @@ Run `aello` with no arguments for the full-screen TUI (browse, add via a guided 
 
 ## Concepts
 
-- **Blueprint** — a reusable agent identity stored in aello's config: `name`, `model`, an optional global persona, and its capabilities. Reusable across many projects.
-- **Env dir** — `<project>/.claude-env-<name>/`. This is the blueprint's `CLAUDE_CONFIG_DIR`: settings, the global persona `CLAUDE.md`, the PostCompact + SessionEnd hooks, and the generated `/sync` skill live here. Gitignored by convention.
-- **Global persona vs project CLAUDE.md** — the *global* `CLAUDE.md` (in the env dir) is the agent's persona, set once. The *project* `CLAUDE.md` (in the repo root, enabled by `--project-md`) holds project-specific facts. Memory is separate: a starter working-style memory is seeded on first placement (never clobbered after), then maintained automatically.
-- **Capabilities** — what a blueprint maintains. Each one scaffolds its file and adds a section to the generated `/sync` skill. See the table below.
-- **`/sync`** — a manually-invoked skill (no auto-commit hooks). Generated per blueprint, so it only covers what that blueprint has — a no-GitHub blueprint gets no git talk at all.
-- **`/handoff`** — a manually-invoked skill seeded for *every* blueprint (regardless of capabilities). At session end it writes a self-contained `<blueprint>.HANDOFF.md` resume note at the repo root so the next session continues seamlessly after a full `/clear`. The filename is prefixed with the blueprint name so multiple blueprints in one repo don't clobber each other's handoff. Transient: read on boot, then deleted.
-- **`/note`** — a manually-invoked skill seeded for *every* blueprint. Leaves a note for **another** environment: `/note <env-name>` writes what you were doing, the problem, and what that env needs to fix to `<env-name>.NOTE.md` at **that environment's** repo root (its inbox), which the target reads and then deletes. Usually that's the same repo, but it doesn't have to be — a note goes where the target actually lives, since each env only reads its own project root. Unlike `/handoff` (a note to yourself), this is a message across environments — the common case when two blueprints split one project and one hits something on the other's side.
-- **`/twosentences`** — a manually-invoked skill seeded for *every* blueprint. Condenses your previous response into exactly two sentences.
-- **`.aello-keep`** — the four skills above are regenerated on every run, which is how a capability change reaches an env you set up months ago. If you've rewritten one for a particular project, put an empty `.aello-keep` file next to it (`.claude-env-<name>/skills/sync/.aello-keep`) and aello leaves that skill alone. A kept skill no longer tracks its capabilities; delete the marker to go back to the generated version.
-- **Shared auth** — `aello login` runs `claude setup-token` and stores a long-lived `CLAUDE_CODE_OAUTH_TOKEN`. It doesn't rotate, so any number of concurrent envs share it safely.
-- **contextdb** — transcripts are written to a unified tree, `<contextdb>/<project>/<blueprint>/<ts>_<session>.jsonl`. PostCompact saves compaction summaries; SessionEnd captures sessions ended with `/clear` or a plain exit (which never compact), archiving the `/handoff` note. Configurable (TUI → `C`).
+- **Blueprint** — a reusable agent: a name, a model, a persona, and what it looks after. Define it once, drop it into any number of projects.
+- **Env dir** — `<project>/.claude-env-<name>/`. Everything that makes that agent itself, kept in your project but out of your commits.
+- **Capabilities** — which files an agent maintains. Each one it has adds a step to its `/sync`. See the table below.
+- **Two `CLAUDE.md` files** — the one in the env dir is the agent's *persona* (who it is), set once. The one in your repo root holds *project* facts and is kept current by `/sync`. Agents also build up memory as they work.
+- **Shared login** — one `aello login` covers every agent, however many run at once.
 
-See [`docs/concepts.md`](docs/concepts.md) and [`docs/capabilities.md`](docs/capabilities.md) for detail.
+Four commands come with every agent. You type them; agents never run them by themselves:
+
+- **`/sync`** — the checkpoint. Brings the docs it maintains back in line with the code, then commits and pushes. Tailored per blueprint, so an agent without GitHub gets no git talk at all.
+- **`/handoff`** — writes a resume note before you stop, so the next session picks up where you left off. Read on boot, then deleted.
+- **`/note <agent>`** — leaves a message for a *different* agent, for when two split a project and one hits something on the other's side.
+- **`/twosentences`** — condenses the last response to two sentences.
+
+Rewritten one of those for a project and want to keep it? Put an empty `.aello-keep` file beside it and aello stops regenerating it.
+
+Transcripts of every session are archived outside the repo so nothing is lost when a session ends.
+
+See [`docs/concepts.md`](docs/concepts.md), [`docs/capabilities.md`](docs/capabilities.md) and [`docs/voice.md`](docs/voice.md) for how all of it actually works.
 
 ## Commands
 
@@ -170,33 +175,31 @@ By default the registry shows only blueprints already placed in the current dire
 
 ## Voice — every env speaks
 
-The voice is **not** a capability and there is nothing to turn on. Every env gets a `Stop` hook that reads each response's trailing `TL;DR:` line aloud through a free Edge neural voice, and a `SessionEnd` hook that returns the voice it borrowed. The persona picks up a section instructing it to end every response with that line — without one there is nothing to speak.
+Every env reads the last line of each response aloud, so you can leave an agent working and hear when it lands. There is nothing to switch on.
 
-Silence is a runtime setting, not a property of a blueprint: `aello voice mute` (or `M` in the TUI) covers every env at once, `mute --project` covers one project. An env is never made quiet by placing it differently.
-
-The hook is copied **into the env** and registered as `$CLAUDE_CONFIG_DIR/hooks/speak.py`, so it never points at a checkout somewhere else on disk: moving or renaming any other directory can't silence it, and a newly placed env speaks with no hand-editing. It is five files — `speak.py` plus `duck.py`, `focus.py`, `notify.py` and `win_audio.ps1` beside it — copied as a set on every placement, so an env that has fallen behind catches up on its next `run`.
-
-Each spoken line also goes out as a **desktop notification**, for the times you're in another window while an agent works. On macOS and Linux that needs `osascript` or `notify-send`; on Windows a toast is always shown *as* some registered application, and one sent under an identity Windows doesn't know is dropped without an error. Launching an env claims that identity, so the toasts work on a machine that has never started the [revoiced](https://github.com/ryha0008-boop/revoiced) station. The toast's *buttons* are a separate registration and stay the station's, since answering them is its job.
-
-Its state — the voice pool, per-session leases, mute flags — lives in one machine-wide folder (`%LOCALAPPDATA%\revoiced`, `~/Library/Application Support/revoiced`, `$XDG_DATA_HOME/revoiced`), shared by every env. So concurrent envs each lease a different voice, playback is serialised machine-wide instead of overlapping, and a single mute covers all of them:
-
-```
-aello voice mute              # silence every env, and stop the current sentence
+```sh
+aello voice mute              # silence every env, and stop the sentence playing now
 aello voice mute --project    # silence just this project
 aello voice unmute            # (--project too)
-aello voice stop              # cut off what's speaking now, without muting
-aello voice status            # hook version, mute state, pool size
+aello voice stop              # cut off what's speaking, without muting
+aello voice status            # muted or not, and which version the hook is
 ```
 
-These work from any directory and need no Python — useful precisely when a machine you didn't expect to talk starts talking.
+These work from any directory and need no setup — which is exactly where you are when a machine you didn't expect to talk starts talking. `M` in the TUI is the same switch.
 
-**Prerequisites.** Python 3 on `PATH`. Without `edge-tts` (`pip install edge-tts`) it falls back to the OS voice — SAPI on Windows, `say` on macOS, `spd-say`/`espeak` on Linux. Linux playback also needs one of `mpv`, `ffplay`, `mpg123`, or `cvlc`; macOS (`afplay`) and Windows (.NET) are covered by the OS. Ducking other applications' audio while it speaks is Windows-only and needs `pycaw`; elsewhere it's a no-op.
+Run several agents at once and each gets a **different voice**, taking turns rather than talking over each other. Each spoken line also raises a desktop notification, for when you're in another window.
 
-With `--github`, commits made through the blueprint are authored as `<name> <name@aello.local>` (both author and committer), and `/sync` appends an `Env: <name>` trailer to each commit — so `git log --author` and `git blame` reveal which blueprint did what.
+**You'll need** Python 3, and `pip install edge-tts` for the good voices — without it you get your OS's built-in voice. On Linux you also need one of `mpv`, `ffplay`, `mpg123` or `cvlc` to play audio.
+
+Not hearing anything? Run `aello voice status` first. [`docs/voice.md`](docs/voice.md) covers the rest.
+
+## Git attribution
+
+With `--github`, commits made through a blueprint are authored as `<name> <name@aello.local>`, and `/sync` adds an `Env: <name>` line to each commit — so `git log --author` and `git blame` show which agent did what.
 
 ## Configuration
 
-Blueprints, the shared token, and the contextdb path live in `config.toml` under your OS config dir (via the `directories` crate). The token is plaintext on your personal machine — regenerate it yearly (`aello login`).
+Your blueprints, login token, and transcript folder live in a `config.toml` in your OS's usual config location. The token is stored in plain text on your own machine — regenerate it once a year with `aello login`.
 
 ## Self-update
 
