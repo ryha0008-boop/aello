@@ -67,6 +67,24 @@ pub fn resolve(claude_md: &str) -> Result<String> {
 /// blueprint gets no git/commit/push talk at all. `name` is the blueprint name,
 /// used for the `Env:` commit trailer. Caller seeds it only when at least one
 /// capability is enabled (`Capabilities::any`).
+/// Footer on every generated skill. All four are rewritten on each `place`, and
+/// the person most likely to need that fact is whoever is editing one in place —
+/// who, without this, finds out when their edit silently disappears.
+fn keep_footer(skill: &str) -> String {
+    format!(
+        "
+---
+
+*aello regenerates this skill on every run, so edits made here are replaced. To
+keep a version you have rewritten for this project, create an empty
+`.aello-keep` file beside this one (`skills/{skill}/.aello-keep`) — aello then
+leaves the skill alone, and will not delete it either. A kept skill no longer
+tracks the blueprint's capabilities; remove the marker to return to the
+generated version.*
+"
+    )
+}
+
 pub fn render_sync_skill(caps: &Capabilities, name: &str) -> String {
     let tools = if caps.github {
         "Bash, Read, Edit, Write, Grep, Glob"
@@ -119,7 +137,9 @@ When invoked, reconcile the docs this project maintains so they match the curren
     s.push_str(
         "
 ## Reconcile memory, then docs
-**Memory first** — before any doc, refresh this env's memory so the checkpoint (and the mirror below, if any) captures what you've learned this session. Review `MEMORY.md` and the per-fact files under `$CLAUDE_CONFIG_DIR/projects/<this-project>/memory/`: add new facts, correct stale ones, prune what's wrong, and keep the one-line `MEMORY.md` index in sync. Report: memory updated / already-fresh.
+**Memory first** — before any doc, refresh this env's memory so the checkpoint (and the mirror below, if any) captures what you've learned this session. Review `MEMORY.md` and the per-fact files in this env's memory dir: add new facts, correct stale ones, prune what's wrong, and keep the one-line `MEMORY.md` index in sync. Report: memory updated / already-fresh.
+
+**Finding the memory dir — do not construct the path by hand.** It is `$CLAUDE_CONFIG_DIR/projects/<encoded-cwd>/memory/`, where `<encoded-cwd>` is this project's path with **every non-alphanumeric character folded to `-`**. Guessing that encoding is a reliable way to create a second, empty memory dir that nothing reads. List `$CLAUDE_CONFIG_DIR/projects/` and use the directory that is there (normally exactly one).
 ",
     );
     if !roles.is_empty() {
@@ -149,8 +169,9 @@ Version-control this env's internal config by mirroring it into the tracked `cla
             "
 ## Commit + push
 - Stage **only the files you created or modified in this session**, plus any docs you reconciled above — by explicit path (e.g. `git add path/a path/b`). **Never `git add -A` / `git add .`** — a blanket stage sweeps unrelated untracked files (other tooling's scaffolding, another env's in-flight work) into your commit. Run `git status` first; unstage anything you didn't touch. Then commit with a clear message summarizing what changed.
+- **Never stage the transient env files.** `<blueprint>.HANDOFF.md` (a resume note to yourself) and `<blueprint>.NOTE.md` (another env's inbox) live at the project root, are **created during the session**, and are **deleted on the next boot** by the SessionStart hook. The rule above would otherwise sweep them in — a handoff you wrote this session *is* a file you created this session. They are deliberately not gitignored, because they are meant to be visible while they exist. Leave them untracked, and never commit one.
 - **End every commit message with a trailer line `Env: {name}`** (after a blank line) so the commit records which aello blueprint made it. Your git author identity is already set to this blueprint; the trailer makes it visible in the message body too.
-- **After committing, before pushing, run `git pull --rebase origin <current-branch>`** to integrate any commits the remote gained since you last fetched (e.g. a release CI's `release: vX [skip ci]` auto-bump). This replays your commit on top so the push is a fast-forward — skipping it leaves you a commit behind and the *next* `/sync` push gets rejected.
+- **After committing, before pushing, run `git pull --rebase origin <current-branch>`** to integrate any commits the remote gained since you last fetched — another machine, another blueprint working in this repo, or CI auto-committing a version bump. This replays your commit on top so the push is a fast-forward — skipping it leaves you a commit behind and the *next* `/sync` push gets rejected.
 - Push to `origin` on the current branch. If the push fails for a missing upstream, set it: `git push -u origin <branch>`.
 - Report the final state: branch, commit sha, push result, and the remote URL.
 
@@ -159,6 +180,7 @@ Use normal prose for commit messages. Don't skip hooks or force-push unless the 
         ));
     }
 
+    s.push_str(&keep_footer("sync"));
     s
 }
 
@@ -170,6 +192,7 @@ Use normal prose for commit messages. Don't skip hooks or force-push unless the 
 /// compact, leaves no summary behind). The filename is prefixed with the
 /// blueprint `name` so co-located blueprints don't clobber each other's handoff.
 pub fn render_handoff_skill(name: &str) -> String {
+    let keep = keep_footer("handoff");
     format!(
         "---
 name: handoff
@@ -212,7 +235,11 @@ Write these sections, in order:
 
 Keep it tight and skimmable. Then tell the user the note is written and remind
 them it is deleted on next boot.
-"
+
+`{name}.HANDOFF.md` is **never committed.** It is untracked on purpose and gone
+by the next boot, so if you run `/sync` after this, leave it out of the staging
+list — it is a file you created this session, and that rule does not cover it.
+{keep}"
     )
 }
 
@@ -224,37 +251,48 @@ them it is deleted on next boot.
 /// target env is passed as the skill argument; `name` is this (authoring)
 /// blueprint, woven in so the note is attributed.
 pub fn render_note_skill(name: &str) -> String {
+    let keep = keep_footer("note");
     format!(
         "---
 name: note
-description: Leave a note for another environment in this repo about something it needs to fix. Invoke manually with /note <env-name>.
+description: Leave a note for another aello environment about something it needs to fix. Invoke manually with /note <env-name>.
 disable-model-invocation: true
 allowed-tools: Write, Read, Bash
 ---
 
 # /note — leave a note for another environment
 
-When invoked, append a note addressed to **another** aello environment sharing
-this repo. The argument is that environment's name (e.g. `/note frontend`).
-Invoking this skill is your authorization to write the note.
+When invoked, leave a note addressed to **another** aello environment. The
+argument is that environment's name (e.g. `/note frontend`). Invoking this skill
+is your authorization to write the note.
 
 This is **not** a handoff. `/handoff` is a note to *yourself* for your next
 session; `/note` is a message to a *different* environment — you touched
 something it owns, or hit a problem on its side, and it needs to act.
 
-You are the **`{name}`** environment. Write the note to `<target>.NOTE.md` at the
-project root, where `<target>` is the argument you were given. That file is the
-target env's inbox — it reads the note, acts on it, then deletes the file.
+You are the **`{name}`** environment. The note goes to `<target>.NOTE.md` at the
+**target's** project root. That file is the target env's inbox — its SessionStart
+hook reads the note on boot, delivers it, and deletes the file.
 
 Steps:
-1. Take the target env name from the argument. If none was given, ask which
-   environment the note is for and stop. Sanity-check that a `.claude-env-<target>`
-   dir exists at the project root; if it does not, warn the user (a typo?) and
-   only write the note if they confirm.
-2. **Overwrite** `<target>.NOTE.md` with a single, current note — do not append
-   to or preserve any old note. The target reads a note as soon as you leave it,
-   so only the latest matters; a fresh note supersedes whatever was there.
-3. Write, in this order:
+1. Take the target env name from the argument; if none was given, ask which
+   environment the note is for and stop. Use the blueprint's **canonical
+   casing** (`RevoicedMainDev`, not `revoicedmaindev`) — the hook looks for
+   exactly `<Name>.NOTE.md`, so wrong casing is a silent dead letter on a
+   case-sensitive filesystem.
+2. **Work out the target's project root — it is not always this repo.** Look for
+   `.claude-env-<target>/` here first. If it is not here, the target env lives in
+   a different repo and the note belongs at **that** repo's root: its
+   SessionStart hook only ever reads its own project root, so a note left here
+   would never be delivered. Locate that repo (ask the user for the path if you
+   cannot) rather than writing a note nobody will read. Only if you cannot
+   establish where the target lives should you treat the name as a typo and
+   check with the user.
+3. **Overwrite** `<target>.NOTE.md` at that project root with a single, current
+   note — do not append to or preserve any old note. The target reads a note as
+   soon as you leave it, so only the latest matters; a fresh note supersedes
+   whatever was there.
+4. Write, in this order:
    - A one-line banner: `> Note for the <target> env from {name}. Read it, act on it, then delete this file.`
    - A `## from {name} — <timestamp>` heading (get the timestamp with `date`).
    - **What I was doing** — the task that led here.
@@ -263,8 +301,9 @@ Steps:
      target env, naming the files/paths involved.
    Keep it tight and actionable; the target boots without your context.
 
-Then tell the user the note was written to `<target>.NOTE.md`.
-"
+Then tell the user the note was written, naming the **full path** — so a note
+sent into another repo is obviously that, and not mistaken for one left here.
+{keep}"
     )
 }
 
@@ -273,7 +312,7 @@ Then tell the user the note was written to `<target>.NOTE.md`.
 /// previous assistant response into exactly two sentences; a pure text task, so
 /// it needs no tools.
 pub fn render_twosentences_skill() -> String {
-    "---
+    let body = "---
 name: twosentences
 description: Summarize your previous response in exactly two sentences. Invoke manually with /twosentences.
 disable-model-invocation: true
@@ -288,8 +327,8 @@ message before this invocation) into **exactly two sentences**.
 Output only those two sentences — no preamble, no heading, no bullets, no code,
 nothing else. Keep the key facts and the outcome; drop detail, caveats, and
 step-by-step explanation.
-"
-    .to_string()
+";
+    format!("{body}{}", keep_footer("twosentences"))
 }
 
 #[cfg(test)]
@@ -366,6 +405,41 @@ mod tests {
         assert!(s.contains("Overwrite")); // one current note, read immediately
         assert!(s.contains("from core")); // attributed to the authoring blueprint
         assert!(s.contains("not** a handoff")); // distinct from /handoff
+    }
+
+    #[test]
+    fn note_skill_handles_a_target_in_another_repo() {
+        let s = render_note_skill("core");
+        // The target's SessionStart hook only reads its own project root, so a
+        // cross-repo note left here is a dead letter — the skill has to say so.
+        assert!(s.contains("not always this repo"));
+        assert!(s.contains("canonical"));
+        // "append" was the old wording and contradicted the Overwrite step.
+        assert!(!s.contains("append a note"));
+    }
+
+    #[test]
+    fn sync_skill_excludes_the_transient_env_files_from_staging() {
+        let caps = Capabilities { github: true, ..Default::default() };
+        let s = render_sync_skill(&caps, "coder");
+        // "stage what you created this session" would otherwise sweep in the
+        // handoff/note files, which are transient and deleted on next boot.
+        assert!(s.contains("HANDOFF.md"));
+        assert!(s.contains("NOTE.md"));
+        assert!(s.contains("Never stage the transient env files"));
+    }
+
+    #[test]
+    fn every_generated_skill_documents_the_keep_marker() {
+        let caps = Capabilities { github: true, ..Default::default() };
+        for (s, dir) in [
+            (render_sync_skill(&caps, "coder"), "sync"),
+            (render_handoff_skill("coder"), "handoff"),
+            (render_note_skill("coder"), "note"),
+            (render_twosentences_skill(), "twosentences"),
+        ] {
+            assert!(s.contains(&format!("skills/{dir}/.aello-keep")), "{dir} lacks the marker");
+        }
     }
 
     #[test]

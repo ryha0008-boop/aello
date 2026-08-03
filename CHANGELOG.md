@@ -2,7 +2,43 @@
 
 ## [Unreleased]
 
+### Fixed
+- **`/sync` no longer tells you to commit the transient env files.** Its staging
+  rule is "stage only what you created or modified this session" — and a
+  `<blueprint>.HANDOFF.md` written by `/handoff` is exactly that, so the rule as
+  written swept in a file that is untracked on purpose and deleted on the next
+  boot. `/sync` now excludes `*.HANDOFF.md` and `*.NOTE.md` explicitly, and
+  `/handoff` says so on its own side too.
+- **`/note` handles a target env in another repo.** It assumed the target shared
+  this repo: it sanity-checked `.claude-env-<target>` at *this* project root,
+  reported a missing one as a probable typo, and then wrote the note here anyway
+  — where the target's SessionStart hook, which only reads its own project root,
+  would never see it. It now resolves the target's project root first and writes
+  there, treats "cannot locate it" as the only typo case, and reports the full
+  path it wrote. It also asks for the blueprint's canonical casing (the hook
+  matches `<Name>.NOTE.md` exactly, so wrong casing is a silent dead letter on a
+  case-sensitive filesystem), and no longer says "append a note" one paragraph
+  above the step that says to overwrite.
+- **`/sync` stopped guessing the memory directory.** It named
+  `projects/<this-project>/memory/`, inviting a hand-built path; Claude encodes
+  the cwd by folding every non-alphanumeric character to `-`, so a guess creates
+  a second empty memory dir nothing reads. It now says to list
+  `$CLAUDE_CONFIG_DIR/projects/` and use what is there.
+- **`/sync`'s pre-push rebase no longer cites a CI that may not exist.** The
+  reason given was aello's own `release: vX [skip ci]` auto-bump, which only runs
+  if the scaffolded `.github/` was actually committed. The advice is right for
+  any repo touched from more than one place; the rationale now says that instead.
+
 ### Added
+- **`.aello-keep` — pin a hand-edited skill.** The four seeded skills (`/sync`,
+  `/handoff`, `/note`, `/twosentences`) are rewritten on every run, so a project
+  that needed a different workflow — a `/sync` that also deploys, say — silently
+  lost its version on the next `aello run`, and the `claude-internal/` mirror
+  then committed the generated one over it. An empty `.aello-keep` beside a
+  skill (`.claude-env-<name>/skills/sync/.aello-keep`) makes `place` leave it
+  alone: not regenerated, and not deleted if the blueprint later drops all its
+  capabilities. Per env dir, so the same blueprint used in another project still
+  gets the generated skill; every other file in the env keeps self-healing.
 - **`--voice` capability — spoken responses.** A blueprint with `--voice` gets a
   `Stop` hook that reads each response's trailing `TL;DR:` line aloud through a
   free Edge neural voice, and a `SessionEnd` hook that returns the voice it

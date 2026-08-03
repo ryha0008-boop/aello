@@ -48,9 +48,17 @@ Isolated Claude Code environments — like Python venvs, but for AI agents. Clau
 - `src/hooks_speak.py`, `src/hooks_duck.py`, `src/hooks_focus.py`, `src/hooks_notify.py`, `src/hooks_win_audio.ps1` — the vendored voice hook set (from `revoiced`), copied into every `<env>/hooks/`. Re-sync all five from upstream as a unit and update `project.rs`'s `HOOK_VERSION` **and** the five-file digest to match (the digest test prints the new value when it fails).
 - `templates/coder.md`, `templates/sysadmin.md` — bundled personas. `templates/memory-working-style.md` — bundled starter memory (`MEMORY_WORKING_STYLE` in `project.rs`). `src/hooks_post_compact.py` — the PostCompact hook. `src/hooks_session_end.py` — the SessionEnd hook (`/clear`/exit capture).
 
+## Seeded skills are regenerated — `.aello-keep` opts out
+
+All four seeded skills are written **unconditionally on every `place`** (no existence check), which is what makes a caps change reach an env placed months ago. The cost: a skill hand-edited for one project was silently restored to the generated version on the next run, and — worse — the github `/sync` step then mirrored that generated version over the custom one in `claude-internal/`, committing it. The edit survived only in git history, nowhere anyone would look.
+
+`<env>/skills/<skill>/.aello-keep` (empty file) pins one skill: `place` neither regenerates nor removes it. The removal branch matters — a hand-written `/sync` isn't stale just because the blueprint dropped all caps, so a kept skill skips `remove_file` too. `skill_kept` + `seed_skill` in `project.rs`; the marker lives beside the skill rather than in `config.toml` so it travels with the env dir and is visible where the editing happens. A kept skill no longer tracks its capabilities — that's the trade, and deleting the marker restores the generated version.
+
 ## `/sync`
 
 Generated per blueprint from its caps (`templates::render_sync_skill`), seeded to `<env>/skills/sync/SKILL.md` when `caps.any()`. Manual-only (`disable-model-invocation: true`) — replaces the old auto-commit hooks. A no-`github` blueprint gets no git/commit/push sections and no `Bash` tool. Sections, in order: repo health (github), reconcile **memory first** then the enabled docs (two-way), mirror env config into `claude-internal/<name>/` + stage by path (github), commit + rebase-before-push with `Env:` trailer (github).
+
+The staging rule ("only what you created or modified this session") has one carve-out that has to stay explicit: `*.HANDOFF.md` and `*.NOTE.md` are created *during* the session and deleted on the next boot, so the rule as literally written told you to commit them. They are deliberately **not** gitignored — only `.claude-env-*` is — so nothing else stops it.
 
 ## `/handoff`
 
@@ -58,7 +66,7 @@ Universal counterpart to `/sync` (`templates::render_handoff_skill`), seeded **u
 
 ## `/note`
 
-Universal too (`templates::render_note_skill`), seeded **unconditionally** for every blueprint at `<env>/skills/note/SKILL.md` alongside `/handoff`. Manual-only (`disable-model-invocation: true`), tools `Write, Read, Bash`. Distinct from `/handoff`: `/handoff` is a note to *self* for the next session, `/note <target>` leaves a note **for another environment** sharing the repo — the common multi-blueprint case where one env touches something the other owns, or hits a problem on its side. Invoked with the target blueprint name as the argument (`/note frontend`); the note **overwrites** `<target>.NOTE.md` at the project root (the target env's inbox) with a single current note — the target reads it immediately and deletes it, so only the latest matters. Heading `from <name>` attributes the authoring blueprint; sections: what I was doing / the problem / what you need to fix.
+Universal too (`templates::render_note_skill`), seeded **unconditionally** for every blueprint at `<env>/skills/note/SKILL.md` alongside `/handoff`. Manual-only (`disable-model-invocation: true`), tools `Write, Read, Bash`. **The target need not share this repo** — the skill resolves the target's project root and writes there, because the SessionStart hook only reads its *own* project root, so a cross-repo note left here is a dead letter that looks delivered. It originally assumed one shared repo and reported a target it couldn't find here as a typo; that misdiagnosed the common multi-repo case twice on 2026-08-02. Casing must be the blueprint's canonical form (the hook matches `<Name>.NOTE.md` exactly — wrong case is silent on a case-sensitive filesystem). Distinct from `/handoff`: `/handoff` is a note to *self* for the next session, `/note <target>` leaves a note **for another environment** — the common multi-blueprint case where one env touches something the other owns, or hits a problem on its side. Invoked with the target blueprint name as the argument (`/note frontend`); the note **overwrites** `<target>.NOTE.md` at the project root (the target env's inbox) with a single current note — the target reads it immediately and deletes it, so only the latest matters. Heading `from <name>` attributes the authoring blueprint; sections: what I was doing / the problem / what you need to fix.
 
 ## `/twosentences`
 

@@ -43,7 +43,21 @@ This isn't optional polish: the `github` cap's CI auto-bumps `VERSION` on every 
 ## Blueprint vs instance
 
 - A **blueprint** is global, stored in aello's `config.toml`: `name`, `model`, optional persona (`claude_md`), and `capabilities`. It's reusable across any number of projects.
-- An **instance** is a blueprint placed into a project — recorded as `.aello.toml` inside the env dir. Placement is idempotent: `aello run` re-seeds the generated skill and refreshes the hook each time, but never clobbers your edited persona, scaffolded files, or memory.
+- An **instance** is a blueprint placed into a project — recorded as `.aello.toml` inside the env dir. Placement is idempotent: `aello run` re-seeds the generated skill and refreshes the hook each time, but never clobbers your edited persona, scaffolded files, memory, or a skill you've marked kept.
+
+## Keeping a hand-edited skill
+
+The four seeded skills — `/sync`, `/handoff`, `/note`, `/twosentences` — are **rewritten on every `aello run`**. That's what makes a capability change reach an env you placed months ago, and it's the right default. But it also means editing one in place is temporary: the next run silently restores the generated version, and if the `github` cap then mirrors the env into `claude-internal/`, the generated version is committed over your custom one. (Your edit survives in git history, not in the working tree.)
+
+To pin a skill you've rewritten for one project, drop an empty `.aello-keep` file beside it:
+
+```sh
+touch .claude-env-<name>/skills/sync/.aello-keep
+```
+
+`place` then leaves that skill entirely alone — not regenerated, and not removed if the blueprint later drops all its capabilities. Everything else in the env keeps healing normally, and other blueprints are unaffected. The marker is per env dir, which is per project: the same blueprint used elsewhere still gets the generated skill.
+
+Use it when a project genuinely needs a different workflow (a `/sync` that also deploys, say). Because a kept skill no longer tracks its capabilities, changing caps for that blueprint won't be reflected in it — update it by hand, or delete the marker to fall back to the generated version.
 
 ## Two CLAUDE.md layers
 

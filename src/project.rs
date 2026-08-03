@@ -280,9 +280,13 @@ pub fn place(
         .context("could not write win_audio.ps1")?;
 
     // Regenerate the tailored /sync skill from current caps (or remove it if the
-    // blueprint no longer maintains anything).
+    // blueprint no longer maintains anything). A kept skill is left alone
+    // entirely — including the removal, since a hand-written /sync is not stale
+    // just because the blueprint stopped maintaining docs.
     let skill = env_dir.join("skills").join("sync").join("SKILL.md");
-    if caps.any() {
+    if skill_kept(skill.parent().unwrap()) {
+        // hand-edited: neither regenerated nor removed
+    } else if caps.any() {
         std::fs::create_dir_all(skill.parent().unwrap())
             .context("could not create skills dir")?;
         std::fs::write(&skill, crate::templates::render_sync_skill(caps, &inst.name))
@@ -299,27 +303,15 @@ pub fn place(
     // Always seed the /handoff skill — unlike /sync it is universal (every
     // blueprint, regardless of caps), since a clean resume note helps even a
     // blueprint that maintains no docs.
-    let handoff = env_dir.join("skills").join("handoff").join("SKILL.md");
-    std::fs::create_dir_all(handoff.parent().unwrap())
-        .context("could not create handoff skills dir")?;
-    std::fs::write(&handoff, crate::templates::render_handoff_skill(&inst.name))
-        .context("could not write handoff SKILL.md")?;
+    seed_skill(env_dir, "handoff", crate::templates::render_handoff_skill(&inst.name))?;
 
     // Always seed the /note skill — universal too: leave a note for another
     // environment sharing this repo (distinct from /handoff, a note to self).
-    let note = env_dir.join("skills").join("note").join("SKILL.md");
-    std::fs::create_dir_all(note.parent().unwrap())
-        .context("could not create note skills dir")?;
-    std::fs::write(&note, crate::templates::render_note_skill(&inst.name))
-        .context("could not write note SKILL.md")?;
+    seed_skill(env_dir, "note", crate::templates::render_note_skill(&inst.name))?;
 
     // Always seed the /twosentences skill — also universal (capability-
     // independent): condense the previous response into two sentences.
-    let twosentences = env_dir.join("skills").join("twosentences").join("SKILL.md");
-    std::fs::create_dir_all(twosentences.parent().unwrap())
-        .context("could not create twosentences skills dir")?;
-    std::fs::write(&twosentences, crate::templates::render_twosentences_skill())
-        .context("could not write twosentences SKILL.md")?;
+    seed_skill(env_dir, "twosentences", crate::templates::render_twosentences_skill())?;
 
     let project = env_dir.parent().unwrap_or(env_dir);
 
@@ -332,6 +324,33 @@ pub fn place(
     scaffold_project(project, env_dir, &inst.name, caps)?;
 
     Ok(())
+}
+
+/// The opt-out marker: `<env>/skills/<name>/.aello-keep` means "this skill was
+/// hand-edited for this project — don't regenerate it".
+///
+/// Every other seeded skill is rewritten on each `place`, which is what makes a
+/// capability change reach an existing env. That is the right default, but it
+/// silently discarded a project-specific rewrite of `/sync`, and the mirror then
+/// carried the generated version over the custom one in git. The marker lives
+/// beside the skill it protects (not in `config.toml`) so it travels with the
+/// env dir and is visible where the editing happens.
+pub const KEEP_MARKER: &str = ".aello-keep";
+
+fn skill_kept(skill_dir: &Path) -> bool {
+    skill_dir.join(KEEP_MARKER).exists()
+}
+
+/// Seed one of the universal skills, unless it has been marked kept.
+fn seed_skill(env_dir: &Path, name: &str, content: String) -> Result<()> {
+    let dir = env_dir.join("skills").join(name);
+    if skill_kept(&dir) {
+        return Ok(());
+    }
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("could not create {name} skills dir"))?;
+    std::fs::write(dir.join("SKILL.md"), content)
+        .with_context(|| format!("could not write {name} SKILL.md"))
 }
 
 /// Seed the env's starter memory so a freshly placed env loads the user's
@@ -1456,6 +1475,47 @@ mod tests {
                 .unwrap();
         assert!(registers_command(&v["hooks"]["SessionStart"], "session-start.py"));
         assert!(env.join("hooks/session-start.py").exists());
+    }
+
+    #[test]
+    fn a_kept_skill_survives_placement() {
+        let proj = tempfile::tempdir().unwrap();
+        let env = env_dir(proj.path(), "coder");
+        let inst = Instance { name: "coder".into(), model: "opus".into() };
+        let caps = Capabilities { github: true, ..Default::default() };
+
+        // First placement generates the skills.
+        place(&env, &inst, None, &caps).unwrap();
+
+        // Hand-edit /sync and /note, and mark only /sync kept.
+        let sync = env.join("skills/sync/SKILL.md");
+        let note = env.join("skills/note/SKILL.md");
+        std::fs::write(&sync, "# my VPS deploy sync\n").unwrap();
+        std::fs::write(&note, "# my note\n").unwrap();
+        std::fs::write(env.join("skills/sync").join(KEEP_MARKER), "").unwrap();
+
+        place(&env, &inst, None, &caps).unwrap();
+
+        // The marked one is untouched; the unmarked one is regenerated.
+        assert_eq!(std::fs::read_to_string(&sync).unwrap(), "# my VPS deploy sync\n");
+        assert_ne!(std::fs::read_to_string(&note).unwrap(), "# my note\n");
+    }
+
+    #[test]
+    fn a_kept_sync_is_not_removed_when_caps_go_empty() {
+        let proj = tempfile::tempdir().unwrap();
+        let env = env_dir(proj.path(), "coder");
+        let inst = Instance { name: "coder".into(), model: "opus".into() };
+
+        place(&env, &inst, None, &Capabilities { github: true, ..Default::default() }).unwrap();
+        let sync = env.join("skills/sync/SKILL.md");
+        std::fs::write(&sync, "# hand-written\n").unwrap();
+        std::fs::write(env.join("skills/sync").join(KEEP_MARKER), "").unwrap();
+
+        // Dropping every cap normally deletes /sync — a kept one stays, since it
+        // is not generated from caps in the first place.
+        place(&env, &inst, None, &Capabilities::default()).unwrap();
+        assert_eq!(std::fs::read_to_string(&sync).unwrap(), "# hand-written\n");
     }
 
     #[test]
