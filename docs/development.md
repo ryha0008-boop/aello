@@ -75,7 +75,7 @@ Committing is the start, not the end. A change only counts once every already-in
 
 Push to `main` and GitHub Actions does the rest:
 
-1. **bump** — increments the patch in `Cargo.toml`, commits `release: vX.Y.Z [skip ci]`, pushes via `GITHUB_TOKEN` (which does not re-trigger CI).
+1. **bump** — resolves the version. If the version in `Cargo.toml` already has a `vX.Y.Z` tag, it increments the patch, commits `release: vX.Y.Z [skip ci]` and pushes via `GITHUB_TOKEN` (which does not re-trigger CI). If it has no tag yet, a human set it deliberately and it is published unchanged — that is how a minor or major bump ships, since a patch bump can only ever produce X.Y.(Z+1).
 2. **build** — four targets, at the bump commit's sha so the binary reports the new version: `x86_64-unknown-linux-gnu`, `x86_64-pc-windows-msvc`, `aarch64-apple-darwin`, and `x86_64-apple-darwin` (cross-compiled on the Apple Silicon runner). All unsigned — `install.sh` clears the macOS quarantine attribute and the README documents Windows SmartScreen.
 3. **publish** — generates `SHA256SUMS` and uploads binaries + manifest to **two** releases: the immutable `vX.Y.Z` tag (flagged `--latest`) and the permanent rolling `latest` tag (`--clobber`, explicitly `--latest=false`).
 

@@ -7,6 +7,13 @@ allowed-tools: Write, Read, Bash
 
 # /handoff — session resume note
 
+> **Only the user runs this.** It happens when they type `/handoff`, and at no
+> other time. If you are reading this file because *you* decided to — to see what
+> it does, or to carry out its steps yourself — then stop and do neither.
+> Following these instructions **is** running the skill, whichever route you took
+> to them, and a checkpoint the user did not ask for is one they will believe
+> happened when it did not. Say the skill exists and let them invoke it.
+
 When invoked, write a `TechnicalDirector.HANDOFF.md` at the project root that lets the
 **next** session resume this work with **zero prior context**. Invoking this
 skill is your authorization to do so.
@@ -39,3 +46,16 @@ Write these sections, in order:
 
 Keep it tight and skimmable. Then tell the user the note is written and remind
 them it is deleted on next boot.
+
+`TechnicalDirector.HANDOFF.md` is **never committed.** It is untracked on purpose and gone
+by the next boot, so if you run `/sync` after this, leave it out of the staging
+list — it is a file you created this session, and that rule does not cover it.
+
+---
+
+*aello regenerates this skill on every run, so edits made here are replaced. To
+keep a version you have rewritten for this project, create an empty
+`.aello-keep` file beside this one (`skills/handoff/.aello-keep`) — aello then
+leaves the skill alone, and will not delete it either. A kept skill no longer
+tracks the blueprint's capabilities; remove the marker to return to the
+generated version.*

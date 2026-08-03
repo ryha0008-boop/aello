@@ -16,6 +16,12 @@
 - Stale `--github` / `--project-md` / "capability checklist" references in
   `CONTRIBUTING.md`, `docs/concepts.md`, `scripts/demo-recording.md`, the PR
   template and two source comments — all describing flags removed in 0.2.0.
+- The release process in `CLAUDE.md` and `docs/development.md` still said the
+  bump job always adds a patch. It hasn't since the change that made `v0.2.0`
+  possible: a version with no tag yet is published exactly as written.
+
+### Added
+- The README links the live docs site and carries a docs badge.
 
 ## [0.2.0]
 
