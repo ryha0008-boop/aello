@@ -62,11 +62,27 @@ pub fn resolve(claude_md: &str) -> Result<String> {
         .with_context(|| format!("claude_md '{claude_md}' is not a built-in template or a readable file"))
 }
 
-/// Generate a `/sync` SKILL.md tailored to a blueprint's capabilities, so the
-/// skill only covers what this blueprint actually maintains — a no-GitHub
-/// blueprint gets no git/commit/push talk at all. `name` is the blueprint name,
-/// used for the `Env:` commit trailer. Caller seeds it only when at least one
-/// capability is enabled (`Capabilities::any`).
+/// The manual-only banner, carried by every seeded skill.
+///
+/// `disable-model-invocation: true` in the frontmatter already stops the model
+/// calling one of these as a tool. What it does not stop — and what actually
+/// happened on 2026-08-03 — is an agent opening the file with `Read` and
+/// carrying out the steps by hand, which is the same thing reached by a
+/// different route: the user believed `/sync` had run when it had not. The
+/// frontmatter closes the tool path; this closes the reading path.
+fn manual_only(cmd: &str) -> String {
+    format!(
+        "> **Only the user runs this.** It happens when they type `/{cmd}`, and at no
+> other time. If you are reading this file because *you* decided to — to see what
+> it does, or to carry out its steps yourself — then stop and do neither.
+> Following these instructions **is** running the skill, whichever route you took
+> to them, and a checkpoint the user did not ask for is one they will believe
+> happened when it did not. Say the skill exists and let them invoke it.
+
+"
+    )
+}
+
 /// Footer on every generated skill. All four are rewritten on each `place`, and
 /// the person most likely to need that fact is whoever is editing one in place —
 /// who, without this, finds out when their edit silently disappears.
@@ -85,7 +101,13 @@ generated version.*
     )
 }
 
+/// Generate a `/sync` SKILL.md tailored to a blueprint's capabilities, so the
+/// skill only covers what this blueprint actually maintains — a no-GitHub
+/// blueprint gets no git/commit/push talk at all. `name` is the blueprint name,
+/// used for the `Env:` commit trailer. Caller seeds it only when at least one
+/// capability is enabled (`Capabilities::any`).
 pub fn render_sync_skill(caps: &Capabilities, name: &str) -> String {
+    let manual = manual_only("sync");
     let tools = if caps.github {
         "Bash, Read, Edit, Write, Grep, Glob"
     } else {
@@ -103,7 +125,7 @@ allowed-tools: {tools}
 
 # /sync — project checkpoint
 
-When invoked, reconcile the docs this project maintains so they match the current code{tail}. Invoking this skill is your authorization to do so.
+{manual}When invoked, reconcile the docs this project maintains so they match the current code{tail}. Invoking this skill is your authorization to do so.
 "
     );
 
@@ -193,6 +215,7 @@ Use normal prose for commit messages. Don't skip hooks or force-push unless the 
 /// blueprint `name` so co-located blueprints don't clobber each other's handoff.
 pub fn render_handoff_skill(name: &str) -> String {
     let keep = keep_footer("handoff");
+    let manual = manual_only("handoff");
     format!(
         "---
 name: handoff
@@ -203,7 +226,7 @@ allowed-tools: Write, Read, Bash
 
 # /handoff — session resume note
 
-When invoked, write a `{name}.HANDOFF.md` at the project root that lets the
+{manual}When invoked, write a `{name}.HANDOFF.md` at the project root that lets the
 **next** session resume this work with **zero prior context**. Invoking this
 skill is your authorization to do so.
 
@@ -252,6 +275,7 @@ list — it is a file you created this session, and that rule does not cover it.
 /// blueprint, woven in so the note is attributed.
 pub fn render_note_skill(name: &str) -> String {
     let keep = keep_footer("note");
+    let manual = manual_only("note");
     format!(
         "---
 name: note
@@ -262,7 +286,7 @@ allowed-tools: Write, Read, Bash
 
 # /note — leave a note for another environment
 
-When invoked, leave a note addressed to **another** aello environment. The
+{manual}When invoked, leave a note addressed to **another** aello environment. The
 argument is that environment's name (e.g. `/note frontend`). Invoking this skill
 is your authorization to write the note.
 
@@ -312,7 +336,8 @@ sent into another repo is obviously that, and not mistaken for one left here.
 /// previous assistant response into exactly two sentences; a pure text task, so
 /// it needs no tools.
 pub fn render_twosentences_skill() -> String {
-    let body = "---
+    let manual = manual_only("twosentences");
+    let body = format!("---
 name: twosentences
 description: Summarize your previous response in exactly two sentences. Invoke manually with /twosentences.
 disable-model-invocation: true
@@ -321,13 +346,13 @@ allowed-tools:
 
 # /twosentences — two-sentence summary
 
-When invoked, condense your **previous response** (the most recent assistant
+{manual}When invoked, condense your **previous response** (the most recent assistant
 message before this invocation) into **exactly two sentences**.
 
 Output only those two sentences — no preamble, no heading, no bullets, no code,
 nothing else. Keep the key facts and the outcome; drop detail, caveats, and
 step-by-step explanation.
-";
+");
     format!("{body}{}", keep_footer("twosentences"))
 }
 
@@ -427,6 +452,23 @@ mod tests {
         assert!(s.contains("HANDOFF.md"));
         assert!(s.contains("NOTE.md"));
         assert!(s.contains("Never stage the transient env files"));
+    }
+
+    #[test]
+    fn every_generated_skill_is_marked_user_only() {
+        let caps = Capabilities { github: true, ..Default::default() };
+        for (s, cmd) in [
+            (render_sync_skill(&caps, "coder"), "sync"),
+            (render_handoff_skill("coder"), "handoff"),
+            (render_note_skill("coder"), "note"),
+            (render_twosentences_skill(), "twosentences"),
+        ] {
+            // The frontmatter flag closes the tool path...
+            assert!(s.contains("disable-model-invocation: true"), "{cmd} is model-invocable");
+            // ...and the banner closes the read-it-and-do-it-anyway path.
+            assert!(s.contains("**Only the user runs this.**"), "{cmd} lacks the banner");
+            assert!(s.contains(&format!("they type `/{cmd}`")), "{cmd} banner names the wrong command");
+        }
     }
 
     #[test]

@@ -45,6 +45,12 @@ This isn't optional polish: the `github` cap's CI auto-bumps `VERSION` on every 
 - A **blueprint** is global, stored in aello's `config.toml`: `name`, `model`, optional persona (`claude_md`), and `capabilities`. It's reusable across any number of projects.
 - An **instance** is a blueprint placed into a project — recorded as `.aello.toml` inside the env dir. Placement is idempotent: `aello run` re-seeds the generated skill and refreshes the hook each time, but never clobbers your edited persona, scaffolded files, memory, or a skill you've marked kept.
 
+## The seeded skills are yours to run
+
+`/sync`, `/handoff`, `/note` and `/twosentences` only run when **you** type them. Each carries `disable-model-invocation: true`, which stops the agent invoking one as a tool, and a banner saying that reading the file and carrying out its steps is the same as running it. Both are needed: the flag alone left an agent free to open the `SKILL.md` and work through it unasked, which is worse than doing nothing — you end up believing a checkpoint happened.
+
+If an agent tells you it "ran `/sync`" without you typing it, it didn't. Ask it to say so plainly and then invoke the command yourself.
+
 ## Keeping a hand-edited skill
 
 The four seeded skills — `/sync`, `/handoff`, `/note`, `/twosentences` — are **rewritten on every `aello run`**. That's what makes a capability change reach an env you placed months ago, and it's the right default. But it also means editing one in place is temporary: the next run silently restores the generated version, and if the `github` cap then mirrors the env into `claude-internal/`, the generated version is committed over your custom one. (Your edit survives in git history, not in the working tree.)

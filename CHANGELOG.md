@@ -23,6 +23,14 @@
   repeats, not prefixes). Only `speak.py` moved in all three.
 
 ### Fixed
+- **The seeded skills now say they are yours to run, not the agent's.**
+  `disable-model-invocation: true` stops the model calling one as a *tool*, but
+  nothing stopped an agent opening the `SKILL.md` with `Read` and carrying out
+  the steps by hand — which produces the worse outcome, because you believe a
+  checkpoint ran when it did not. Every generated skill now opens with a banner
+  saying that following the instructions **is** running the skill, whichever
+  route you took to them. The frontmatter closes the tool path; the banner closes
+  the reading path.
 - **`/sync` no longer tells you to commit the transient env files.** Its staging
   rule is "stage only what you created or modified this session" — and a
   `<blueprint>.HANDOFF.md` written by `/handoff` is exactly that, so the rule as
