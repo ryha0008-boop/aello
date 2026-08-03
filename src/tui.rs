@@ -21,7 +21,7 @@ use ratatui::{backend::CrosstermBackend, Frame, Terminal};
 use std::io::{self, Stdout};
 use std::path::{Path, PathBuf};
 
-use crate::models::{Blueprint, Capabilities};
+use crate::models::{Blueprint, Role};
 use crate::{config, docs, project, sessions};
 
 type Term = Terminal<CrosstermBackend<Stdout>>;
@@ -69,36 +69,9 @@ const PERSONAS: &[(&str, &str)] = &[
     ("sysadmin", "ops / devops"),
 ];
 
-/// Capability checklist rows, in toggle order. `toggle`/`enabled` map an index
-/// to the matching `Capabilities` field.
-const CAP_ROWS: &[(&str, &str)] = &[
-    ("project-md", "maintain a project-level CLAUDE.md"),
-    ("github", "/sync commits + pushes to GitHub"),
-    ("changelog", "keep CHANGELOG.md current"),
-    ("docs", "keep docs/ current"),
-    ("readme", "keep README.md current"),
-];
-
-fn cap_toggle(caps: &mut Capabilities, i: usize) {
-    match i {
-        0 => caps.project_md = !caps.project_md,
-        1 => caps.github = !caps.github,
-        2 => caps.changelog = !caps.changelog,
-        3 => caps.docs = !caps.docs,
-        4 => caps.readme = !caps.readme,
-        _ => {}
-    }
-}
-
-fn cap_enabled(caps: &Capabilities, i: usize) -> bool {
-    match i {
-        0 => caps.project_md,
-        1 => caps.github,
-        2 => caps.changelog,
-        3 => caps.docs,
-        4 => caps.readme,
-        _ => false,
-    }
+/// Picker index for a role, so edit mode opens on the current one.
+fn role_index(r: Role) -> usize {
+    Role::ALL.iter().position(|x| *x == r).unwrap_or(0)
 }
 
 /// Picker index for a blueprint's model (for edit pre-selection); 0 if the
@@ -150,7 +123,7 @@ enum Mode {
         orig_persona: Option<String>,
     },
     /// Toggle the capabilities, then create/save. `persona` is the chosen template.
-    AddCaps { name: String, model: String, persona: Option<String>, sel: usize, caps: Capabilities, edit: bool },
+    AddRole { name: String, model: String, persona: Option<String>, sel: usize, edit: bool },
     ConfirmDelete,
     /// Picking a past session to resume for blueprint `name`.
     Sessions { name: String, items: Vec<sessions::Session>, sel: usize },
@@ -638,26 +611,26 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                     let picked = (*sel != 0).then(|| PERSONAS[*sel].0.to_string());
                     let moved = *sel != persona_index(orig_persona.as_deref());
                     let persona = resolved_edit(edit, moved, orig_persona, picked);
-                    // On edit, start from the blueprint's current capabilities.
-                    let caps = if edit {
+                    // On edit, open on the blueprint's current role.
+                    let sel = if edit {
                         let cfg = config::load()?;
-                        cfg.find(&name).map(|b| b.caps.clone()).unwrap_or_default()
+                        role_index(cfg.find(&name).map(|b| b.role).unwrap_or_default())
                     } else {
-                        Capabilities::default()
+                        role_index(Role::Maintainer)
                     };
-                    app.mode = Mode::AddCaps { name, model, persona, sel: 0, caps, edit };
+                    app.mode = Mode::AddRole { name, model, persona, sel, edit };
                 }
                 _ => {}
             },
-            Mode::AddCaps { name, model, persona, sel, caps, edit } => match code {
+            Mode::AddRole { name, model, persona, sel, edit } => match code {
                 KeyCode::Esc => {
                     app.mode = Mode::Normal;
                     app.status = "CANCELLED".into();
                 }
-                KeyCode::Down | KeyCode::Char('j') => *sel = (*sel + 1).min(CAP_ROWS.len() - 1),
+                KeyCode::Down | KeyCode::Char('j') => *sel = (*sel + 1).min(Role::ALL.len() - 1),
                 KeyCode::Up | KeyCode::Char('k') => *sel = sel.saturating_sub(1),
-                KeyCode::Char(' ') => cap_toggle(caps, *sel),
                 KeyCode::Enter => {
+                    let role = Role::ALL[*sel];
                     let mut cfg = config::load()?;
                     let mut added: Option<String> = None;
     if *edit {
@@ -668,7 +641,7 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                             Some(b) => {
                                 b.model = model.clone();
                                 b.claude_md = persona.clone();
-                                b.caps = caps.clone();
+                                b.role = role;
                                 config::save(&cfg)?;
                                 app.status = format!("UPDATED '{name}'");
                             }
@@ -685,7 +658,8 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                             name: name.clone(),
                             model: model.clone(),
                             claude_md: persona.clone(),
-                            caps: caps.clone(),
+                            role,
+                            legacy_caps: None,
                         });
                         config::save(&cfg)?;
                         app.status = format!("ADDED '{name}'");
@@ -898,8 +872,8 @@ fn draw(f: &mut Frame, app: &App) {
             };
             draw_add_persona(f, name, *sel, *edit, keep);
         }
-        Mode::AddCaps { name, persona, sel, caps, edit, .. } => {
-            draw_add_caps(f, name, persona.as_deref(), *sel, caps, *edit)
+        Mode::AddRole { name, persona, sel, edit, .. } => {
+            draw_add_role(f, name, persona.as_deref(), *sel, *edit)
         }
         Mode::ConfirmDelete => {
             if let Some(b) = app.current() {
@@ -1151,10 +1125,10 @@ fn draw_add_persona(f: &mut Frame, name: &str, sel: usize, edit: bool, keep: Opt
     f.render_widget(Paragraph::new(lines).style(Style::default().bg(SURFACE_HI)), inner);
 }
 
-fn draw_add_caps(f: &mut Frame, name: &str, persona: Option<&str>, sel: usize, caps: &Capabilities, edit: bool) {
-    let h = CAP_ROWS.len() as u16 + 7;
-    let title = if edit { "EDIT_BLUEPRINT // SYNC_CAPABILITIES" } else { "NEW_BLUEPRINT // SYNC_CAPABILITIES" };
-    let inner = modal(f, title, 64, h);
+fn draw_add_role(f: &mut Frame, name: &str, persona: Option<&str>, sel: usize, edit: bool) {
+    let h = Role::ALL.len() as u16 + 7;
+    let title = if edit { "EDIT_BLUEPRINT // ROLE" } else { "NEW_BLUEPRINT // ROLE" };
+    let inner = modal(f, title, 68, h);
 
     let mut lines = vec![
         Line::from(Span::styled(
@@ -1163,25 +1137,22 @@ fn draw_add_caps(f: &mut Frame, name: &str, persona: Option<&str>, sel: usize, c
         )),
         Line::from(""),
     ];
-    for (i, (id, desc)) in CAP_ROWS.iter().enumerate() {
-        let mark = if cap_enabled(caps, i) { "[x]" } else { "[ ]" };
+    for (i, r) in Role::ALL.iter().enumerate() {
         if i == sel {
             lines.push(Line::from(vec![
-                Span::styled(format!(" › {mark} {id} "), Style::default().bg(ORANGE_HOT).fg(Color::Black).add_modifier(Modifier::BOLD)),
-                Span::styled(format!("  {desc}"), Style::default().fg(AMBER)),
+                Span::styled(format!(" › {:<11} ", r.as_str()), Style::default().bg(ORANGE_HOT).fg(Color::Black).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("  {}", r.describe()), Style::default().fg(AMBER)),
             ]));
         } else {
-            let mark_color = if cap_enabled(caps, i) { GREEN } else { DIM };
             lines.push(Line::from(vec![
-                Span::styled(format!("   {mark} "), Style::default().fg(mark_color)),
-                Span::styled(format!("{id} "), Style::default().fg(TEXT)),
-                Span::styled(format!("  {desc}"), Style::default().fg(DIM)),
+                Span::styled(format!("   {:<11} ", r.as_str()), Style::default().fg(TEXT)),
+                Span::styled(format!("  {}", r.describe()), Style::default().fg(DIM)),
             ]));
         }
     }
     lines.push(Line::from(""));
     let verb = if edit { "SAVE" } else { "CREATE" };
-    lines.push(Line::from(Span::styled(format!("  [SPACE] TOGGLE · [ENTER] {verb} · [ESC] CANCEL"), Style::default().fg(DIM))));
+    lines.push(Line::from(Span::styled(format!("  [↑/↓] SELECT · [ENTER] {verb} · [ESC] CANCEL"), Style::default().fg(DIM))));
 
     f.render_widget(Paragraph::new(lines).style(Style::default().bg(SURFACE_HI)), inner);
 }
@@ -1598,13 +1569,12 @@ mod tests {
         assert_eq!(resolved_edit(false, false, &full_id, "haiku".to_string()), "haiku");
     }
 
+    /// The picker indexes straight into `Role::ALL`, so a reorder there must not
+    /// silently shift what `Enter` saves in edit mode.
     #[test]
-    fn cap_toggle_round_trips_each_row() {
-        for i in 0..CAP_ROWS.len() {
-            let mut c = Capabilities::default();
-            assert!(!cap_enabled(&c, i));
-            cap_toggle(&mut c, i);
-            assert!(cap_enabled(&c, i), "row {i} did not toggle on");
+    fn role_picker_round_trips_every_role() {
+        for r in Role::ALL {
+            assert_eq!(Role::ALL[role_index(*r)], *r);
         }
     }
 

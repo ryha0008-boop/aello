@@ -14,7 +14,7 @@ mod tui;
 mod update;
 mod voice;
 
-use models::{Blueprint, Capabilities, Instance};
+use models::{Blueprint, Instance, Role};
 
 /// Isolated Claude Code environments — like venvs, but for AI agents.
 #[derive(Parser)]
@@ -36,21 +36,11 @@ enum Commands {
         /// CLAUDE.md file, placed into the env dir on first run.
         #[arg(long)]
         claude_md: Option<String>,
-        /// `/sync` maintains a project-level CLAUDE.md.
-        #[arg(long)]
-        project_md: bool,
-        /// `/sync` commits and pushes to GitHub.
-        #[arg(long)]
-        github: bool,
-        /// `/sync` keeps CHANGELOG.md current.
-        #[arg(long)]
-        changelog: bool,
-        /// `/sync` keeps the docs/ directory current.
-        #[arg(long)]
-        docs: bool,
-        /// `/sync` keeps README.md current.
-        #[arg(long)]
-        readme: bool,
+        /// What this blueprint is responsible for: maintainer (owns CLAUDE.md,
+        /// CHANGELOG, docs/, README + git), contributor (commits, pushes and
+        /// logs its own change), or standalone (no /sync).
+        #[arg(long, value_enum, default_value = "standalone")]
+        role: Role,
     },
     /// List all blueprints.
     List {
@@ -124,9 +114,9 @@ enum Commands {
     // More subcommands land here in later phases (sessions, ...).
 }
 
-/// Flags for `aello edit`. Capability flags are tri-state: `--github` enables,
-/// `--no-github` disables, omitting both leaves it unchanged. Changes take
-/// effect on the next `aello run` (the global persona is never re-clobbered).
+/// Flags for `aello edit`. Every flag is optional; omitting one leaves that
+/// field unchanged. Changes take effect on the next `aello run` (the global
+/// persona is never re-clobbered).
 #[derive(clap::Args)]
 struct EditArgs {
     /// Blueprint to edit.
@@ -140,36 +130,9 @@ struct EditArgs {
     /// New global persona (built-in name or path to a CLAUDE.md file).
     #[arg(long)]
     claude_md: Option<String>,
-    /// Enable the project-CLAUDE.md capability.
-    #[arg(long)]
-    project_md: bool,
-    /// Disable the project-CLAUDE.md capability.
-    #[arg(long)]
-    no_project_md: bool,
-    /// Enable the GitHub capability (attribution, scaffolds, /sync commit+push).
-    #[arg(long)]
-    github: bool,
-    /// Disable the GitHub capability.
-    #[arg(long)]
-    no_github: bool,
-    /// Enable the CHANGELOG.md capability.
-    #[arg(long)]
-    changelog: bool,
-    /// Disable the CHANGELOG.md capability.
-    #[arg(long)]
-    no_changelog: bool,
-    /// Enable the docs/ capability.
-    #[arg(long)]
-    docs: bool,
-    /// Disable the docs/ capability.
-    #[arg(long)]
-    no_docs: bool,
-    /// Enable the README.md capability.
-    #[arg(long)]
-    readme: bool,
-    /// Disable the README.md capability.
-    #[arg(long)]
-    no_readme: bool,
+    /// New role: maintainer, contributor, or standalone.
+    #[arg(long, value_enum)]
+    role: Option<Role>,
 }
 
 /// Off switch for the voice. State is machine-wide, so these apply
@@ -217,8 +180,8 @@ fn main() {
     let cli = Cli::parse();
     let result = match cli.command {
         None => tui::run(),
-        Some(Commands::Add { name, model, claude_md, project_md, github, changelog, docs, readme }) => {
-            cmd_add(name, model, claude_md, Capabilities { project_md, github, changelog, docs, readme })
+        Some(Commands::Add { name, model, claude_md, role }) => {
+            cmd_add(name, model, claude_md, role)
         }
         Some(Commands::List { json }) => cmd_list(json),
         Some(Commands::Remove { name, yes, purge }) => cmd_remove(name, yes, purge),
@@ -310,7 +273,7 @@ fn cmd_add(
     name: String,
     model: String,
     claude_md: Option<String>,
-    caps: Capabilities,
+    role: Role,
 ) -> Result<()> {
     validate_name(&name)?;
     let model = validate_model(&model)?;
@@ -328,9 +291,15 @@ fn cmd_add(
              case-insensitive on Windows/macOS filesystems and would share one env dir"
         );
     }
-    cfg.blueprints.push(Blueprint { name: name.clone(), model, claude_md, caps });
+    cfg.blueprints.push(Blueprint {
+        name: name.clone(),
+        model,
+        claude_md,
+        role,
+        legacy_caps: None,
+    });
     config::save(&cfg)?;
-    println!("Added blueprint '{name}'.");
+    println!("Added blueprint '{name}' ({}).", role.as_str());
     Ok(())
 }
 
@@ -398,15 +367,6 @@ fn confirm(question: &str) -> bool {
     matches!(line.trim().to_lowercase().as_str(), "y" | "yes")
 }
 
-/// Resolve a tri-state capability flag: `on` wins, then `off`, else keep
-/// `current`. Setting both is a usage error.
-fn tri(on: bool, off: bool, current: bool, flag: &str) -> Result<bool> {
-    if on && off {
-        bail!("--{flag} and --no-{flag} cannot be used together");
-    }
-    Ok(if on { true } else if off { false } else { current })
-}
-
 fn cmd_edit(args: EditArgs) -> Result<()> {
     // Re-gate the name on the read path, the way cmd_remove and run_blueprint
     // already do. The name reaches the filesystem as a bare `.claude-env-<name>`
@@ -451,13 +411,10 @@ fn cmd_edit(args: EditArgs) -> Result<()> {
         changed = true;
     }
 
-    let before = bp.caps.clone();
-    bp.caps.project_md = tri(args.project_md, args.no_project_md, bp.caps.project_md, "project-md")?;
-    bp.caps.github = tri(args.github, args.no_github, bp.caps.github, "github")?;
-    bp.caps.changelog = tri(args.changelog, args.no_changelog, bp.caps.changelog, "changelog")?;
-    bp.caps.docs = tri(args.docs, args.no_docs, bp.caps.docs, "docs")?;
-    bp.caps.readme = tri(args.readme, args.no_readme, bp.caps.readme, "readme")?;
-    changed |= bp.caps != before;
+    if let Some(role) = args.role {
+        changed |= bp.role != role;
+        bp.role = role;
+    }
 
     // Rename last: move on-disk artifacts for this project, then the config name.
     if let Some(new) = args.rename {
@@ -482,7 +439,7 @@ fn cmd_edit(args: EditArgs) -> Result<()> {
     }
 
     if !changed {
-        bail!("nothing to change — pass --rename, --model, --claude-md, or a capability flag");
+        bail!("nothing to change — pass --rename, --model, --claude-md, or --role");
     }
 
     let name = bp.name.clone();
@@ -548,7 +505,7 @@ pub(crate) fn run_blueprint(
         None => None,
     };
 
-    project::place(&env, &inst, claude_md.as_deref(), &bp.caps)?;
+    project::place(&env, &inst, claude_md.as_deref(), &bp.caps())?;
 
     // The env now has notify.py; make sure the machine can actually show what it
     // sends. Claims the toast identity only — the protocol stays with a copy that
@@ -622,14 +579,11 @@ fn cmd_init() -> Result<()> {
         templates::resolve(p)?; // fail now on a bad name/path, not on first run
     }
 
-    println!("\nCapabilities — what /sync maintains (Enter accepts the default):");
-    let caps = Capabilities {
-        github: prompt_bool("  github (commit + push, repo scaffolding)", true)?,
-        project_md: prompt_bool("  project CLAUDE.md", false)?,
-        changelog: prompt_bool("  CHANGELOG.md", false)?,
-        docs: prompt_bool("  docs/ directory", false)?,
-        readme: prompt_bool("  README.md", false)?,
-    };
+    println!("\nRole — what this blueprint is responsible for:");
+    for r in Role::ALL {
+        println!("  {:<12} {}", r.as_str(), r.describe());
+    }
+    let role = prompt_role("Role", Role::Maintainer)?;
 
     // Re-read immediately before mutating. The `cfg` above was loaded before a
     // run of interactive prompts with no time bound on it, and saving that stale
@@ -644,7 +598,8 @@ fn cmd_init() -> Result<()> {
         name: name.clone(),
         model,
         claude_md: persona,
-        caps,
+        role,
+        legacy_caps: None,
     });
     config::save(&cfg)?;
     println!(
@@ -666,21 +621,21 @@ fn prompt(label: &str, default: &str) -> Result<String> {
     Ok(if v.is_empty() { default.to_string() } else { v.to_string() })
 }
 
-/// Yes/No prompt on stdin; blank or anything unrecognized → `default`.
-fn prompt_bool(label: &str, default: bool) -> Result<bool> {
-    use std::io::Write;
-    let hint = if default { "Y/n" } else { "y/N" };
-    print!("{label} [{hint}]: ");
-    std::io::stdout().flush().ok();
-    let mut line = String::new();
-    if std::io::stdin().read_line(&mut line).context("could not read input")? == 0 {
-        bail!("unexpected end of input — run `aello init` in an interactive terminal");
+/// Role prompt on stdin; blank → `default`, an unrecognised word re-asks rather
+/// than silently falling back — picking the wrong role changes what `/sync` is
+/// allowed to rewrite, so a typo must not be interpreted as consent.
+fn prompt_role(label: &str, default: Role) -> Result<Role> {
+    use clap::ValueEnum;
+    loop {
+        let raw = prompt(label, default.as_str())?;
+        match Role::from_str(raw.trim(), true) {
+            Ok(r) => return Ok(r),
+            Err(_) => println!(
+                "  '{}' isn't a role — pick one of: maintainer, contributor, standalone",
+                raw.trim()
+            ),
+        }
     }
-    Ok(match line.trim().to_lowercase().as_str() {
-        "y" | "yes" => true,
-        "n" | "no" => false,
-        _ => default,
-    })
 }
 
 /// Read an optional line from stdin; blank → None.
@@ -744,43 +699,19 @@ fn cmd_list(json: bool) -> Result<()> {
         .max()
         .unwrap_or(9)
         .max(9);
-    println!("{:<name_w$}  {:<model_w$}  {:<cm_w$}  SYNC", "NAME", "MODEL", "CLAUDE.md");
+    println!("{:<name_w$}  {:<model_w$}  {:<cm_w$}  ROLE", "NAME", "MODEL", "CLAUDE.md");
     for b in &cfg.blueprints {
         println!(
             "{:<name_w$}  {:<model_w$}  {:<cm_w$}  {}",
             b.name,
             b.model,
             b.claude_md.as_deref().unwrap_or("-"),
-            caps_label(&b.caps),
+            b.role.as_str(),
         );
     }
     Ok(())
 }
 
-/// Compact one-line summary of enabled capabilities for `list`.
-fn caps_label(c: &Capabilities) -> String {
-    let mut tags = Vec::new();
-    if c.project_md {
-        tags.push("project-md");
-    }
-    if c.github {
-        tags.push("github");
-    }
-    if c.changelog {
-        tags.push("changelog");
-    }
-    if c.docs {
-        tags.push("docs");
-    }
-    if c.readme {
-        tags.push("readme");
-    }
-    if tags.is_empty() {
-        "-".to_string()
-    } else {
-        tags.join(",")
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -846,12 +777,13 @@ mod tests {
         assert!(err.contains("65 characters"), "unhelpful message: {err}");
     }
 
+    /// `--role` takes the same three words everywhere: CLI, `list` output, TUI.
     #[test]
-    fn tri_state_resolves() {
-        assert!(tri(false, false, true, "x").unwrap()); // omitted keeps current (true)
-        assert!(!tri(false, false, false, "x").unwrap()); // omitted keeps current (false)
-        assert!(tri(true, false, false, "x").unwrap()); // --x turns on
-        assert!(!tri(false, true, true, "x").unwrap()); // --no-x turns off
-        assert!(tri(true, true, false, "x").is_err()); // both = error
+    fn role_flag_parses_the_names_we_print() {
+        use clap::ValueEnum;
+        for r in Role::ALL {
+            assert_eq!(Role::from_str(r.as_str(), true).unwrap(), *r);
+        }
+        assert!(Role::from_str("owner", true).is_err());
     }
 }

@@ -14,7 +14,7 @@ my-project/
 │   ├── hooks/session-end.py
 │   ├── hooks/session-start.py #   reads + deletes <name>.HANDOFF.md / .NOTE.md
 │   ├── hooks/speak.py        #   the voice — + duck, focus, notify, win_audio.ps1
-│   ├── skills/sync/SKILL.md  #   generated from this blueprint's capabilities
+│   ├── skills/sync/SKILL.md  #   generated from this blueprint's role
 │   ├── skills/handoff/SKILL.md       # universal — resume note to self
 │   ├── skills/note/SKILL.md          # universal — note to another env
 │   ├── skills/twosentences/SKILL.md  # universal — two-sentence summary
@@ -26,7 +26,7 @@ my-project/
 │       ├── memory/           #     mirror of <env>/projects/<cwd>/memory/
 │       └── persona.CLAUDE.md #     snapshot of <env>/CLAUDE.md (renamed; never auto-loads)
 ├── CLAUDE.md                 # project-level instructions (--project-md)
-├── README.md  CHANGELOG.md  docs/   # scaffolded by capabilities
+├── README.md  CHANGELOG.md  docs/   # scaffolded by the role
 └── .gitignore                # contains ".claude-env-*" (but NOT claude-internal/)
 ```
 
@@ -38,11 +38,11 @@ The env dir is gitignored, so the skills, memory, and persona that define a blue
 
 A recurring rule across aello's `github` cap: **one tracked source of truth, everything else derived one-way and kept out of git.** `claude-internal/` is derived from the env dir; the same discipline governs versioning. The scaffolded `VERSION` file is the single tracked home of a project's version — any other stamp (a README badge, `package.json`'s `version`, a generated `version.ts`) must be **derived from `VERSION` at build time and the derived file gitignored**, never written into a second tracked file.
 
-This isn't optional polish: the `github` cap's CI auto-bumps `VERSION` on every push, and the generated `/sync` stages only files the agent touched this session (never `git add -A`). A version duplicated into a tracked artifact therefore drifts on every CI bump and can never be reconciled by `/sync` — it strands dirty. Deriving + gitignoring the artifact is the structural fix (softening `/sync`'s staging rule is not). See `docs/capabilities.md` for the full rationale and the `env-console` precedent.
+This isn't optional polish: the scaffolded CI auto-bumps `VERSION` on every push, and the generated `/sync` stages only files the agent touched this session (never `git add -A`). A version duplicated into a tracked artifact therefore drifts on every CI bump and can never be reconciled by `/sync` — it strands dirty. Deriving + gitignoring the artifact is the structural fix (softening `/sync`'s staging rule is not). See `docs/roles.md` for the full rationale and the `env-console` precedent.
 
 ## Blueprint vs instance
 
-- A **blueprint** is global, stored in aello's `config.toml`: `name`, `model`, optional persona (`claude_md`), and `capabilities`. It's reusable across any number of projects.
+- A **blueprint** is global, stored in aello's `config.toml`: `name`, `model`, optional persona (`claude_md`), and a `role`. It's reusable across any number of projects.
 - An **instance** is a blueprint placed into a project — recorded as `.aello.toml` inside the env dir. Placement is idempotent: `aello run` re-seeds the generated skill and refreshes the hook each time, but never clobbers your edited persona, scaffolded files, memory, or a skill you've marked kept.
 
 ## The seeded skills are yours to run
@@ -53,7 +53,7 @@ If an agent tells you it "ran `/sync`" without you typing it, it didn't. Ask it 
 
 ## Keeping a hand-edited skill
 
-The four seeded skills — `/sync`, `/handoff`, `/note`, `/twosentences` — are **rewritten on every `aello run`**. That's what makes a capability change reach an env you placed months ago, and it's the right default. But it also means editing one in place is temporary: the next run silently restores the generated version, and if the `github` cap then mirrors the env into `claude-internal/`, the generated version is committed over your custom one. (Your edit survives in git history, not in the working tree.)
+The four seeded skills — `/sync`, `/handoff`, `/note`, `/twosentences` — are **rewritten on every `aello run`**. That's what makes a role change reach an env you placed months ago, and it's the right default. But it also means editing one in place is temporary: the next run silently restores the generated version, and if the role then mirrors the env into `claude-internal/`, the generated version is committed over your custom one. (Your edit survives in git history, not in the working tree.)
 
 To pin a skill you've rewritten for one project, drop an empty `.aello-keep` file beside it:
 
@@ -61,16 +61,16 @@ To pin a skill you've rewritten for one project, drop an empty `.aello-keep` fil
 touch .claude-env-<name>/skills/sync/.aello-keep
 ```
 
-`place` then leaves that skill entirely alone — not regenerated, and not removed if the blueprint later drops all its capabilities. Everything else in the env keeps healing normally, and other blueprints are unaffected. The marker is per env dir, which is per project: the same blueprint used elsewhere still gets the generated skill.
+`place` then leaves that skill entirely alone — not regenerated, and not removed if the blueprint later becomes standalone. Everything else in the env keeps healing normally, and other blueprints are unaffected. The marker is per env dir, which is per project: the same blueprint used elsewhere still gets the generated skill.
 
-Use it when a project genuinely needs a different workflow (a `/sync` that also deploys, say). Because a kept skill no longer tracks its capabilities, changing caps for that blueprint won't be reflected in it — update it by hand, or delete the marker to fall back to the generated version.
+Use it when a project genuinely needs a different workflow (a `/sync` that also deploys, say). Because a kept skill no longer tracks its role, changing the role for that blueprint won't be reflected in it — update it by hand, or delete the marker to fall back to the generated version.
 
 ## Two CLAUDE.md layers
 
 - **Global / persona** — `<env>/CLAUDE.md`. The agent's identity ("you are a coding agent…"). Chosen with `--claude-md` (a built-in `coder`/`sysadmin` template, or a path). Written once; never overwritten on later runs.
 - **Project** — `<project>/CLAUDE.md`. Project-specific facts and instructions, enabled with `--project-md`. Maintained over time by `/sync`.
 
-Memory is a third, separate channel — not a capability. On first placement aello seeds a starter working-style memory under `<env>/projects/<encoded-cwd>/memory/` (a `working-style.md` note plus a one-line `MEMORY.md` index), so a fresh env boots with it already in `/context`. It's seeded only when no `MEMORY.md` exists yet, so a re-place never clobbers memory you've accumulated. Thereafter memory is maintained automatically (the PostCompact hook writes transcript summaries).
+Memory is a third, separate channel — nothing to do with the role. On first placement aello seeds a starter working-style memory under `<env>/projects/<encoded-cwd>/memory/` (a `working-style.md` note plus a one-line `MEMORY.md` index), so a fresh env boots with it already in `/context`. It's seeded only when no `MEMORY.md` exists yet, so a re-place never clobbers memory you've accumulated. Thereafter memory is maintained automatically (the PostCompact hook writes transcript summaries).
 
 ## Authentication
 

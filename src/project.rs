@@ -1199,6 +1199,65 @@ mod tests {
         assert!(env.join("CLAUDE.md").exists()); // global persona in the env
     }
 
+    /// Placement is still driven by `Capabilities`, so the only thing standing
+    /// between a contributor and the maintainer's files is `Role::caps()`. Assert
+    /// it end-to-end through `place` rather than trusting the expansion: a
+    /// contributor that scaffolds a README would overwrite nothing and look
+    /// exactly like working.
+    #[test]
+    fn each_role_scaffolds_only_its_own_files() {
+        use crate::models::Role;
+        let cases = [
+            (Role::Maintainer, true, true, true),
+            (Role::Contributor, true, false, false),
+            (Role::Standalone, false, false, false),
+        ];
+        for (role, changelog, readme, docs) in cases {
+            let proj = tempfile::tempdir().unwrap();
+            let env = env_dir(proj.path(), "r");
+            let inst = Instance { name: "r".into(), model: "opus".into() };
+            place(&env, &inst, None, &role.caps()).unwrap();
+
+            let label = role.as_str();
+            assert_eq!(proj.path().join("CHANGELOG.md").exists(), changelog, "{label} CHANGELOG");
+            assert_eq!(proj.path().join("README.md").exists(), readme, "{label} README");
+            assert_eq!(proj.path().join("docs").exists(), docs, "{label} docs/");
+            // The project CLAUDE.md is the maintainer's alone.
+            assert_eq!(
+                proj.path().join("CLAUDE.md").exists(),
+                role == Role::Maintainer,
+                "{label} project CLAUDE.md"
+            );
+            // Standalone gets no /sync at all; the others do.
+            assert_eq!(
+                env.join("skills/sync/SKILL.md").exists(),
+                role != Role::Standalone,
+                "{label} /sync"
+            );
+            // Every role gets the three universal skills.
+            for s in ["handoff", "note", "twosentences"] {
+                assert!(env.join(format!("skills/{s}/SKILL.md")).exists(), "{label} /{s}");
+            }
+        }
+    }
+
+    /// A contributor must never be *told* to maintain prose it doesn't own —
+    /// the generated skill is the whole instruction surface.
+    #[test]
+    fn contributor_sync_never_mentions_the_maintainers_files() {
+        use crate::models::Role;
+        let proj = tempfile::tempdir().unwrap();
+        let env = env_dir(proj.path(), "c");
+        let inst = Instance { name: "c".into(), model: "opus".into() };
+        place(&env, &inst, None, &Role::Contributor.caps()).unwrap();
+
+        let skill = std::fs::read_to_string(env.join("skills/sync/SKILL.md")).unwrap();
+        assert!(skill.contains("CHANGELOG.md"), "contributor should keep its changelog step");
+        assert!(skill.contains("Commit + push"), "contributor should still commit");
+        assert!(!skill.contains("README.md"), "contributor was told about the README");
+        assert!(!skill.contains("docs/"), "contributor was told about docs/");
+    }
+
     #[test]
     fn github_cap_gitignores_env_dirs_idempotently() {
         let proj = tempfile::tempdir().unwrap();

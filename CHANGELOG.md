@@ -3,6 +3,32 @@
 ## [Unreleased]
 
 ### Changed
+- **The five capability flags are now three roles.** `maintainer` (owns the
+  project `CLAUDE.md`, `CHANGELOG.md`, `docs/`, `README.md` and git),
+  `contributor` (commits, pushes, and logs its own change in `CHANGELOG.md` —
+  never touches the other three) and `standalone` (no `/sync` at all). One flag
+  replaces ten: `aello add --role <role>` and `aello edit --role <role>`;
+  `--project-md` / `--github` / `--changelog` / `--docs` / `--readme` and their
+  `--no-` counterparts are **removed**, and the TUI's capability checklist is a
+  role picker. `aello list`'s last column is now `ROLE`.
+
+  The flags were never independent in practice. Grouped **by repo** — the unit
+  that matters — every multi-blueprint project has exactly one blueprint holding
+  everything and the rest holding only git duties; 32 of the 32 combinations
+  nobody used were surface area with no behaviour behind it. Grouped fleet-wide
+  they look all-or-nothing instead, which is the reading that nearly got the
+  distinction deleted altogether: it is the whole multi-agent point and it is now
+  the middle role rather than an accident of five checkboxes.
+
+  **Existing configs migrate themselves** on the next load, with nothing to run:
+  anything maintaining prose (`project_md`, `docs`, `readme`) becomes a
+  maintainer, anything left holding only git becomes a contributor, nothing
+  enabled becomes standalone. The old `[blueprints.caps]` table is read once and
+  dropped the next time aello saves. The one behaviour change: a blueprint that
+  had *some but not all* of the prose capabilities is now a maintainer, so
+  `/sync` covers the files it previously skipped — `aello edit <name> --role
+  contributor` if that isn't what you want.
+- `docs/capabilities.md` is now `docs/roles.md` (`aello docs roles`).
 - **Voice hook re-vendored at `HOOK_VERSION = 8` — history now records what you
   asked, not just what was answered.** Upstream `revoiced` reads it from the
   transcript the hook already opens to find the `TL;DR:` line, so there is no new

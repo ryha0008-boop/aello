@@ -7,11 +7,11 @@
 
 Isolated Claude Code environments — like Python venvs, but for AI agents.
 
-`aello` lets you define reusable agent **blueprints** (a name, a model, a persona, and a set of capabilities) and drop them into any project as an isolated Claude Code environment. Each blueprint runs Claude with its own `CLAUDE_CONFIG_DIR`, so multiple agents can work in the same repo without stepping on each other's config — and `git blame` can tell you which one made each change.
+`aello` lets you define reusable agent **blueprints** (a name, a model, a persona, and a role) and drop them into any project as an isolated Claude Code environment. Each blueprint runs Claude with its own `CLAUDE_CONFIG_DIR`, so multiple agents can work in the same repo without stepping on each other's config — and `git blame` can tell you which one made each change.
 
 - **Isolated** — every blueprint gets its own `.claude-env-<name>/` (settings, persona, hooks, skills), kept out of your repo automatically.
 - **Shared login** — one `aello login` token is shared safely across any number of concurrent envs (no credential rotation races).
-- **Capability-driven** — pick what a blueprint maintains (`/sync` docs, GitHub, CHANGELOG, docs/, README); aello scaffolds the files and generates a `/sync` skill tailored to exactly that.
+- **Role-driven** — one choice per blueprint: `maintainer` owns the repo's docs and git, `contributor` commits its own work and logs it, `standalone` works alone. aello scaffolds the matching files and generates a `/sync` skill tailored to exactly that.
 - **Spoken** — every env reads each response's `TL;DR:` line aloud, with a different voice per concurrent session and one `aello voice mute` to stop them all.
 - **Attributable** — commits made through a blueprint are authored as `<blueprint> <blueprint@aello.local>`, so multi-agent work is traceable.
 
@@ -79,18 +79,18 @@ cargo install --path .
 
 - **Claude Code** on your `PATH` (`claude`). aello sets `CLAUDE_CONFIG_DIR` and launches it.
 - **Python 3** — used for the voice and for archiving session transcripts.
-- **git** / **gh** only if you use the `github` capability.
+- **git** / **gh** only for the `maintainer` and `contributor` roles.
 
 ## Quick start
 
 ```sh
 aello login                                   # one-time: store a shared Claude token
-aello add coder --model opus --claude-md coder --github --changelog --docs --readme
+aello add coder --model opus --claude-md coder --role maintainer
 cd ~/my-project
 aello run coder                               # places an isolated env + launches Claude
 ```
 
-Inside that project, `aello run coder` creates `.claude-env-coder/`, scaffolds `CHANGELOG.md` / `README.md` / `docs/` / a project `CLAUDE.md` (only the ones you enabled, only if missing), adds `.claude-env-*` to `.gitignore`, seeds a `/sync` skill tailored to the enabled capabilities, and (on first placement) seeds a starter working-style memory so the env boots with it in `/context`. Type `/sync` inside Claude to reconcile those docs and commit + push.
+Inside that project, `aello run coder` creates `.claude-env-coder/`, scaffolds `CHANGELOG.md` / `README.md` / `docs/` / a project `CLAUDE.md` (only the ones its role owns, only if missing), adds `.claude-env-*` to `.gitignore`, seeds a `/sync` skill tailored to its role, and (on first placement) seeds a starter working-style memory so the env boots with it in `/context`. Type `/sync` inside Claude to reconcile those docs and commit + push.
 
 Run `aello` with no arguments for the full-screen TUI (browse, add via a guided checklist, resume sessions, manage the token, self-update).
 
@@ -98,7 +98,7 @@ Run `aello` with no arguments for the full-screen TUI (browse, add via a guided 
 
 - **Blueprint** — a reusable agent: a name, a model, a persona, and what it looks after. Define it once, drop it into any number of projects.
 - **Env dir** — `<project>/.claude-env-<name>/`. Everything that makes that agent itself, kept in your project but out of your commits.
-- **Capabilities** — which files an agent maintains. Each one it has adds a step to its `/sync`. See the table below.
+- **Role** — what an agent is responsible for, and therefore which steps its `/sync` has. See the table below.
 - **Two `CLAUDE.md` files** — the one in the env dir is the agent's *persona* (who it is), set once. The one in your repo root holds *project* facts and is kept current by `/sync`. Agents also build up memory as they work.
 - **Shared login** — one `aello login` covers every agent, however many run at once.
 
@@ -113,7 +113,7 @@ Rewritten one of those for a project and want to keep it? Put an empty `.aello-k
 
 Transcripts of every session are archived outside the repo so nothing is lost when a session ends.
 
-See [`docs/concepts.md`](docs/concepts.md), [`docs/capabilities.md`](docs/capabilities.md) and [`docs/voice.md`](docs/voice.md) for how all of it actually works.
+See [`docs/concepts.md`](docs/concepts.md), [`docs/roles.md`](docs/roles.md) and [`docs/voice.md`](docs/voice.md) for how all of it actually works.
 
 ## Commands
 
@@ -122,12 +122,11 @@ aello                                          # interactive TUI (no args)
 aello --version
 aello init                                     # first-run: login + first blueprint
 aello add <name> --model <m> [--claude-md <coder|sysadmin|path>]
-        [--project-md] [--github] [--changelog] [--docs] [--readme]
+        [--role maintainer|contributor|standalone]
 aello list [--json]
 aello remove <name> [--yes] [--purge]         # --purge also deletes the placed env dir + mirror
 aello edit <name> [--rename <new>] [--model <m>] [--claude-md <coder|sysadmin|path>]
-        [--project-md|--no-project-md] [--github|--no-github]
-        [--changelog|--no-changelog] [--docs|--no-docs] [--readme|--no-readme]
+        [--role maintainer|contributor|standalone]
 aello run [name] [--resume [id]] [-p <prompt>] [-- <extra args for claude>]
 aello login                                    # store the shared Claude token
 aello github-setup [--name <repo>] [--public] [--yes]   # create + push the repo via gh
@@ -145,7 +144,7 @@ aello update [--force]                         # self-update (--force reinstalls
   aello completions powershell >> $PROFILE                         # PowerShell
   ```
 
-- `edit` changes a blueprint in place, including `--rename <new>` (validated, rejected if the name is taken) — which also moves the placed `.claude-env-<name>/` env dir and its `claude-internal/<name>/` mirror in the current project. Capability flags are tri-state: `--github` enables, `--no-github` disables, omitting both leaves it as-is. Changes apply on the next `run`; the global persona in an already-placed env is never re-clobbered.
+- `edit` changes a blueprint in place, including `--rename <new>` (validated, rejected if the name is taken) — which also moves the placed `.claude-env-<name>/` env dir and its `claude-internal/<name>/` mirror in the current project. `--role` swaps the role outright; omitting a flag leaves that field as-is. Changes apply on the next `run`; the global persona in an already-placed env is never re-clobbered.
 - `run` with no name uses the sole blueprint (errors if there are several).
 - `--resume` with no value continues the most recent session; `--resume <id>` resumes a specific one. The TUI (`S`) browses sessions to resume.
 - `-p "<prompt>"` runs headless and exits. Anything after `--` is passed straight to `claude`.
@@ -158,20 +157,23 @@ aello update [--force]                         # self-update (--force reinstalls
 
 By default the registry shows only blueprints already placed in the current directory (their `.claude-env-<name>/` exists), which keeps a per-project blueprint workflow tidy. `F` toggles between that local subset and all blueprints; when nothing is placed here yet, all are shown.
 
-`E` edits the selected blueprint through the same guided steps as add, pre-filled with its current model, persona, and capabilities (the name isn't editable). Changes apply on the next `run`.
+`E` edits the selected blueprint through the same guided steps as add, pre-filled with its current model, persona, and role (the name isn't editable). Changes apply on the next `run`.
 
 `?` opens a full-screen docs reader over the repo's `docs/` (`↑/↓` scroll, `Tab`/`←→` switch doc, `Esc` close). The same content is available from the CLI via `aello docs`.
 
-## Capabilities
+## Roles
 
-| Flag | TUI label | Scaffolds (if missing) | Adds to `/sync` |
-|---|---|---|---|
-| `--claude-md <name\|path>` | persona picker | global `CLAUDE.md` in the env (persona) | — |
-| `--project-md` | project-md | project-root `CLAUDE.md` | reconcile project CLAUDE.md |
-| `--github` | github | `.gitignore` entry `.claude-env-*` | repo health + commit & push + `Env:` trailer |
-| `--changelog` | changelog | `CHANGELOG.md` | keep CHANGELOG current |
-| `--docs` | docs | `docs/` | reconcile docs/ |
-| `--readme` | readme | `README.md` | keep README current |
+Pick one per blueprint. **One maintainer per repo, any number of contributors** — that's the shape this is for: the maintainer owns the prose, everyone else commits their own work without rewriting it.
+
+| Role | Scaffolds (if missing) | `/sync` |
+|---|---|---|
+| `maintainer` | project `CLAUDE.md`, `CHANGELOG.md`, `docs/`, `README.md`, `.gitignore` entry, `.gitattributes`, `VERSION` + bump CI, `claude-internal/<name>/` | full — repo health, reconcile memory + all four docs, mirror the env, commit & push with an `Env:` trailer |
+| `contributor` | `CHANGELOG.md`, `.gitignore` entry, `.gitattributes`, `VERSION` + bump CI, `claude-internal/<name>/` | git only — repo health, `CHANGELOG.md`, mirror the env, commit & push with an `Env:` trailer |
+| `standalone` | nothing | none — no `/sync` skill is seeded |
+
+The persona is separate from the role: `--claude-md <name\|path>` writes the env's global `CLAUDE.md` once, and no role rewrites it.
+
+Upgrading from a pre-0.2 config? The five capability flags are gone and existing blueprints migrate themselves — see [`docs/roles.md`](docs/roles.md).
 
 ## Voice — every env speaks
 
@@ -195,7 +197,7 @@ Not hearing anything? Run `aello voice status` first. [`docs/voice.md`](docs/voi
 
 ## Git attribution
 
-With `--github`, commits made through a blueprint are authored as `<name> <name@aello.local>`, and `/sync` adds an `Env: <name>` line to each commit — so `git log --author` and `git blame` show which agent did what.
+For a maintainer or contributor, commits made through a blueprint are authored as `<name> <name@aello.local>`, and `/sync` adds an `Env: <name>` line to each commit — so `git log --author` and `git blame` show which agent did what.
 
 ## Configuration
 
@@ -213,7 +215,7 @@ Pulls the matching binary from the rolling `latest` GitHub release and replaces 
 
 Issues and PRs welcome — aello is a small, focused Rust CLI (no extra toolchain), and contributions of all sizes help.
 
-**New here? Start with a [`good first issue`](https://github.com/ryha0008-boop/aello/labels/good%20first%20issue).** Each is scoped, names the file to touch, and lists acceptance criteria — comment to claim it. Most logic (templates, placement, capability scaffolding) is unit-testable without ever launching Claude.
+**New here? Start with a [`good first issue`](https://github.com/ryha0008-boop/aello/labels/good%20first%20issue).** Each is scoped, names the file to touch, and lists acceptance criteria — comment to claim it. Most logic (templates, placement, role scaffolding) is unit-testable without ever launching Claude.
 
 ```sh
 git clone https://github.com/ryha0008-boop/aello && cd aello

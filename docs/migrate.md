@@ -5,7 +5,7 @@ This walks you through putting an **existing** repo under an aello blueprint —
 ## Before you start
 
 - You have an **existing git repo with an `origin` remote**. If the project isn't a repo / has no remote yet, run `aello github-setup` first — it creates the GitHub repo, sets `origin`, and pushes an initial commit.
-- For the `github` capability, `gh` is installed and authenticated (`gh auth status`).
+- For the `maintainer` and `contributor` roles, `gh` is installed and authenticated (`gh auth status`).
 - You're logged in to aello (`aello login`) so envs share one token.
 
 ## The flow
@@ -16,7 +16,7 @@ This walks you through putting an **existing** repo under an aello blueprint —
 aello add <Name>            # or use the TUI: press [A]
 ```
 
-At the capability checklist, tick the full set for a normal project repo: `github, changelog, project-md, docs, readme`. (Pick a built-in persona — `coder` or `sysadmin` — or leave it none.)
+At the role picker, choose **maintainer** for a normal project repo — it owns `CLAUDE.md`, `CHANGELOG.md`, `docs/`, `README.md` and git. (Pick a built-in persona — `coder` or `sysadmin` — or leave it none.)
 
 ### 2. Place the env without starting a session
 

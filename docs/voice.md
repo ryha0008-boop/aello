@@ -4,11 +4,11 @@ Every placed env speaks. There is no flag and nothing to enable: placement write
 
 This page is the mechanism. For "how do I turn it off", the README is enough.
 
-## Why it is not a capability
+## Why it is not a role setting
 
 It was one (`--voice`) until it stopped earning the flag. Choosing per blueprint bought nothing — a blueprint that maintains no project file has no reason to be mute — and the one moment you actually want silence is *right now, because a machine started talking*, which a placement flag answers far too slowly. So the flag is gone along with `--no-voice`, and silence lives entirely in `aello voice mute`. A `voice = …` left in an existing config is ignored on load and dropped on the next save.
 
-That decision is why this page is not in `capabilities.md`.
+That decision is why this page is not in `roles.md`.
 
 ## Why the hook is vendored into the env
 

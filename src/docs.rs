@@ -16,7 +16,7 @@ pub struct Doc {
 }
 
 /// Preferred reading order; anything not listed sorts after, alphabetically.
-const ORDER: &[&str] = &["concepts", "capabilities", "migrate"];
+const ORDER: &[&str] = &["concepts", "roles", "migrate"];
 
 fn rank(slug: &str) -> usize {
     ORDER.iter().position(|s| *s == slug).unwrap_or(ORDER.len())
@@ -70,7 +70,7 @@ mod tests {
     #[test]
     fn bundles_the_known_docs() {
         let slugs: Vec<String> = all().into_iter().map(|d| d.slug).collect();
-        for want in ["concepts", "capabilities", "migrate"] {
+        for want in ["concepts", "roles", "migrate"] {
             assert!(slugs.contains(&want.to_string()), "missing doc '{want}'");
         }
     }

@@ -36,6 +36,84 @@ impl Capabilities {
     }
 }
 
+/// What a blueprint is responsible for in a project — the choice made at `add`
+/// time, changed with `aello edit --role`.
+///
+/// This replaces picking five capability booleans individually. The flags were
+/// never independent in practice: across every repo worked by more than one
+/// blueprint, the shape is one **maintainer** holding everything and
+/// **contributors** that commit their own code and nothing else. Three roles
+/// keep that distinction — which is the whole multi-agent point, so it must not
+/// be flattened away — while removing 29 unused combinations from the surface.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+#[clap(rename_all = "lowercase")]
+pub enum Role {
+    /// Owns the repo's prose: project CLAUDE.md, CHANGELOG, docs/, README, plus
+    /// git. One per repo.
+    Maintainer,
+    /// Commits, pushes, and logs its own change in the CHANGELOG. Never touches
+    /// CLAUDE.md, docs/ or README — those belong to the maintainer.
+    Contributor,
+    /// Works alone: no `/sync`, no git duties, nothing scaffolded.
+    #[default]
+    Standalone,
+}
+
+impl Role {
+    pub const ALL: &'static [Role] = &[Role::Maintainer, Role::Contributor, Role::Standalone];
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Role::Maintainer => "maintainer",
+            Role::Contributor => "contributor",
+            Role::Standalone => "standalone",
+        }
+    }
+
+    /// One-line description, shared by `aello list`, the TUI picker and `--help`.
+    pub fn describe(&self) -> &'static str {
+        match self {
+            Role::Maintainer => "owns the docs: CLAUDE.md, CHANGELOG, docs/, README + git",
+            Role::Contributor => "commits, pushes, and logs its own change",
+            Role::Standalone => "no /sync — works alone",
+        }
+    }
+
+    /// What `/sync` covers for this role. The rest of the codebase still works in
+    /// terms of [`Capabilities`]; a role is just the set of combinations we offer.
+    pub fn caps(&self) -> Capabilities {
+        match self {
+            Role::Maintainer => Capabilities {
+                project_md: true,
+                github: true,
+                changelog: true,
+                docs: true,
+                readme: true,
+            },
+            Role::Contributor => Capabilities {
+                github: true,
+                changelog: true,
+                ..Default::default()
+            },
+            Role::Standalone => Capabilities::default(),
+        }
+    }
+
+    /// Fold a pre-0.2 five-boolean config into a role. Anything that maintained
+    /// prose a contributor may not touch (project CLAUDE.md, docs/, README) is a
+    /// maintainer; anything left holding only git duties is a contributor.
+    pub fn from_caps(c: &Capabilities) -> Role {
+        if !c.any() {
+            Role::Standalone
+        } else if c.project_md || c.docs || c.readme {
+            Role::Maintainer
+        } else {
+            Role::Contributor
+        }
+    }
+}
+
 /// A global AI identity stored in aello's config. Placing a blueprint into a
 /// project produces an Instance (see Phase 2).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,9 +124,21 @@ pub struct Blueprint {
     /// to a CLAUDE.md file, placed into the env dir as global instructions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claude_md: Option<String>,
-    /// What this blueprint maintains via `/sync`. See [`Capabilities`].
+    /// What this blueprint is responsible for. See [`Role`].
     #[serde(default)]
-    pub caps: Capabilities,
+    pub role: Role,
+    /// Pre-0.2 configs stored five capability booleans here. Read once by
+    /// [`Config::migrate_roles`], folded into `role`, and never written back —
+    /// so the key disappears from `config.toml` on the next save.
+    #[serde(rename = "caps", default, skip_serializing)]
+    pub legacy_caps: Option<Capabilities>,
+}
+
+impl Blueprint {
+    /// What `/sync` covers, derived from the role.
+    pub fn caps(&self) -> Capabilities {
+        self.role.caps()
+    }
 }
 
 /// A blueprint placed into a project directory. Stored as `.aello.toml` inside
@@ -75,6 +165,18 @@ pub struct Config {
 }
 
 impl Config {
+    /// Fold any pre-0.2 `caps` tables into roles. Run on every load rather than
+    /// once behind a marker: it's cheap, idempotent, and a config restored from a
+    /// backup or edited by hand heals itself instead of silently loading as
+    /// `standalone`. The old key is dropped whenever something next saves.
+    pub fn migrate_roles(&mut self) {
+        for bp in &mut self.blueprints {
+            if let Some(caps) = bp.legacy_caps.take() {
+                bp.role = Role::from_caps(&caps);
+            }
+        }
+    }
+
     pub fn find(&self, name: &str) -> Option<&Blueprint> {
         self.blueprints.iter().find(|b| b.name == name)
     }
@@ -97,7 +199,80 @@ mod tests {
     use super::*;
 
     fn bp(name: &str) -> Blueprint {
-        Blueprint { name: name.into(), model: "opus".into(), claude_md: None, caps: Capabilities::default() }
+        Blueprint {
+            name: name.into(),
+            model: "opus".into(),
+            claude_md: None,
+            role: Role::Standalone,
+            legacy_caps: None,
+        }
+    }
+
+    /// The two fleet blueprints that didn't hold an all-or-nothing cap set are
+    /// the whole reason roles have a middle tier — pin their mapping.
+    #[test]
+    fn legacy_caps_fold_into_roles() {
+        let all = Capabilities {
+            project_md: true, github: true, changelog: true, docs: true, readme: true,
+        };
+        assert_eq!(Role::from_caps(&all), Role::Maintainer);
+        assert_eq!(Role::from_caps(&Capabilities::default()), Role::Standalone);
+        // ShellyFrontEndDev: git duties only → contributor, unchanged behaviour.
+        assert_eq!(
+            Role::from_caps(&Capabilities { github: true, changelog: true, ..Default::default() }),
+            Role::Contributor
+        );
+        // PersonallyDev: four of five, no readme → maintainer (gains README upkeep).
+        assert_eq!(
+            Role::from_caps(&Capabilities {
+                project_md: true, github: true, changelog: true, docs: true, readme: false,
+            }),
+            Role::Maintainer
+        );
+        // github-only secondaries → contributor.
+        assert_eq!(
+            Role::from_caps(&Capabilities { github: true, ..Default::default() }),
+            Role::Contributor
+        );
+    }
+
+    /// A role round-trips through its capability expansion, so `from_caps` is a
+    /// true inverse for the three sets we actually offer.
+    #[test]
+    fn roles_round_trip_through_caps() {
+        for r in Role::ALL {
+            assert_eq!(Role::from_caps(&r.caps()), *r, "{} did not round-trip", r.as_str());
+        }
+    }
+
+    #[test]
+    fn old_config_migrates_and_drops_the_caps_key() {
+        let text = r#"
+[[blueprints]]
+name = "Old"
+model = "opus"
+[blueprints.caps]
+project_md = true
+github = true
+changelog = true
+docs = true
+readme = true
+"#;
+        let mut cfg: Config = toml::from_str(text).unwrap();
+        cfg.migrate_roles();
+        assert_eq!(cfg.blueprints[0].role, Role::Maintainer);
+        let out = toml::to_string_pretty(&cfg).unwrap();
+        assert!(out.contains(r#"role = "maintainer""#), "role not written: {out}");
+        assert!(!out.contains("caps"), "legacy caps key survived a save: {out}");
+    }
+
+    /// A config already on roles must not be clobbered by the migration.
+    #[test]
+    fn new_config_is_left_alone() {
+        let text = "[[blueprints]]\nname = \"New\"\nmodel = \"opus\"\nrole = \"contributor\"\n";
+        let mut cfg: Config = toml::from_str(text).unwrap();
+        cfg.migrate_roles();
+        assert_eq!(cfg.blueprints[0].role, Role::Contributor);
     }
 
     #[test]

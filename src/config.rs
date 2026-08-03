@@ -65,7 +65,12 @@ pub fn load() -> Result<Config> {
 fn load_path(path: &std::path::Path) -> Result<Config> {
     match std::fs::read_to_string(path) {
         Ok(text) => {
-            toml::from_str(&text).with_context(|| format!("failed to parse {}", path.display()))
+            let mut cfg: Config = toml::from_str(&text)
+                .with_context(|| format!("failed to parse {}", path.display()))?;
+            // Pre-0.2 configs carry five capability booleans per blueprint; fold
+            // them into a role here so nothing downstream ever sees the old shape.
+            cfg.migrate_roles();
+            Ok(cfg)
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Config::default()),
         Err(e) => Err(e).with_context(|| format!("could not read {}", path.display())),
