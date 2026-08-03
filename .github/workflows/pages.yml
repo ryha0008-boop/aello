@@ -53,9 +53,13 @@ jobs:
       - name: Disable Jekyll processing
         run: touch site/out/.nojekyll
 
-      # `enablement: true` turns Pages on via the API if it is off, instead of
-      # failing with "Get Pages site failed" and waiting for someone to click
-      # through Settings. The job already holds `pages: write`.
+      # `enablement: true` turns Pages on via the API where the token is allowed
+      # to. GITHUB_TOKEN generally is NOT — creating a Pages site needs repo
+      # admin rights, so the first run fails with "Resource not accessible by
+      # integration" until someone enables Pages once (Settings -> Pages ->
+      # Source -> GitHub Actions, or `gh api -X POST repos/O/R/pages
+      # -f build_type=workflow`). Kept because it is a no-op afterwards and does
+      # work for forks whose token has the rights.
       - uses: actions/configure-pages@v5
         with:
           enablement: true

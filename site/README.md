@@ -60,6 +60,14 @@ site served from `/aello`, the workflow sets `NEXT_PUBLIC_BASE_PATH=/aello`; `ne
 and `lib/docs.ts` both read that variable, so local `npm run dev` stays at the root and a
 custom domain later needs only the variable dropped.
 
-The workflow passes `enablement: true` to `actions/configure-pages`, so it switches
-Pages on itself the first time it runs rather than failing until someone clicks through
-Settings → Pages.
+**Pages has to exist before the first deploy.** The workflow passes `enablement: true` to
+`actions/configure-pages`, but `GITHUB_TOKEN` is not allowed to *create* a Pages site —
+it fails with `Resource not accessible by integration`. Enable it once, either in
+Settings → Pages → Source → **GitHub Actions**, or with:
+
+```sh
+gh api -X POST repos/<owner>/<repo>/pages -f build_type=workflow
+```
+
+`enablement: true` stays because it is a no-op once the site exists and does work where the
+token has the rights.
