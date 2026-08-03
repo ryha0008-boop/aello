@@ -85,7 +85,7 @@ NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if IS_WIN else {}
 # comparing it against the value here is how a vendored copy learns it has
 # fallen behind. Station-only changes leave it alone: a version that moves for
 # reasons the hook never executes trains everyone to ignore the warning.
-HOOK_VERSION = 7
+HOOK_VERSION = 8
 
 MAX_CHARS = int(os.environ.get("REVOICED_MAX_CHARS", "1200"))
 KEEP = int(os.environ.get("REVOICED_HISTORY", "200"))
@@ -590,7 +590,14 @@ def user_prompts(transcript: Path, answer: str = "") -> list:
         # A message can reach the transcript twice - queued and then sent is the
         # usual way - and reading your own words back to yourself twice looks
         # like the feature is broken.
-        if out and out[-1] == text:
+        #
+        # A prefix counts as the same message, not just an exact repeat. Add a
+        # sentence to something you already typed and the transcript holds both
+        # the short version and the long one; keeping each recorded a 396-word
+        # ask as 721 words, the same paragraph twice with one extra line at the
+        # end. `out` is filled newest-first, so out[-1] is the later of the two
+        # and the shorter one being dropped is the earlier draft.
+        if out and (out[-1] == text or out[-1].startswith(text)):
             continue
         out.append(text)
         if len(out) >= PROMPT_RUN:

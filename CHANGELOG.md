@@ -3,24 +3,24 @@
 ## [Unreleased]
 
 ### Changed
-- **Voice hook re-vendored at `HOOK_VERSION = 7`.** Upstream's prompt capture
-  treated `<command-args>` as wrapper noise and kept only the command name, so a
-  slash command that takes arguments recorded as a bare name — `/note` for a turn
-  whose arguments held 272 characters of what the user actually wrote, `/loop`
-  for `/loop 5m /foo`. Reported from here after running upstream's own
-  `user_prompts()` against a live transcript from a vendored copy; fixed upstream
-  in `6f7a14d` and vendored at 7. Only `speak.py` moved.
-- **Voice hook re-vendored at `HOOK_VERSION = 6`.** Upstream `revoiced` now
-  records what you asked alongside what was answered, so a turn reads as a pair
-  in its history — taken from the transcript the hook already opens to find the
-  `TL;DR:` line, so there is no new hook event, no new file, and no
-  `settings.json` change. Only `speak.py` moved; the other four vendored files
-  are byte-identical. Two upstream env vars, both defaulting to on:
-  `REVOICED_PROMPTS=0` disables prompt capture outright, and
-  `REVOICED_PROMPT_MAX` (4000) truncates a pasted log. aello does not set either
-  — it passes the upstream defaults through. Existing envs pick it up on their
-  next `run`; `python <env>/hooks/speak.py --hook-version` reports it, and prints
+- **Voice hook re-vendored at `HOOK_VERSION = 8` — history now records what you
+  asked, not just what was answered.** Upstream `revoiced` reads it from the
+  transcript the hook already opens to find the `TL;DR:` line, so there is no new
+  hook event, no new file, and no `settings.json` change. Two upstream env vars,
+  both defaulting to on: `REVOICED_PROMPTS=0` disables capture outright and
+  `REVOICED_PROMPT_MAX` (4000) truncates a pasted log; aello sets neither and
+  passes the upstream defaults through. Existing envs pick it up on their next
+  `run`, and `python <env>/hooks/speak.py --hook-version` reports it — printing
   before any optional import, so even a partial copy answers.
+
+  It landed across versions 6, 7 and 8 in one evening, both later bumps fixing
+  bugs found from this side by running upstream's own `user_prompts()` against a
+  live transcript **from a vendored copy** rather than the revoiced checkout: 7
+  stopped `<command-args>` being discarded as wrapper noise (a slash command with
+  arguments recorded as a bare `/note`, and `/loop 5m /foo` as `/loop`), and 8
+  stopped an edited-then-sent message being recorded twice (the transcript holds
+  both the short draft and the long final, and the dedup only caught exact
+  repeats, not prefixes). Only `speak.py` moved in all three.
 
 ### Fixed
 - **`/sync` no longer tells you to commit the transient env files.** Its staging
