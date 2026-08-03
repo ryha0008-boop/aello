@@ -3,6 +3,32 @@
 ## [Unreleased]
 
 ### Added
+- **No plans, anywhere.** The per-turn `UserPromptSubmit` hook gains a fourth
+  rule — never present a plan for approval, never use plan mode; ask a short
+  question or do the work, and where the choice is genuinely yours, offer
+  concrete options to pick from. A plan handed over for sign-off goes unread,
+  and the round trip buys nothing a question wouldn't.
+
+  It ships with an enforcing half: a bundled `PreToolUse` hook matching
+  `EnterPlanMode|ExitPlanMode` that denies both, so plan mode is unavailable
+  rather than discouraged. Neither half is redundant — the hook stops the tool,
+  and only the injected text stops a numbered proposal written as ordinary
+  prose, which is what a plan usually looks like. The matcher is load-bearing:
+  an unmatched `PreToolUse` group runs on *every* tool call, a Python spawn per
+  `Read`.
+
+  Verified as far as it can be, and no further: a `PreToolUse` deny does block a
+  tool and return its reason (measured against `Read`), and the matcher does
+  scope it (a `Glob` in the same run never reached the hook). Whether the two
+  plan tools emit a `PreToolUse` event at all is **unproven** — `claude -p`
+  never calls `ExitPlanMode` under `--permission-mode plan`, so print mode
+  cannot answer it. A denial therefore appends to `plan-blocked.log` beside the
+  script; the first line to appear settles it, and an empty log across envs that
+  have wanted to plan means the text is doing all the work.
+
+  Both reach existing envs on their next `run`, like the other hooks.
+
+### Added
 - **`aello persona <name> --from <file>`** — installs an agreed global persona
   into a placed env: replaces its `CLAUDE.md`, sets `claude_md = "custom"` so
   aello stops seeding a template over it, and bumps the generation recorded in

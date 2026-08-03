@@ -115,6 +115,14 @@ The voice has its own troubleshooting section, including the partial-copy trap w
 
 Quick first checks: `aello voice status` (mute state and `HOOK_VERSION`), and whether the response actually ended with a `TL;DR:` line — that line is the only thing the hook speaks.
 
+## Plan mode is refused
+
+Working as intended. Every env registers a `PreToolUse` hook matching `EnterPlanMode|ExitPlanMode` that denies both, so an agent asked to plan will report the tool coming back with "Plan mode is disabled in every aello environment" instead of entering it. The per-turn rules say the same thing in words, which is what also stops a numbered proposal written as ordinary prose.
+
+To find out whether the block is the thing that fired, look for `<env>/hooks/plan-blocked.log` — a line is appended there each time it denies. **An empty or absent log is the interesting case**: it means the deny never ran and the injected text alone is carrying the rule. That half is deliberately unproven — `claude -p` never calls `ExitPlanMode` even under `--permission-mode plan`, so it could not be tested headlessly.
+
+To undo it for one env, remove the `PreToolUse` group from `<env>/settings.json` — but note `place` heals it back on the next `aello run`, so the real change is to `src/hooks_pre_tool_use.py` and the registration in `project.rs`.
+
 ## Something else
 
 Open an issue at <https://github.com/ryha0008-boop/aello/issues>. The useful ones state what you ran, what happened, and what you expected — and say which of the two copies you measured, the checkout or the placed env.

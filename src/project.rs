@@ -9,6 +9,7 @@ const POST_COMPACT_SCRIPT: &str = include_str!("hooks_post_compact.py");
 const SESSION_END_SCRIPT: &str = include_str!("hooks_session_end.py");
 const SESSION_START_SCRIPT: &str = include_str!("hooks_session_start.py");
 const USER_PROMPT_SUBMIT_SCRIPT: &str = include_str!("hooks_user_prompt_submit.py");
+const PRE_TOOL_USE_SCRIPT: &str = include_str!("hooks_pre_tool_use.py");
 
 /// The text-to-speech hook (vendored from the `revoiced` project). `speak.py`
 /// imports `duck`, `focus` and `notify` as siblings and shells out to
@@ -240,6 +241,13 @@ pub fn place(
         // runs, so an env adopting the hook stops getting the persona append on
         // the same placement rather than one run later.
         ensure_own_hook(&settings, "UserPromptSubmit", "user-prompt-submit.py")?;
+        // The other half of the no-plans rule: the text above asks, this denies.
+        ensure_own_hook_matching(
+            &settings,
+            "PreToolUse",
+            "pre-tool-use.py",
+            Some(PLAN_TOOLS),
+        )?;
         // Same for the voice hook, so an env placed before voice was universal
         // starts speaking on its next run.
         sync_voice_hooks(&settings)?;
@@ -276,6 +284,8 @@ pub fn place(
         USER_PROMPT_SUBMIT_SCRIPT,
     )
     .context("could not write user-prompt-submit.py")?;
+    std::fs::write(env_dir.join("hooks").join("pre-tool-use.py"), PRE_TOOL_USE_SCRIPT)
+        .context("could not write pre-tool-use.py")?;
 
     // Voice hook + its four siblings, refreshed like the others so fixes reach
     // existing envs. All five, always: a copy missing `notify.py` speaks but
@@ -605,6 +615,7 @@ pub fn settings_json(model: &str) -> String {
   "hooks": {{{stop}
     "SessionStart": [{{"hooks":[{{"type":"command","command":"{py} \"$CLAUDE_CONFIG_DIR/hooks/session-start.py\""}}]}}],
     "UserPromptSubmit": [{{"hooks":[{{"type":"command","command":"{py} \"$CLAUDE_CONFIG_DIR/hooks/user-prompt-submit.py\""}}]}}],
+    "PreToolUse": [{{"matcher":"{PLAN_TOOLS}","hooks":[{{"type":"command","command":"{py} \"$CLAUDE_CONFIG_DIR/hooks/pre-tool-use.py\""}}]}}],
     "PostCompact": [{{"hooks":[{{"type":"command","command":"{py} \"$CLAUDE_CONFIG_DIR/hooks/post-compact.py\""}}]}}],
     "SessionEnd": [
       {{"hooks":[{{"type":"command","command":"{py} \"$CLAUDE_CONFIG_DIR/hooks/session-end.py\""}}]}}{voice_end}
@@ -615,6 +626,12 @@ pub fn settings_json(model: &str) -> String {
         json_str(model),
     )
 }
+
+/// The `PreToolUse` matcher for the plan-mode block. A matcher (rather than an
+/// unmatched group) is the difference between spawning Python twice a session
+/// and spawning it on every Read — the hook is registered fleet-wide, so that
+/// cost would be paid by every env on every tool call.
+const PLAN_TOOLS: &str = "EnterPlanMode|ExitPlanMode";
 
 /// The env-relative voice command — the only one aello considers its own. Any
 /// other `speak.py` in settings.json was installed by hand against a checkout.
@@ -877,6 +894,18 @@ fn injects_tldr_per_turn(env_dir: &Path) -> bool {
 /// hook on the same event doesn't block the heal; aello's group is appended
 /// alongside it.
 fn ensure_own_hook(settings: &Path, event: &str, script: &str) -> Result<()> {
+    ensure_own_hook_matching(settings, event, script, None)
+}
+
+/// As `ensure_own_hook`, but registers the group under a `matcher`. `PreToolUse`
+/// needs one: an unmatched group fires on every tool call, so the plan-mode
+/// block would spawn Python for every Read in every env.
+fn ensure_own_hook_matching(
+    settings: &Path,
+    event: &str,
+    script: &str,
+    matcher: Option<&str>,
+) -> Result<()> {
     let Ok(text) = std::fs::read_to_string(settings) else {
         return Ok(());
     };
@@ -888,12 +917,15 @@ fn ensure_own_hook(settings: &Path, event: &str, script: &str) -> Result<()> {
         .as_object_mut()
         .and_then(|o| o.entry("hooks").or_insert_with(|| serde_json::json!({})).as_object_mut());
     let Some(hooks) = hooks else { return Ok(()) };
-    let group = serde_json::json!({
+    let mut group = serde_json::json!({
         "hooks": [{
             "type": "command",
             "command": format!("{py} \"$CLAUDE_CONFIG_DIR/hooks/{script}\""),
         }]
     });
+    if let Some(m) = matcher {
+        group["matcher"] = serde_json::Value::String(m.into());
+    }
     match hooks.get_mut(event) {
         None => {
             hooks.insert(event.into(), serde_json::json!([group]));
@@ -1854,11 +1886,58 @@ mod tests {
         assert!(env.join("hooks/user-prompt-submit.py").exists());
     }
 
+    /// The plan-mode block, healed into an env placed before it existed. The
+    /// matcher is asserted too: without it the hook fires on every tool call,
+    /// which is a Python spawn per Read rather than two per session.
     #[test]
-    fn user_prompt_submit_hook_carries_the_three_response_rules() {
+    fn place_registers_the_plan_mode_block_with_a_matcher() {
+        let proj = tempfile::tempdir().unwrap();
+        let env = env_dir(proj.path(), "coder");
+        let inst = Instance { name: "coder".into(), model: "opus".into() };
+
+        std::fs::create_dir_all(&env).unwrap();
+        std::fs::write(env.join("settings.json"), r#"{"model":"opus"}"#).unwrap();
+        place(&env, &inst, None, &Capabilities::default()).unwrap();
+
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(env.join("settings.json")).unwrap())
+                .unwrap();
+        assert!(registers_command(&v["hooks"]["PreToolUse"], "pre-tool-use.py"));
+        assert_eq!(v["hooks"]["PreToolUse"][0]["matcher"], PLAN_TOOLS);
+        assert!(env.join("hooks/pre-tool-use.py").exists());
+
+        // Idempotent: a second placement must not stack a duplicate group.
+        place(&env, &inst, None, &Capabilities::default()).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(env.join("settings.json")).unwrap())
+                .unwrap();
+        assert_eq!(v["hooks"]["PreToolUse"].as_array().unwrap().len(), 1);
+    }
+
+    /// A fresh env gets the block from `settings_json`, not from the heal path —
+    /// the two write it independently, so both need asserting.
+    #[test]
+    fn fresh_settings_json_blocks_plan_mode() {
+        let v: serde_json::Value = serde_json::from_str(&settings_json("opus")).unwrap();
+        assert!(registers_command(&v["hooks"]["PreToolUse"], "pre-tool-use.py"));
+        assert_eq!(v["hooks"]["PreToolUse"][0]["matcher"], PLAN_TOOLS);
+        // Both plan tools must be in the matcher, or the block is half-open.
+        for tool in ["EnterPlanMode", "ExitPlanMode"] {
+            assert!(PLAN_TOOLS.contains(tool), "matcher no longer covers {tool}");
+            assert!(
+                PRE_TOOL_USE_SCRIPT.contains(tool),
+                "pre-tool-use.py no longer denies {tool}"
+            );
+        }
+        assert!(PRE_TOOL_USE_SCRIPT.contains("\"deny\""));
+    }
+
+    #[test]
+    fn user_prompt_submit_hook_carries_the_four_response_rules() {
         // Injected on every prompt in every env, so the wording is the product.
         // Each rule is here because its absence was felt: padding, agreement
-        // before evaluation, and a missing TL;DR that leaves the voice silent.
+        // before evaluation, plans handed over instead of questions, and a
+        // missing TL;DR that leaves the voice silent.
         for needle in [
             "Be concise",
             "no preamble",
@@ -1866,6 +1945,9 @@ mod tests {
             "praise or agreement",
             "soften a finding",
             "I don't know",
+            "plan for approval",
+            "never use plan mode",
+            "concrete options",
             "TL;DR: <two sentences>",
             "read aloud",
         ] {
