@@ -31,6 +31,13 @@
 - `docs/capabilities.md` is now `docs/roles.md` (`aello docs roles`).
 
 ### Added
+- **A documentation site.** `/docs` on the landing page is generated from this
+  repo's `docs/` directory at build time — the same files the binary embeds — so
+  there is no second copy to drift. Sidebar of pages, per-page contents, and
+  `*.md` cross-links rewritten to routes. Deployed to GitHub Pages by
+  `.github/workflows/pages.yml` on any push to `main` that touches `site/**` or
+  `docs/**`. The landing page gains a Workflows section linking into it, and its
+  capability cards are now role cards.
 - **Four new reference docs**, bundled into the binary like the rest — readable
   with `aello docs <name>`, in the TUI reader (`?`), and on the docs site:
   - `workflows.md` — task-shaped walkthroughs: your first env, two agents in one

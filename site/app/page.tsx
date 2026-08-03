@@ -1,7 +1,8 @@
 import Nav from '@/components/Nav'
 import Hero from '@/components/Hero'
 import Steps from '@/components/Steps'
-import Capabilities from '@/components/Capabilities'
+import Roles from '@/components/Roles'
+import Workflows from '@/components/Workflows'
 import Feature from '@/components/Feature'
 import { NoteVisual, VoiceVisual } from '@/components/Visuals'
 import Install from '@/components/Install'
@@ -15,7 +16,7 @@ export default function Home() {
       <main>
         <Hero />
         <Steps />
-        <Capabilities />
+        <Roles />
 
         <Feature
           id="skills"
@@ -25,8 +26,8 @@ export default function Home() {
           reversed
         >
           <p>
-            Every blueprint gets <code>/handoff</code> and <code>/note</code>, whatever else you
-            enabled. <code>/handoff</code> writes a self-contained resume note before you clear a
+            Every blueprint gets <code>/handoff</code> and <code>/note</code>, whatever its
+            role. <code>/handoff</code> writes a self-contained resume note before you clear a
             session, so the next one starts mid-thought instead of re-reading the diff.
           </p>
           <p>
@@ -38,20 +39,22 @@ export default function Home() {
 
         <Feature
           id="voice"
-          eyebrow="The voice capability"
+          eyebrow="The voice"
           title="Hear the summary, not the wall of text"
           visual={<VoiceVisual />}
         >
           <p>
-            With <code>--voice</code>, an env speaks the trailing <code>TL;DR:</code> line of each
-            response through a neural voice — that line and nothing else. You find out a long run
-            finished without sitting and watching it.
+            Every env speaks the trailing <code>TL;DR:</code> line of each response through a
+            neural voice — that line and nothing else. There is nothing to switch on. You find out
+            a long run finished without sitting and watching it.
           </p>
           <p>
             Concurrent sessions lease different voices, playback is serialised across the machine so
             two envs never talk over each other, and one command stops all of them at once.
           </p>
         </Feature>
+
+        <Workflows />
 
         <Install />
       </main>

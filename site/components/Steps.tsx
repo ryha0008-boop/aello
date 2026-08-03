@@ -9,7 +9,7 @@ const STEPS = [
     body: 'Runs claude setup-token once and keeps the result. The token does not rotate, so any number of concurrent envs can share it without racing each other.',
   },
   {
-    command: 'aello add coder --model opus --github',
+    command: 'aello add coder --model opus --role maintainer',
     title: 'Define a blueprint',
     body: 'A name, a model, a persona, and the files this agent is allowed to maintain. Blueprints are reusable — the same one drops into any project.',
   },

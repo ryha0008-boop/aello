@@ -1,7 +1,6 @@
+import Link from 'next/link'
 import Logo from './Logo'
 import styles from './Nav.module.css'
-
-const REPO = 'https://github.com/ryha0008-boop/aello'
 
 export default function Nav() {
   return (
@@ -14,9 +13,9 @@ export default function Nav() {
 
         <nav className={styles.links} aria-label="Main">
           <a href="#how">How it works</a>
-          <a href="#capabilities">Capabilities</a>
-          <a href="#voice">Voice</a>
-          <a href={`${REPO}#readme`}>Docs</a>
+          <a href="#roles">Roles</a>
+          <a href="#workflows">Workflows</a>
+          <Link href="/docs/">Docs</Link>
         </nav>
 
         <a className={styles.cta} href="#install">

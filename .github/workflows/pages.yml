@@ -1,0 +1,69 @@
+name: pages
+
+# The docs site is generated from `docs/` at build time, so a documentation
+# change has to redeploy it just as a site change does — that is why `docs/**`
+# is a trigger here and not only `site/**`.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - 'docs/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two deploys race; let an in-flight one finish rather than cancelling
+# it, so a half-published site is not left live.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+
+      - name: Install
+        working-directory: site
+        run: npm ci
+
+      - name: Build
+        working-directory: site
+        # Project site, served from https://<user>.github.io/aello — assets and
+        # routes need that prefix. Unset locally, so `npm run dev` stays at root.
+        env:
+          NEXT_PUBLIC_BASE_PATH: /aello
+        run: npm run build
+
+      # Pages serves the artifact as-is and runs no Jekyll, but without this file
+      # it still skips paths beginning with an underscore — which is every
+      # Next.js asset in `_next/`.
+      - name: Disable Jekyll processing
+        run: touch site/out/.nojekyll
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: site/out
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
