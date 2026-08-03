@@ -85,10 +85,18 @@ NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if IS_WIN else {}
 # comparing it against the value here is how a vendored copy learns it has
 # fallen behind. Station-only changes leave it alone: a version that moves for
 # reasons the hook never executes trains everyone to ignore the warning.
-HOOK_VERSION = 5
+HOOK_VERSION = 6
 
 MAX_CHARS = int(os.environ.get("REVOICED_MAX_CHARS", "1200"))
 KEEP = int(os.environ.get("REVOICED_HISTORY", "200"))
+# History records what you asked as well as what was answered, so a turn reads
+# as a pair. Off with REVOICED_PROMPTS=0, which stops it being captured at all
+# rather than merely hiding it - what you typed is the one thing here that was
+# never the machine's to keep. The cap is per turn, and generous: a prompt is
+# read on screen, not spoken, so there is no MAX_CHARS-style budget to respect,
+# only the 200-line file. A pasted log is what it guards against.
+PROMPTS = os.environ.get("REVOICED_PROMPTS", "1") != "0"
+PROMPT_MAX = int(os.environ.get("REVOICED_PROMPT_MAX", "4000"))
 ENFORCE = os.environ.get("REVOICED_ENFORCE", "1") != "0"
 LEASE_TTL = float(os.environ.get("REVOICED_LEASE_TTL", "43200"))  # 12h
 # How long a lease is believed on its own word, before its terminal has to
@@ -469,6 +477,17 @@ def to_speakable(md: str) -> str:
     return t.strip()
 
 
+def _entry_text(entry: dict) -> str:
+    content = entry.get("message", {}).get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = [c.get("text", "") for c in content
+                 if isinstance(c, dict) and c.get("type") == "text"]
+        return "\n".join(p for p in parts if p)
+    return ""
+
+
 def last_assistant_text(transcript: Path) -> str:
     """Only the final assistant entry - going further back re-speaks old turns."""
     try:
@@ -485,14 +504,87 @@ def last_assistant_text(transcript: Path) -> str:
             continue
         if entry.get("type") != "assistant":
             continue
-        content = entry.get("message", {}).get("content")
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list):
-            parts = [c.get("text", "") for c in content if c.get("type") == "text"]
-            return "\n".join(p for p in parts if p)
-        return ""
+        return _entry_text(entry)
     return ""
+
+
+# Injected into a user message by the harness, and none of it was typed by the
+# person: reminders, the transcript of a slash command's own output, and the
+# skill text a command expands into. A prompt shown back to you has to be what
+# you wrote, or the pair is worse than no pair at all.
+NOISE = re.compile(
+    r"(?s)<(system-reminder|local-command-stdout|command-message|command-args)>"
+    r".*?</\1>|<\1\s*/>"
+)
+# A slash command reaches the transcript as its own little document. The name is
+# the ask - "/handoff" is a thing you asked for - so it is kept and the wrapper
+# around it is not.
+COMMAND = re.compile(r"(?s)<command-name>\s*(.*?)\s*</command-name>")
+# Written by the harness where you pressed escape, not typed by you. Dropping it
+# loses nothing: the message you interrupted it with is the next one along, and
+# that is kept.
+INTERRUPT = re.compile(r"^\[Request interrupted by user[^\]]*\]$")
+PROMPT_RUN = 8   # backstop, see below
+
+
+def user_prompts(transcript: Path, answer: str = "") -> list:
+    """What you typed for the turn that is ending, oldest message first.
+
+    Walks back to the previous turn's TL;DR and keeps every message after it, so
+    an ask you interrupted twice is recorded as the three things you actually
+    said rather than only the last one - which, with the way work arrives here,
+    would usually be a correction with its subject missing.
+
+    That boundary is the answer to "when did the last turn end", and it holds
+    because a turn without a TL;DR is blocked from ending. Should one slip
+    through - enforcement gives up after a single retry - the worst case is two
+    turns' messages merged, so PROMPT_RUN caps how far back that can run.
+
+    `answer` is the response now ending, and it is not optional in practice:
+    walking backwards, the first TL;DR in the file is almost always this turn's
+    own, and stopping at it collects nothing at all. Comparing rather than
+    skipping-the-first because the transcript is not always written by the time
+    the hook runs - when it isn't, the first TL;DR really is the previous turn's.
+    """
+    try:
+        lines = transcript.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    out = []
+    for line in reversed(lines):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        kind = entry.get("type")
+        if kind == "assistant":
+            said = _entry_text(entry)
+            if TLDR.search(said) and said.strip() != answer.strip():
+                break
+            continue
+        if kind != "user" or entry.get("isMeta"):
+            continue      # a tool call, a mode change, a skill's own preamble
+        text = _entry_text(entry)
+        if not text:
+            continue      # a tool result: content is blocks, none of them text
+        named = COMMAND.search(text)
+        text = named.group(1) if named else NOISE.sub("", text)
+        text = text.strip()
+        if not text or INTERRUPT.match(text):
+            continue
+        # A message can reach the transcript twice - queued and then sent is the
+        # usual way - and reading your own words back to yourself twice looks
+        # like the feature is broken.
+        if out and out[-1] == text:
+            continue
+        out.append(text)
+        if len(out) >= PROMPT_RUN:
+            break
+    out.reverse()
+    return out
 
 
 # --- synthesis -------------------------------------------------------------
@@ -752,6 +844,9 @@ def worker(job_file: Path) -> None:
     record({
         "id": job["id"], "queued": job["queued"], "project": job["project"],
         "cwd": job["cwd"], "session": job["session"], "text": job["text"],
+        # Empty when REVOICED_PROMPTS=0, and absent altogether on every turn
+        # recorded before this existed - the page treats both the same.
+        "prompt": job.get("prompt", ""),
         # What this turn is pinned under - the profile's env dir, or the cwd
         # when it has no profile. The feed groups on it.
         "key": job.get("key") or job["cwd"], "env": job.get("env", ""),
@@ -856,11 +951,12 @@ def hook() -> None:
 
     # Newer Claude Code hands us the response directly; older builds don't.
     raw = data.get("last_assistant_message")
+    said = data.get("transcript_path")
+    script = Path(said) if said and Path(said).exists() else None
     if not isinstance(raw, str) or not raw.strip():
-        transcript = data.get("transcript_path")
-        if not transcript or not Path(transcript).exists():
+        if script is None:
             return
-        raw = last_assistant_text(Path(transcript))
+        raw = last_assistant_text(script)
     if not raw:
         return
 
@@ -891,6 +987,15 @@ def hook() -> None:
     if len(text) > MAX_CHARS:
         text = text[:MAX_CHARS] + "..."
 
+    # What was asked, so History reads as a pair rather than as half a
+    # conversation. Nothing downstream depends on it: a turn with no prompt is
+    # recorded exactly as it always was.
+    prompt = ""
+    if PROMPTS and script is not None:
+        prompt = "\n\n".join(user_prompts(script, raw))
+        if len(prompt) > PROMPT_MAX:
+            prompt = prompt[:PROMPT_MAX] + "..."
+
     # A profile names itself; everything else is still called after its folder.
     project = (profile or {}).get("name") or Path(cwd).name
     # Only findable from here: the worker is detached from this tree. Resolved
@@ -906,6 +1011,7 @@ def hook() -> None:
         "env": env_dir(),
         "session": session,
         "text": text,
+        "prompt": prompt,
         "preset": lease_preset(session, key, project, str(cwd), window),
         "window": window,
     }
@@ -1037,7 +1143,11 @@ def main() -> None:
         print(f"pool          : {len(state['presets'])} preset(s), "
               f"{len(state['leases'])} leased")
         print(f"pinned voices : {len(state['voices'])} project(s)")
-        print(f"history       : {len(read_history())} entries in {HISTORY}")
+        hist = read_history()
+        print(f"history       : {len(hist)} entries in {HISTORY}")
+        print(f"prompts kept  : {'yes' if PROMPTS else 'no (REVOICED_PROMPTS=0)'}"
+              f", {sum(1 for e in hist if e.get('prompt'))} of {len(hist)} "
+              f"entries carry one")
         print(f"edge-tts      : {edge_cmd() or 'NOT FOUND'}")
         print(f"elevenlabs key: {'set' if eleven_key() else 'not set'}")
     else:

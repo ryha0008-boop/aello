@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Changed
+- **Voice hook re-vendored at `HOOK_VERSION = 6`.** Upstream `revoiced` now
+  records what you asked alongside what was answered, so a turn reads as a pair
+  in its history — taken from the transcript the hook already opens to find the
+  `TL;DR:` line, so there is no new hook event, no new file, and no
+  `settings.json` change. Only `speak.py` moved; the other four vendored files
+  are byte-identical. Two upstream env vars, both defaulting to on:
+  `REVOICED_PROMPTS=0` disables prompt capture outright, and
+  `REVOICED_PROMPT_MAX` (4000) truncates a pasted log. aello does not set either
+  — it passes the upstream defaults through. Existing envs pick it up on their
+  next `run`; `python <env>/hooks/speak.py --hook-version` reports it, and prints
+  before any optional import, so even a partial copy answers.
+
 ### Fixed
 - **`/sync` no longer tells you to commit the transient env files.** Its staging
   rule is "stage only what you created or modified this session" — and a
