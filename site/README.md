@@ -60,5 +60,6 @@ site served from `/aello`, the workflow sets `NEXT_PUBLIC_BASE_PATH=/aello`; `ne
 and `lib/docs.ts` both read that variable, so local `npm run dev` stays at the root and a
 custom domain later needs only the variable dropped.
 
-**One-time manual step:** the repo's Settings → Pages → Source must be set to
-**GitHub Actions**, or the deploy job fails.
+The workflow passes `enablement: true` to `actions/configure-pages`, so it switches
+Pages on itself the first time it runs rather than failing until someone clicks through
+Settings → Pages.
