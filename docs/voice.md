@@ -58,11 +58,23 @@ That shared state is what makes concurrent envs behave: each session leases a **
 
 ## Something has to ask for the TL;DR line
 
-The hook speaks that line and nothing else, so something must instruct the agent to write one. By default placement appends a section to the env's `CLAUDE.md` — appended, never rewritten, so an env placed before this existed picks it up without disturbing a persona you have edited.
+The hook speaks that line and nothing else, so something must instruct the agent to write one. Placement registers a `UserPromptSubmit` hook running `user-prompt-submit.py`, which injects the instruction on **every prompt** — along with the two other response rules every env carries (see below). It is healed into an existing env the same way the voice hooks are, so an env placed before it existed picks it up on its next run.
 
-Enforcement does not depend on that section: a response with no `TL;DR:` line is blocked once with a request to add one, then allowed through, so it cannot loop. The persona only saves the round trip.
+Enforcement does not depend on that instruction: a response with no `TL;DR:` line is blocked once with a request to add one, then allowed through, so it cannot loop. The injected text only saves the round trip.
 
-**Alternative: carry it on a hook instead.** The persona is the file most likely to be rewritten wholesale, which is an awkward place for something the voice depends on. If an env registers a `UserPromptSubmit` hook running `user-prompt-submit.py` that injects the instruction on every turn, `place` stops appending to the persona and a persona cleared of the section stays cleared. Opt-in and hand-registered — aello scaffolds no such hook, so an env that has not asked is unaffected.
+**Why per turn and not in the persona.** The persona is written once, never clobbered, and is the file most likely to be rewritten wholesale — an awkward place for the voice's only input. It is also delivered once per session, and a style instruction given at turn one is buried by turn eighty. `place()` rewrites the hook script on every run, so a change to the wording reaches an env placed months ago without touching anything you own.
+
+If you unregister the hook by hand, `place` falls back to appending the TL;DR section to the persona, so the voice never goes silent for want of an instruction.
+
+## The three response rules
+
+The same hook carries three rules, injected together on every prompt in every env (~150 tokens per turn):
+
+- **Be concise** — no preamble, no filler, no hedging, no restating the question.
+- **No sycophancy** — don't open with praise or agreement, don't validate an unchecked premise, don't soften a finding to be agreeable; say plainly when the user is wrong, and say "I don't know" when that's the answer.
+- **End with `TL;DR: <two sentences>`** — the line the voice speaks.
+
+They live together because all three are about how a single response is written, which is why they are delivered per turn rather than per session. Editing `src/hooks_user_prompt_submit.py` changes them everywhere on each env's next run; a unit test pins the wording so a rule cannot be dropped by accident.
 
 ## Migrating a hand-wired hook
 

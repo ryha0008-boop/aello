@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 const POST_COMPACT_SCRIPT: &str = include_str!("hooks_post_compact.py");
 const SESSION_END_SCRIPT: &str = include_str!("hooks_session_end.py");
 const SESSION_START_SCRIPT: &str = include_str!("hooks_session_start.py");
+const USER_PROMPT_SUBMIT_SCRIPT: &str = include_str!("hooks_user_prompt_submit.py");
 
 /// The text-to-speech hook (vendored from the `revoiced` project). `speak.py`
 /// imports `duck`, `focus` and `notify` as siblings and shells out to
@@ -235,6 +236,10 @@ pub fn place(
         // start capturing /clear + exit sessions.
         ensure_own_hook(&settings, "SessionEnd", "session-end.py")?;
         ensure_own_hook(&settings, "SessionStart", "session-start.py")?;
+        // The per-turn response rules. Registered before ensure_tldr_instruction
+        // runs, so an env adopting the hook stops getting the persona append on
+        // the same placement rather than one run later.
+        ensure_own_hook(&settings, "UserPromptSubmit", "user-prompt-submit.py")?;
         // Same for the voice hook, so an env placed before voice was universal
         // starts speaking on its next run.
         sync_voice_hooks(&settings)?;
@@ -252,8 +257,9 @@ pub fn place(
         }
     }
 
-    // The voice hook speaks the trailing TL;DR line, so the persona has to ask
-    // for one. Appended (never clobbering) so an existing persona keeps its text.
+    // Fallback only: the bundled UserPromptSubmit hook now carries the TL;DR
+    // instruction, so this appends nothing unless that hook was unregistered by
+    // hand. Appends (never clobbers) so an existing persona keeps its text.
     ensure_tldr_instruction(env_dir)?;
 
     // Always refresh the hook script so updates (e.g. AELLO_CONTEXTDB support)
@@ -265,6 +271,11 @@ pub fn place(
         .context("could not write session-end.py")?;
     std::fs::write(env_dir.join("hooks").join("session-start.py"), SESSION_START_SCRIPT)
         .context("could not write session-start.py")?;
+    std::fs::write(
+        env_dir.join("hooks").join("user-prompt-submit.py"),
+        USER_PROMPT_SUBMIT_SCRIPT,
+    )
+    .context("could not write user-prompt-submit.py")?;
 
     // Voice hook + its four siblings, refreshed like the others so fixes reach
     // existing envs. All five, always: a copy missing `notify.py` speaks but
@@ -593,6 +604,7 @@ pub fn settings_json(model: &str) -> String {
   }},
   "hooks": {{{stop}
     "SessionStart": [{{"hooks":[{{"type":"command","command":"{py} \"$CLAUDE_CONFIG_DIR/hooks/session-start.py\""}}]}}],
+    "UserPromptSubmit": [{{"hooks":[{{"type":"command","command":"{py} \"$CLAUDE_CONFIG_DIR/hooks/user-prompt-submit.py\""}}]}}],
     "PostCompact": [{{"hooks":[{{"type":"command","command":"{py} \"$CLAUDE_CONFIG_DIR/hooks/post-compact.py\""}}]}}],
     "SessionEnd": [
       {{"hooks":[{{"type":"command","command":"{py} \"$CLAUDE_CONFIG_DIR/hooks/session-end.py\""}}]}}{voice_end}
@@ -773,9 +785,10 @@ fn ensure_tldr_instruction(env_dir: &Path) -> Result<()> {
 /// True when this env carries the TL;DR instruction on a `UserPromptSubmit`
 /// hook, so `place` should leave the persona alone.
 ///
-/// Not something aello scaffolds — it is opt-in, registered by hand in that
-/// env's `settings.json`. The point is that the instruction survives a persona
-/// rewritten from scratch, which the appended copy does not.
+/// Since the hook became bundled this is true of every placed env, so the
+/// persona append below is a fallback rather than the normal path — it comes
+/// back only if someone unregisters the hook by hand. Kept for exactly that
+/// case: the voice is silent without the instruction somewhere.
 fn injects_tldr_per_turn(env_dir: &Path) -> bool {
     let Ok(text) = std::fs::read_to_string(env_dir.join("settings.json")) else {
         return false;
@@ -1087,10 +1100,13 @@ mod tests {
         assert!(env.join("hooks/focus.py").exists());
         assert!(env.join("hooks/notify.py").exists());
         assert!(env.join("hooks/win_audio.ps1").exists());
-        // The persona must ask for the line the hook speaks.
+        // Something must ask for the line speak.py speaks, or the voice is
+        // silent and the hook nags every turn. That is the per-turn hook now,
+        // so the persona is left exactly as the blueprint wrote it.
         let persona = std::fs::read_to_string(env.join("CLAUDE.md")).unwrap();
-        assert!(persona.starts_with("# persona"));
-        assert!(persona.contains("TL;DR"));
+        assert_eq!(persona, "# persona\n");
+        assert!(env.join("hooks/user-prompt-submit.py").exists());
+        assert!(USER_PROMPT_SUBMIT_SCRIPT.contains("TL;DR"));
         // The voice is not a /sync capability, so no skill is seeded.
         assert!(!env.join("skills/sync/SKILL.md").exists());
     }
@@ -1193,8 +1209,10 @@ mod tests {
         // the heal is a merge, never a regenerate.
         assert!(registers_command(&v["hooks"]["SessionEnd"], "session-end.py"));
         assert_eq!(v["effortLevel"], "high");
-        // The persona picked up the instruction it was placed without.
-        assert!(std::fs::read_to_string(env.join("CLAUDE.md")).unwrap().contains("TL;DR"));
+        // The env picked up the TL;DR instruction it was placed without — via
+        // the per-turn hook, which is healed in the same way the voice is.
+        assert!(registers_command(&v["hooks"]["UserPromptSubmit"], "user-prompt-submit.py"));
+        assert!(env.join("hooks/user-prompt-submit.py").exists());
 
         // Re-placing is idempotent — no duplicate hook groups.
         place(&env, &inst, Some("# persona\n"), &caps).unwrap();
@@ -1687,23 +1705,65 @@ mod tests {
         let env = env_dir(proj.path(), "coder");
         let inst = Instance { name: "coder".into(), model: "opus".into() };
 
-        // Without the hook, the section is appended to a persona lacking it.
+        // The hook is bundled, so a fresh env carries the instruction per turn
+        // and the persona is left exactly as the blueprint wrote it.
         place(&env, &inst, Some("# Persona\n"), &Capabilities::default()).unwrap();
-        assert!(std::fs::read_to_string(env.join("CLAUDE.md")).unwrap().contains("TL;DR"));
+        assert_eq!(std::fs::read_to_string(env.join("CLAUDE.md")).unwrap(), "# Persona\n");
 
-        // With it registered, a persona cleared of the section stays cleared.
-        std::fs::write(env.join("CLAUDE.md"), "# Persona\n").unwrap();
+        // Unregister it by hand and the persona append comes back — the voice
+        // needs the instruction to exist somewhere, so this is the fallback.
         let settings = env.join("settings.json");
         let mut v: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
-        v["hooks"]["UserPromptSubmit"] = serde_json::json!([{
-            "hooks": [{"type": "command",
-                       "command": "python \"$CLAUDE_CONFIG_DIR/hooks/user-prompt-submit.py\""}]
-        }]);
+        v["hooks"].as_object_mut().unwrap().remove("UserPromptSubmit");
         std::fs::write(&settings, serde_json::to_string_pretty(&v).unwrap()).unwrap();
 
-        place(&env, &inst, Some("# Persona\n"), &Capabilities::default()).unwrap();
-        assert_eq!(std::fs::read_to_string(env.join("CLAUDE.md")).unwrap(), "# Persona\n");
+        // ensure_own_hook would just heal it back, so assert on the helper that
+        // actually decides: with no registration, the append happens.
+        assert!(!injects_tldr_per_turn(&env));
+        ensure_tldr_instruction(&env).unwrap();
+        assert!(std::fs::read_to_string(env.join("CLAUDE.md")).unwrap().contains("TL;DR"));
+    }
+
+    #[test]
+    fn place_registers_the_user_prompt_submit_hook_and_script() {
+        let proj = tempfile::tempdir().unwrap();
+        let env = env_dir(proj.path(), "coder");
+        let inst = Instance { name: "coder".into(), model: "opus".into() };
+
+        // An env placed before the hook existed: settings.json is never
+        // clobbered, so the registration has to be healed into it.
+        std::fs::create_dir_all(&env).unwrap();
+        std::fs::write(env.join("settings.json"), r#"{"model":"opus"}"#).unwrap();
+        place(&env, &inst, None, &Capabilities::default()).unwrap();
+
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(env.join("settings.json")).unwrap())
+                .unwrap();
+        assert!(registers_command(&v["hooks"]["UserPromptSubmit"], "user-prompt-submit.py"));
+        assert!(env.join("hooks/user-prompt-submit.py").exists());
+    }
+
+    #[test]
+    fn user_prompt_submit_hook_carries_the_three_response_rules() {
+        // Injected on every prompt in every env, so the wording is the product.
+        // Each rule is here because its absence was felt: padding, agreement
+        // before evaluation, and a missing TL;DR that leaves the voice silent.
+        for needle in [
+            "Be concise",
+            "no preamble",
+            "hedging",
+            "praise or agreement",
+            "soften a finding",
+            "I don't know",
+            "TL;DR: <two sentences>",
+            "read aloud",
+        ] {
+            assert!(
+                USER_PROMPT_SUBMIT_SCRIPT.contains(needle),
+                "user-prompt-submit.py no longer says {needle:?}"
+            );
+        }
     }
 
     #[test]

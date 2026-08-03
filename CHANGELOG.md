@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### Added
+- **Every env now carries three response rules, injected on every prompt.** A
+  bundled `UserPromptSubmit` hook asks for concise answers (no preamble, filler
+  or hedging), rules out sycophancy (no opening praise or agreement, no
+  validating an unchecked premise, no softening a finding — say plainly when the
+  user is wrong, and say "I don't know" when that's the answer), and requires the
+  trailing `TL;DR:` line the voice speaks. ~150 tokens per turn.
+
+  Per turn rather than per session because style decays: an instruction given at
+  turn one is buried by turn eighty. On a hook rather than in the persona because
+  the persona is written once and never clobbered, so editing it would reach no
+  existing env — while `place()` rewrites the hook script every run, so all
+  existing envs adopt this on their next launch with no backfill.
+
+  The TL;DR instruction moves here from the persona as a result. Envs already
+  carrying that section keep it (the persona is yours; aello won't edit it), so
+  they simply have it in both places. Unregister the hook by hand and the persona
+  append comes back, so the voice can't go silent for want of an instruction.
+
 ### Removed
 - **`AUDIT-2026-07-08.md` is no longer in the repo.** Audits are working notes
   and were ruled out of git, and `AUDIT-*.md` was added to `.gitignore` — but the
