@@ -1,6 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [0.2.0]
+
+First stable line. The blueprint interface is settled: a blueprint is a name, a
+model, a persona and a **role**, and that shape is what the rest of the tool is
+built on. Existing configs migrate themselves — see below.
 
 ### Changed
 - **The five capability flags are now three roles.** `maintainer` (owns the
