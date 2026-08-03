@@ -113,7 +113,7 @@ Rewritten one of those for a project and want to keep it? Put an empty `.aello-k
 
 Transcripts of every session are archived outside the repo so nothing is lost when a session ends.
 
-See [`docs/concepts.md`](docs/concepts.md), [`docs/roles.md`](docs/roles.md) and [`docs/voice.md`](docs/voice.md) for how all of it actually works.
+See [`docs/workflows.md`](docs/workflows.md) for task-shaped walkthroughs, and [`docs/concepts.md`](docs/concepts.md), [`docs/roles.md`](docs/roles.md), [`docs/skills.md`](docs/skills.md), [`docs/voice.md`](docs/voice.md) and [`docs/troubleshooting.md`](docs/troubleshooting.md) for how all of it actually works. The same pages ship inside the binary — `aello docs` lists them, `aello docs workflows` prints one, and `?` in the TUI opens a reader.
 
 ## Commands
 

@@ -29,6 +29,20 @@
   `/sync` covers the files it previously skipped — `aello edit <name> --role
   contributor` if that isn't what you want.
 - `docs/capabilities.md` is now `docs/roles.md` (`aello docs roles`).
+
+### Added
+- **Four new reference docs**, bundled into the binary like the rest — readable
+  with `aello docs <name>`, in the TUI reader (`?`), and on the docs site:
+  - `workflows.md` — task-shaped walkthroughs: your first env, two agents in one
+    repo, the work → `/sync` → `/handoff` → `/clear` loop, resuming, updating an
+    already-placed env, renaming, GitHub setup, removal. Ends with the
+    conventions for adding another one.
+  - `skills.md` — the four seeded skills in detail: why they're manual-only
+    twice over, why they're regenerated on every run, and `.aello-keep`.
+  - `development.md` — working on aello itself: the test-the-deployed-copy rule,
+    re-vendoring the voice hook, the release pipeline and its sharp edges.
+  - `troubleshooting.md` — failure modes and what they actually mean, starting
+    with where everything lives on disk.
 - **Voice hook re-vendored at `HOOK_VERSION = 8` — history now records what you
   asked, not just what was answered.** Upstream `revoiced` reads it from the
   transcript the hook already opens to find the `TL;DR:` line, so there is no new

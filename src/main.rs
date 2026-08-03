@@ -657,8 +657,11 @@ fn cmd_docs(name: Option<String>) -> Result<()> {
     match name {
         None => {
             println!("Reference docs — print one with `aello docs <name>`:\n");
-            for d in docs::all() {
-                println!("  {:<14} {}", d.slug, d.title);
+            let all = docs::all();
+            // Width from the longest slug, so adding a doc can't break the column.
+            let w = all.iter().map(|d| d.slug.len()).max().unwrap_or(0);
+            for d in &all {
+                println!("  {:<w$}  {}", d.slug, d.title);
             }
         }
         Some(slug) => match docs::get(&slug) {
