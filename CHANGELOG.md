@@ -1,5 +1,22 @@
 # Changelog
 
+## [Unreleased]
+
+### Removed
+- **`AUDIT-2026-07-08.md` is no longer in the repo.** Audits are working notes
+  and were ruled out of git, and `AUDIT-*.md` was added to `.gitignore` — but the
+  file was already tracked, and `.gitignore` has no effect on a tracked file, so
+  it stayed published the whole time. Untracked now (the local copy is kept and
+  archived outside the repo).
+- **The dead `skills/sync/SKILL.md` at the repo root**, a hand-written `/sync`
+  from before `templates::render_sync_skill` existed. Nothing has read it since;
+  the generated skill is per blueprint and lives in the env dir.
+
+### Fixed
+- Stale `--github` / `--project-md` / "capability checklist" references in
+  `CONTRIBUTING.md`, `docs/concepts.md`, `scripts/demo-recording.md`, the PR
+  template and two source comments — all describing flags removed in 0.2.0.
+
 ## [0.2.0]
 
 First stable line. The blueprint interface is settled: a blueprint is a name, a

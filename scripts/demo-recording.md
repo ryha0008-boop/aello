@@ -25,7 +25,7 @@ asciinema rec --idle-time-limit 1.5 -c 'aello' tui.cast
 
 Suggested sequence (slow, deliberate — let each screen breathe ~1s):
 1. Land on the registry (the "Kinetic Command" palette).
-2. `A` → walk the guided add: name → model → persona → capability checklist.
+2. `A` → walk the guided add: name → model → persona → role picker.
 3. Back on the list, `?` → scroll the in-app docs reader, `Esc`.
 4. `F` → toggle the placed-here filter.
 5. `Q` to quit (ends the recording).
@@ -41,8 +41,8 @@ Shows the actual pitch: two blueprints in one repo that don't clobber each other
 ```sh
 asciinema rec --idle-time-limit 1.5 demo-cli.cast
 # then, inside the recording shell:
-aello add backend  --model opus   --claude-md coder    --github
-aello add frontend --model sonnet --claude-md coder    --github
+aello add backend  --model opus   --claude-md coder --role maintainer
+aello add frontend --model sonnet --claude-md coder --role contributor
 aello list
 mkdir -p /tmp/demo-app && cd /tmp/demo-app && git init -q
 aello run backend  -p 'print a one-line hello as the backend agent'

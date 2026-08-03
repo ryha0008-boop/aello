@@ -25,7 +25,7 @@ my-project/
 │       ├── skills/           #     mirror of <env>/skills/
 │       ├── memory/           #     mirror of <env>/projects/<cwd>/memory/
 │       └── persona.CLAUDE.md #     snapshot of <env>/CLAUDE.md (renamed; never auto-loads)
-├── CLAUDE.md                 # project-level instructions (--project-md)
+├── CLAUDE.md                 # project-level instructions (maintainer only)
 ├── README.md  CHANGELOG.md  docs/   # scaffolded by the role
 └── .gitignore                # contains ".claude-env-*" (but NOT claude-internal/)
 ```
@@ -68,7 +68,7 @@ Use it when a project genuinely needs a different workflow (a `/sync` that also 
 ## Two CLAUDE.md layers
 
 - **Global / persona** — `<env>/CLAUDE.md`. The agent's identity ("you are a coding agent…"). Chosen with `--claude-md` (a built-in `coder`/`sysadmin` template, or a path). Written once; never overwritten on later runs.
-- **Project** — `<project>/CLAUDE.md`. Project-specific facts and instructions, enabled with `--project-md`. Maintained over time by `/sync`.
+- **Project** — `<project>/CLAUDE.md`. Project-specific facts and instructions, owned by the `maintainer` role. Maintained over time by `/sync`.
 
 Memory is a third, separate channel — nothing to do with the role. On first placement aello seeds a starter working-style memory under `<env>/projects/<encoded-cwd>/memory/` (a `working-style.md` note plus a one-line `MEMORY.md` index), so a fresh env boots with it already in `/context`. It's seeded only when no `MEMORY.md` exists yet, so a re-place never clobbers memory you've accumulated. Thereafter memory is maintained automatically (the PostCompact hook writes transcript summaries).
 

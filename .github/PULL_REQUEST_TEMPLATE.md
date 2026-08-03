@@ -9,5 +9,5 @@
 - [ ] `cargo build --release` passes
 - [ ] `cargo test` passes (added a test for new behavior)
 - [ ] Added a `CHANGELOG.md` entry (if user-facing)
-- [ ] Updated docs — `README.md` / `docs/` — if commands or capabilities changed
+- [ ] Updated docs — `README.md` / `docs/` — if commands or roles changed
 - [ ] Did **not** bump the version in `Cargo.toml` (CI handles it)

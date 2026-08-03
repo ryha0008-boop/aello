@@ -58,7 +58,7 @@ enum Commands {
         #[arg(long)]
         purge: bool,
     },
-    /// Edit an existing blueprint's model, persona, or capabilities.
+    /// Edit an existing blueprint's model, persona, or role.
     Edit(EditArgs),
     /// Place a blueprint in the current directory and launch it.
     Run {

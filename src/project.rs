@@ -309,8 +309,8 @@ pub fn place(
     // environment sharing this repo (distinct from /handoff, a note to self).
     seed_skill(env_dir, "note", crate::templates::render_note_skill(&inst.name))?;
 
-    // Always seed the /twosentences skill — also universal (capability-
-    // independent): condense the previous response into two sentences.
+    // Always seed the /twosentences skill — also universal (role-independent):
+    // condense the previous response into two sentences.
     seed_skill(env_dir, "twosentences", crate::templates::render_twosentences_skill())?;
 
     let project = env_dir.parent().unwrap_or(env_dir);
@@ -1420,8 +1420,11 @@ mod tests {
         place(&env, &inst, Some("# p"), &Capabilities { github: true, ..Default::default() }).unwrap();
         assert!(ci.join("skills/sync/SKILL.md").exists());
 
-        // `aello edit demo --no-github` — another cap stays on, so the blueprint
-        // still has a /sync skill; it just must not be tracked any more.
+        // Drop github while something else stays on, so the blueprint still has
+        // a /sync skill — it just must not be tracked any more. No *role*
+        // produces this combination (every role with a cap has github), so this
+        // exercises the placement layer directly: the mirror follows
+        // `caps.github` alone, whatever else is set.
         place(&env, &inst, Some("# p"), &Capabilities { readme: true, ..Default::default() }).unwrap();
         assert!(!ci.exists(), "the mirror should not survive the cap being dropped");
         // The live env is untouched — the mirror is a copy, never the source.
