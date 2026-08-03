@@ -31,6 +31,13 @@
   saying that following the instructions **is** running the skill, whichever
   route you took to them. The frontmatter closes the tool path; the banner closes
   the reading path.
+- **`place` no longer re-adds the TL;DR section to a persona that has moved it
+  elsewhere.** The instruction that makes the voice work lived in the global
+  persona — the one file most likely to be rewritten wholesale. An env can now
+  carry it on a `UserPromptSubmit` hook instead (registered by hand in that env's
+  `settings.json`, injected on every turn), and `place` leaves the persona alone
+  when it sees that hook. Without it the append is unchanged, so nothing moves
+  for an env that has not opted in.
 - **`/sync` no longer tells you to commit the transient env files.** Its staging
   rule is "stage only what you created or modified this session" — and a
   `<blueprint>.HANDOFF.md` written by `/handoff` is exactly that, so the rule as

@@ -716,6 +716,14 @@ fn ensure_model(settings: &Path, model: &str) -> Result<()> {
 /// the persona is the user's, and this only adds a section. When a blueprint has
 /// no persona at all, the section becomes the whole file.
 fn ensure_tldr_instruction(env_dir: &Path) -> Result<()> {
+    // An env that injects the instruction per turn already has it covered, and
+    // more reliably than the persona does: the persona is the file most likely
+    // to be rewritten wholesale, so anything the voice depends on is safer
+    // outside it. Appending here as well would put the sentence back into the
+    // file that was deliberately cleared of it.
+    if injects_tldr_per_turn(env_dir) {
+        return Ok(());
+    }
     let path = env_dir.join("CLAUDE.md");
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
     if existing.contains("TL;DR") {
@@ -727,6 +735,22 @@ fn ensure_tldr_instruction(env_dir: &Path) -> Result<()> {
     }
     out.push_str(crate::templates::VOICE_TLDR);
     std::fs::write(&path, out).context("could not add the TL;DR instruction to CLAUDE.md")
+}
+
+/// True when this env carries the TL;DR instruction on a `UserPromptSubmit`
+/// hook, so `place` should leave the persona alone.
+///
+/// Not something aello scaffolds — it is opt-in, registered by hand in that
+/// env's `settings.json`. The point is that the instruction survives a persona
+/// rewritten from scratch, which the appended copy does not.
+fn injects_tldr_per_turn(env_dir: &Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(env_dir.join("settings.json")) else {
+        return false;
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return false;
+    };
+    registers_command(&v["hooks"]["UserPromptSubmit"], "user-prompt-submit.py")
 }
 
 /// Self-heal: ensure an existing `settings.json` registers one of aello's own
@@ -1475,6 +1499,31 @@ mod tests {
                 .unwrap();
         assert!(registers_command(&v["hooks"]["SessionStart"], "session-start.py"));
         assert!(env.join("hooks/session-start.py").exists());
+    }
+
+    #[test]
+    fn a_user_prompt_submit_hook_replaces_the_persona_tldr_section() {
+        let proj = tempfile::tempdir().unwrap();
+        let env = env_dir(proj.path(), "coder");
+        let inst = Instance { name: "coder".into(), model: "opus".into() };
+
+        // Without the hook, the section is appended to a persona lacking it.
+        place(&env, &inst, Some("# Persona\n"), &Capabilities::default()).unwrap();
+        assert!(std::fs::read_to_string(env.join("CLAUDE.md")).unwrap().contains("TL;DR"));
+
+        // With it registered, a persona cleared of the section stays cleared.
+        std::fs::write(env.join("CLAUDE.md"), "# Persona\n").unwrap();
+        let settings = env.join("settings.json");
+        let mut v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        v["hooks"]["UserPromptSubmit"] = serde_json::json!([{
+            "hooks": [{"type": "command",
+                       "command": "python \"$CLAUDE_CONFIG_DIR/hooks/user-prompt-submit.py\""}]
+        }]);
+        std::fs::write(&settings, serde_json::to_string_pretty(&v).unwrap()).unwrap();
+
+        place(&env, &inst, Some("# Persona\n"), &Capabilities::default()).unwrap();
+        assert_eq!(std::fs::read_to_string(env.join("CLAUDE.md")).unwrap(), "# Persona\n");
     }
 
     #[test]
