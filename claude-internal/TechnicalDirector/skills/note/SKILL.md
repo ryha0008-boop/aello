@@ -62,5 +62,5 @@ sent into another repo is obviously that, and not mistaken for one left here.
 keep a version you have rewritten for this project, create an empty
 `.aello-keep` file beside this one (`skills/note/.aello-keep`) — aello then
 leaves the skill alone, and will not delete it either. A kept skill no longer
-tracks the blueprint's capabilities; remove the marker to return to the
-generated version.*
+tracks the blueprint's role; remove the marker to return to the generated
+version.*

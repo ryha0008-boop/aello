@@ -118,3 +118,33 @@ Quick first checks: `aello voice status` (mute state and `HOOK_VERSION`), and wh
 ## Something else
 
 Open an issue at <https://github.com/ryha0008-boop/aello/issues>. The useful ones state what you ran, what happened, and what you expected — and say which of the two copies you measured, the checkout or the placed env.
+
+## `blueprint '<name>' has an unusable persona`
+
+The binary is older than 0.2.8 and the config has already migrated.
+
+From 0.2.8 a blueprint's persona is `coder`, `none`, `custom`, or a path. Older
+binaries know only `coder`, `sysadmin` and paths, so they read `none` or
+`custom` as a filename, fail to open it, and abort the launch rather than
+starting an agent with no persona.
+
+Update the binary (`aello update`, or `cargo install --path . --force` from a
+checkout). Downgrading is not a fix — the config migrates forward on every load
+and never back.
+
+## A persona I generated was replaced by the stock template
+
+The blueprint's `claude_md` is still `coder` (or a path), so aello reseeds a
+template whenever the env has no `CLAUDE.md`. Accepting a persona is what stops
+that:
+
+```sh
+aello persona <name> --from <file> --project <dir>
+```
+
+That writes the file, sets `claude_md = "custom"` so aello writes nothing over
+it again, and records the generation in `<env>/persona.gen`. Check with
+`aello list` — the blueprint should read `custom`.
+
+Note that `place` never *overwrites* an existing persona, so this only bites an
+env whose `CLAUDE.md` was deleted or never written.

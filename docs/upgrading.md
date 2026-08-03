@@ -91,3 +91,17 @@ If you have aello installed on more than one machine, or a checkout you build fr
 - **The docs are online**: <https://ryha0008-boop.github.io/aello/docs/> — generated from the same files the binary embeds, so `aello docs` and the site never disagree.
 - **Four new pages**: [workflows.md](workflows.md) (task-shaped walkthroughs), [skills.md](skills.md), [development.md](development.md), [troubleshooting.md](troubleshooting.md).
 - `docs/capabilities.md` is now [roles.md](roles.md) — `aello docs roles`.
+
+## 0.2.8: personas became three values
+
+A second migration, same shape as the roles one — it happens on load and there is nothing to do.
+
+`claude_md` used to be a template name (`coder`, `sysadmin`) or a path. It is now `coder`, `none`, `custom`, or a path:
+
+- **absent → `none`.** A blank persona is now stated rather than implied, which is what lets `custom` mean something.
+- **`sysadmin` → `custom`.** That template is gone. The env that used it already holds the text — aello never overwrites a persona — so nothing is lost, and `custom` says what is true: the persona lives in the env dir now.
+- **`coder` and paths are untouched.** Paths still work, including one file shared by several blueprints.
+
+`custom` means aello writes no persona for that env; the file in the env dir is authoritative. That is what `aello persona <name> --from <file>` sets when you accept a persona written for the project, alongside recording the generation in `<env>/persona.gen`.
+
+**One hazard, and it is the reverse of the usual one.** Once a config has been migrated *and saved*, an aello older than 0.2.8 cannot launch a blueprint whose persona is `none` or `custom` — it reads the value as a filename and aborts with "unusable persona". Merely reading the config is safe; it persists on the next save. Keep the binary current rather than downgrading, since the migration only runs forward.

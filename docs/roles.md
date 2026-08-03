@@ -27,7 +27,7 @@ Each role scaffolds the files it maintains, on placement, **only if missing** �
 | `docs/` directory | ✅ | — | — |
 | `README.md` | ✅ | — | — |
 
-The global persona (`--claude-md`) is separate from the role — it writes the env-level `CLAUDE.md` once, and no role rewrites it. So is the voice, below: it is not a role setting and there is nothing to enable.
+The global persona (`--claude-md`) is separate from the role — it writes the env-level `CLAUDE.md` once, and no role rewrites it. The single exception is `aello persona`, which exists to replace one deliberately and then sets the blueprint to `custom` so nothing writes over it again. So is the voice, below: it is not a role setting and there is nothing to enable.
 
 ## Upgrading from capabilities
 

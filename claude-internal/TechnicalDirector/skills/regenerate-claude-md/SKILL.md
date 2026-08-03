@@ -13,11 +13,17 @@ allowed-tools: Read, Grep, Glob, Bash
 > Following these instructions **is** running the skill, whichever route you took
 > to them. Say the skill exists and let the user invoke it.
 
-Every env starts with a stock persona (`coder`, `sysadmin`) — a cookie cutter,
-correct on day one and steadily less so. The project grows, working agreements
-accumulate, the same mistakes stop being made for reasons nobody wrote down.
-This skill reads what the project has become and proposes what its agent's
-**global** persona should say now.
+Every env starts on one of two day-one defaults — `coder` for a coding project,
+`none` for anything that isn't one. Both are cookie cutters: correct on day one
+and steadily less so. The project grows, working agreements accumulate, the same
+mistakes stop being made for reasons nobody wrote down. This skill reads what
+the project has become and proposes what its agent's **global** persona should
+say now.
+
+Its output is a *proposal*. When the wording is finally right — usually after
+several rounds, and after the user has consulted the target env itself — they
+run **`/regenerate-claude-md-accept`**, which is what actually installs it and
+flips the blueprint to `custom`.
 
 You have **no `Write` tool here, deliberately.** Your output is a proposal the
 user carries to that project's env and discusses there. Do not write, edit, or
@@ -67,15 +73,19 @@ line as a change you must justify, the same as adding one.
 is unwanted.** Check the blueprint's `claude_md` in aello's config (on Windows,
 `%APPDATA%\aello\config\config.toml` — note the extra `config/` level):
 
-- **A built-in name** (`coder`, `sysadmin`) — a coding project. It started from
-  the stock template because that was a reasonable day-one default.
-- **No `claude_md` at all** — **not a coding project.** The user withheld the
-  stock persona because a coding persona would have been actively wrong here,
-  not because this env should never have one. Blank was right on day one and
-  stays right until the project grows.
-- **A path** — the user already maintains a persona file of their own. Read it
-  and propose changes **to that file**, naming its path; never relocate the
-  persona into the env dir.
+- **`coder`** — a coding project, started on the stock template because that was
+  a reasonable day-one default.
+- **`none`** — **not a coding project.** Anything outside IT starts blank,
+  because a coding persona would be actively wrong there — not because this env
+  should never have one. Blank is right on day one and stays right until the
+  project grows.
+- **`custom`** — a persona has already been generated and accepted for this env.
+  `<env>/CLAUDE.md` is authoritative and aello writes nothing over it. Check
+  `<env>/persona.gen` for which generation it is on; you are proposing the next.
+- **A path** — the user maintains a persona file of their own. Read it and
+  propose changes **to that file**, naming its path; never relocate the persona
+  into the env dir. Some of these files are shared by several blueprints, so a
+  change there lands in more than one env.
 
 So a grown non-coding project earns a custom persona exactly as a grown coding
 one does. What changes is where you start: you have no template to revise, and
@@ -88,17 +98,52 @@ revision. Same altitude, different substance.
 Treat a file containing *only* the TL;DR section as absent — `place()` writes
 that on its own, so it is not evidence anyone chose a persona.
 
-### 2b. Is the project grown enough to deserve one?
+### 2b. Read contextdb — this step is mandatory
+
+**Do this before deciding anything, and report what you found.** contextdb is
+the archive of how work has actually gone in this env: every session that ended
+with `/clear` or exit leaves a record holding that session's `/handoff` note,
+and from mid-2026 a copy of the transcript itself. It is the only place the
+*user's own words* survive — everything else you can read is an agent's summary
+of them, and summaries are where a persona's evidence quietly turns into
+invention.
+
+Find the root in `%APPDATA%\aello\config\config.toml` (`contextdb = …`) — it is
+**not** always the default `~/aello/contextdb`. Records live at
+`<contextdb>/<project>/<blueprint>/`.
+
+Report three things:
+
+1. **How many sessions, and over what span.** `*_end.jsonl` count and date range.
+2. **What the user actually said.** Pull their turns out of any archived
+   `*_transcript.jsonl`, and their instructions out of the `handoff` field.
+   Directive language — "don't", "never", "instead", "I want", "why did you" —
+   is where the persona's rules come from.
+3. **Recurring lessons.** Something reverted and redone, a fix made in three
+   places, a correction issued more than once.
+
+**A thin contextdb does not prove a young project.** Archiving depends on the
+`SessionEnd` hook being registered in that env's `settings.json`, and that hook
+reached most envs only recently — it was in 2 of 39 as late as 2026-08-02. An
+empty directory may mean nobody was recording. Before concluding a project is
+young, check `<env>/settings.json` for a `SessionEnd` entry running
+`session-end.py`; say which of the two you found.
+
+### 2c. Is the project grown enough to deserve one?
 
 The gate, and it applies to both kinds:
 
-- **Barely started** — a handful of commits and little beyond the scaffold aello
-  itself created. Nothing has been learned yet that a persona could encode, so
-  there is nothing to write: a "custom" persona here would be invention dressed
-  as observation. **Say so and stop**, and leave it as it is — stock for a coding
-  project, blank for a non-coding one.
-- **Grown** — real history, real conventions, decisions visible in the commits
-  and docs. Proceed.
+- **Barely started** — few commits, little beyond the scaffold aello created,
+  and **little or no contextdb history**. Nothing has been learned yet that a
+  persona could encode, so there is nothing to write: a custom persona here is
+  invention dressed as observation. **Say so and stop**, and leave it as it is —
+  `coder` for a coding project, `none` for anything else.
+- **Grown** — real history, real conventions, decisions visible in the commits,
+  the docs and the archived sessions. Proceed.
+
+Weigh contextdb depth heavily. A handful of archived sessions is not enough
+material to derive working rules from, however old the repo is — and the point
+of a generated persona is that every line traces to something that happened.
 
 If it is borderline, say which way you lean and why, and let the user decide.
 The cost of waiting is nothing; the cost of a confidently wrong persona is that
@@ -114,8 +159,9 @@ actually goes here:
   **not** repeat, and to see which rules keep being restated (a rule written
   three times is a rule someone keeps breaking — that is persona material).
 - `<env>/projects/<encoded-cwd>/memory/` — the accumulated lessons for this env.
-  The richest source. Don't build that path by hand: list `<env>/projects/` and
-  use the directory that is there.
+  The richest source **after contextdb**, and unlike contextdb it is already
+  distilled — which also means it is one agent's reading of what happened.
+  Don't build that path by hand: list `<env>/projects/` and use what is there.
 - `git log --oneline -100` and a handful of full messages — how changes arrive,
   how big they are, what the commit voice is, what gets fixed twice.
 - `CHANGELOG.md` if present — the shape of what ships.
@@ -147,32 +193,39 @@ Write rules that are **actionable and falsifiable**. "Be careful" is not a rule.
   something you actually read. If you are unsure whether a convention is real,
   leave it out and say so in your summary rather than asserting it.
 - **Leave the TL;DR section exactly as you found it.** If the current persona has
-  one, carry it across **verbatim** — reworded is worse than absent, because
-  `place()` only re-adds the section when the string is missing entirely, so a
-  softened version blocks that heal while no longer producing the line. If the
-  current persona has **none**, that may well be deliberate: an env can carry the
-  instruction on a `UserPromptSubmit` hook instead, precisely so a rewrite like
-  this one cannot disturb it. Do not add one back — say what you found and let
-  the user decide.
+  one, **drop it** and say that you did. Every env now carries the TL;DR
+  instruction on a bundled `UserPromptSubmit` hook, injected on every prompt
+  alongside the conciseness and anti-sycophancy rules, so a copy in the persona
+  is redundant — it survives in older personas only because aello will not edit
+  a file the user owns. A generated persona is a fresh file and should not
+  reintroduce it.
 
-  The stakes are smaller than they look either way: `speak.py` blocks any turn
-  with no `TL;DR:` line and asks for one, so the worst case is an extra round
-  trip rather than a silent env. Getting it wrong is untidy, not fatal.
+  Do not restate the other two hook rules either. Be concise / don't be
+  sycophantic reach every env per turn already; repeating them here costs
+  context on every turn and buys nothing.
+
+  The stakes are small either way: `speak.py` blocks any turn with no `TL;DR:`
+  line and asks for one, so the worst case is an extra round trip rather than a
+  silent env.
 
 ### 5. Output
 
 Print, in this order:
 
-1. **What this project looks like** — three or four sentences on what you found
-   and what it implies for how its agent should work. This is what the user
+1. **What the record shows** — the contextdb numbers (sessions, span, whether
+   the hook was even registered), then three or four sentences on what you found
+   and what it implies for how this agent should work. This is what the user
    argues with, so make the reasoning visible.
 2. **The proposed persona** — the complete file in one fenced block, nothing
    elided, ready to paste. It must stand alone.
 3. **What changed and why** — the material differences from the current persona,
-   each with the evidence behind it ("the last 40 commits are single-purpose, so
-   the commit-discipline rule is now specific rather than generic"). Name
+   each with the evidence behind it, quoting the user's own words from contextdb
+   where you have them ("you said X twice, so this rule is now specific"). Name
    anything you deliberately left out and why.
 4. **What you were unsure about** — the judgement calls, so the user can settle
    them. Be honest here; this is the part that makes the conversation useful.
 
-Then stop. The user takes it from here.
+Then stop. Expect to do this several times: the user will take the proposal to
+the target env, argue with it there, and come back. Nothing is installed until
+they run `/regenerate-claude-md-accept`, which is a separate skill — do not
+offer to write the file yourself, and do not run that skill on their behalf.
