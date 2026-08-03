@@ -1,29 +1,54 @@
 //! Built-in CLAUDE.md persona templates, bundled into the binary.
 //!
-//! A blueprint's `claude_md` is either a built-in name (`coder`, `sysadmin`) or
-//! a filesystem path. `resolve` turns it into the actual CLAUDE.md content to
-//! place into the env dir as the env's global instructions.
+//! A blueprint's `claude_md` is one of three values — `coder` (a coding project
+//! starts here), `none` (anything that isn't one, blank until it earns a
+//! persona) and `custom` (the env's own CLAUDE.md, written by
+//! `/regenerate-claude-md-accept`) — or a filesystem path, still accepted for
+//! the blueprints that point at a persona file the user maintains.
+//!
+//! `resolve` turns that into the content to place, or `None` when the config is
+//! not the source of the persona.
 
 use crate::models::Capabilities;
 use anyhow::{Context, Result};
 
 const CODER: &str = include_str!("../templates/coder.md");
-const SYSADMIN: &str = include_str!("../templates/sysadmin.md");
 
-/// Names of the built-in templates.
+/// The value meaning "this env's own `CLAUDE.md` is the persona".
 ///
-/// The TUI keeps its own `PERSONAS` list (it carries a description per row and a
-/// "none" entry this list has no place for), so nothing reads this at runtime —
-/// its one job is to be the thing `tui::tests::personas_match_builtins` compares
-/// against, which is what stops the two drifting when a template is added.
+/// Set by `/regenerate-claude-md-accept` once a hand-written persona has been
+/// accepted into an env. `resolve` returns nothing for it, so `place` writes no
+/// persona and the file already in the env dir stands — which is what makes a
+/// generated persona survive every later run.
+pub const CUSTOM: &str = "custom";
+
+/// The value meaning "no global persona", written explicitly rather than left
+/// absent so a blank persona reads as a decision instead of an oversight. Every
+/// non-IT project starts here and stays until it has earned a custom one.
+pub const NONE: &str = "none";
+
+/// Persona values the add flow offers.
+///
+/// Three, deliberately: a coding project starts on `coder`, anything else starts
+/// blank, and both become `custom` the first time a persona is generated for
+/// them. `sysadmin` was a fourth and was dropped — it was barely used and read
+/// as coder with different nouns, so it earned neither the maintenance nor the
+/// slot in the picker.
+///
+/// A **path** is still accepted by `resolve` and is not listed here: five
+/// blueprints point at persona files the user maintains, three of them sharing
+/// one file on purpose, and collapsing those to `custom` would freeze the copies
+/// and silently end the sharing.
 #[allow(dead_code)] // referenced only by the TUI's guard test
-pub const BUILTINS: &[&str] = &["coder", "sysadmin"];
+pub const BUILTINS: &[&str] = &[CODER_NAME, NONE, CUSTOM];
+
+/// The one bundled template's name.
+pub const CODER_NAME: &str = "coder";
 
 /// Content of a built-in template by name, or None if not a builtin.
 pub fn builtin(name: &str) -> Option<&'static str> {
     match name {
-        "coder" => Some(CODER),
-        "sysadmin" => Some(SYSADMIN),
+        CODER_NAME => Some(CODER),
         _ => None,
     }
 }
@@ -52,13 +77,23 @@ skims for keywords rather than reading in full, so the TL;DR is also the part
 they actually read.
 "#;
 
-/// Resolve a blueprint's `claude_md` value to CLAUDE.md content: a built-in
-/// name returns the bundled template; anything else is read as a file path.
-pub fn resolve(claude_md: &str) -> Result<String> {
+/// Resolve a blueprint's `claude_md` value to the persona content `place`
+/// should write, or `None` when it should write nothing.
+///
+/// `None` covers the two cases where the config is not the source of the
+/// persona: `none` (there is no persona) and `custom` (the env's own
+/// `CLAUDE.md` is the persona, and overwriting it would destroy the generated
+/// text). Both return `Ok(None)` rather than an error — this is the normal
+/// steady state for most envs, not a fault.
+pub fn resolve(claude_md: &str) -> Result<Option<String>> {
+    if claude_md == CUSTOM || claude_md == NONE {
+        return Ok(None);
+    }
     if let Some(content) = builtin(claude_md) {
-        return Ok(content.to_string());
+        return Ok(Some(content.to_string()));
     }
     std::fs::read_to_string(claude_md)
+        .map(Some)
         .with_context(|| format!("claude_md '{claude_md}' is not a built-in template or a readable file"))
 }
 
@@ -362,8 +397,17 @@ mod tests {
 
     #[test]
     fn builtins_resolve() {
-        assert!(resolve("coder").unwrap().contains("coding agent"));
-        assert!(resolve("sysadmin").unwrap().contains("systems administration"));
+        assert!(resolve("coder").unwrap().unwrap().contains("coding agent"));
+    }
+
+    /// `custom` and `none` must resolve to "write nothing", not to an error and
+    /// not to empty content. `custom` is the load-bearing one: it means the
+    /// env's own CLAUDE.md is the persona, so anything that made `place` write
+    /// here would overwrite a generated persona with a template.
+    #[test]
+    fn custom_and_none_resolve_to_no_content() {
+        assert_eq!(resolve(CUSTOM).unwrap(), None);
+        assert_eq!(resolve(NONE).unwrap(), None);
     }
 
     #[test]

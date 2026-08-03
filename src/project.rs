@@ -782,6 +782,77 @@ fn ensure_tldr_instruction(env_dir: &Path) -> Result<()> {
     std::fs::write(&path, out).context("could not add the TL;DR instruction to CLAUDE.md")
 }
 
+/// Where an accepted persona's generation is recorded: `<env>/persona.gen`,
+/// holding one line like `gen1 2026-08-03`.
+///
+/// A sidecar rather than a config key or a field on the placed `.aello.toml`,
+/// because both of those are rewritten from a struct on every `place` and would
+/// drop it. `place` never touches this file, so it survives every later run.
+/// Config says *whether* an env has a custom persona (`claude_md = "custom"`);
+/// this says *which generation*, next to the file it describes.
+pub const PERSONA_GEN_FILE: &str = "persona.gen";
+
+/// Read an env's persona generation number, or 0 when it has none.
+pub fn persona_generation(env_dir: &Path) -> u32 {
+    let Ok(text) = std::fs::read_to_string(env_dir.join(PERSONA_GEN_FILE)) else {
+        return 0;
+    };
+    text.split_whitespace()
+        .next()
+        .and_then(|t| t.strip_prefix("gen"))
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(0)
+}
+
+/// Record that generation `gen` of this env's persona was accepted on `date`.
+/// Overwrites: only the current generation matters, and the history that does
+/// matter is in git via the `claude-internal/` mirror.
+pub fn write_persona_generation(env_dir: &Path, gen: u32, date: &str) -> Result<()> {
+    std::fs::write(env_dir.join(PERSONA_GEN_FILE), format!("gen{gen} {date}\n"))
+        .context("could not record the persona generation")
+}
+
+/// Today's UTC date as `YYYY-MM-DD`.
+///
+/// Hand-rolled rather than pulling in a date crate for one string. This is
+/// Howard Hinnant's `civil_from_days`: shift the epoch to 0000-03-01 so leap
+/// day lands at the end of the cycle, then divide out 400/100/4-year eras.
+fn today_utc() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let z = secs / 86_400 + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11], March-based
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// Accept a generated persona into an env: write it, bump the generation and
+/// report the new number. The caller flips `claude_md` to `custom`.
+///
+/// Overwrites `CLAUDE.md` deliberately — this is the one operation that is
+/// *supposed* to replace a persona, which is why it is a command and not part
+/// of `place` (place never clobbers a persona, and must not start).
+pub fn accept_persona(env_dir: &Path, content: &str) -> Result<(u32, String)> {
+    if !env_dir.exists() {
+        anyhow::bail!("no env dir at {} — place the blueprint there first", env_dir.display());
+    }
+    std::fs::write(env_dir.join("CLAUDE.md"), content)
+        .context("could not write the new CLAUDE.md")?;
+    let gen = persona_generation(env_dir) + 1;
+    let date = today_utc();
+    write_persona_generation(env_dir, gen, &date)?;
+    Ok((gen, date))
+}
+
 /// True when this env carries the TL;DR instruction on a `UserPromptSubmit`
 /// hook, so `place` should leave the persona alone.
 ///
@@ -1723,6 +1794,45 @@ mod tests {
         assert!(!injects_tldr_per_turn(&env));
         ensure_tldr_instruction(&env).unwrap();
         assert!(std::fs::read_to_string(env.join("CLAUDE.md")).unwrap().contains("TL;DR"));
+    }
+
+    #[test]
+    fn accepting_a_persona_overwrites_it_and_bumps_the_generation() {
+        let proj = tempfile::tempdir().unwrap();
+        let env = env_dir(proj.path(), "coder");
+        let inst = Instance { name: "coder".into(), model: "opus".into() };
+        place(&env, &inst, Some("# stock\n"), &Capabilities::default()).unwrap();
+
+        assert_eq!(persona_generation(&env), 0); // nothing accepted yet
+
+        let (gen, date) = accept_persona(&env, "# generated\n").unwrap();
+        assert_eq!(gen, 1);
+        assert_eq!(date.len(), 10, "date should be YYYY-MM-DD, got {date:?}");
+        assert_eq!(std::fs::read_to_string(env.join("CLAUDE.md")).unwrap(), "# generated\n");
+        assert_eq!(persona_generation(&env), 1);
+
+        // A later placement must not put the template back over it. place() only
+        // writes when absent, and `custom` resolves to None anyway — both belts.
+        place(&env, &inst, None, &Capabilities::default()).unwrap();
+        assert_eq!(std::fs::read_to_string(env.join("CLAUDE.md")).unwrap(), "# generated\n");
+
+        // Generations accumulate rather than resetting.
+        let (gen2, _) = accept_persona(&env, "# second\n").unwrap();
+        assert_eq!(gen2, 2);
+        assert_eq!(persona_generation(&env), 2);
+    }
+
+    #[test]
+    fn today_utc_is_a_sane_iso_date() {
+        let d = today_utc();
+        let parts: Vec<&str> = d.split('-').collect();
+        assert_eq!(parts.len(), 3, "{d}");
+        let y: i32 = parts[0].parse().unwrap();
+        let m: u32 = parts[1].parse().unwrap();
+        let day: u32 = parts[2].parse().unwrap();
+        assert!((2024..2100).contains(&y), "year {y} out of range");
+        assert!((1..=12).contains(&m), "month {m}");
+        assert!((1..=31).contains(&day), "day {day}");
     }
 
     #[test]

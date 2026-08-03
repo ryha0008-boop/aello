@@ -3,6 +3,30 @@
 ## [Unreleased]
 
 ### Added
+- **`aello persona <name> --from <file>`** — installs an agreed global persona
+  into a placed env: replaces its `CLAUDE.md`, sets `claude_md = "custom"` so
+  aello stops seeding a template over it, and bumps the generation recorded in
+  `<env>/persona.gen` (`gen1 2026-08-03`). The only command that overwrites a
+  persona; `run` still never does.
+
+### Changed
+- **The persona choice is now three values: `coder`, `none`, `custom`.** A
+  coding project starts on `coder`, anything else on `none`, and both become
+  `custom` the first time a generated persona is accepted — after which the
+  env's own `CLAUDE.md` is authoritative. Existing configs migrate on load: a
+  missing `claude_md` becomes an explicit `none`, so a blank persona reads as a
+  decision rather than an oversight.
+
+  A **path** is still accepted for the blueprints that point at a persona file
+  you maintain, including the ones sharing a single file between several envs.
+
+### Removed
+- **The `sysadmin` persona template.** Barely used, and close enough to `coder`
+  to not earn its own slot. The one blueprint on it migrates to `custom`: its
+  env already holds the text, since aello never overwrites a persona, so nothing
+  is lost — and calling it `coder` would have claimed text that env doesn't have.
+
+### Added
 - **Every env now carries three response rules, injected on every prompt.** A
   bundled `UserPromptSubmit` hook asks for concise answers (no preamble, filler
   or hedging), rules out sycophancy (no opening praise or agreement, no

@@ -1,5 +1,6 @@
 use anyhow::{bail, Context, Result};
 use clap::{CommandFactory, Parser, Subcommand};
+use std::path::PathBuf;
 
 mod auth;
 mod config;
@@ -32,8 +33,9 @@ enum Commands {
         /// Claude model, e.g. sonnet, opus, haiku.
         #[arg(long)]
         model: String,
-        /// Global persona: a built-in template (coder, sysadmin) or a path to a
-        /// CLAUDE.md file, placed into the env dir on first run.
+        /// Global persona: coder (a coding project), none (anything else) or a
+        /// path to a CLAUDE.md file. Becomes `custom` once a persona has been
+        /// generated for the env. Placed into the env dir on first run.
         #[arg(long)]
         claude_md: Option<String>,
         /// What this blueprint is responsible for: maintainer (owns CLAUDE.md,
@@ -105,6 +107,22 @@ enum Commands {
     Docs {
         /// Doc to print (slug, e.g. `concepts`). Omit to list available docs.
         name: Option<String>,
+    },
+    /// Accept a generated global persona into a placed env.
+    ///
+    /// Replaces that env's CLAUDE.md, flips the blueprint's persona to
+    /// `custom` so aello stops writing one, and bumps the generation recorded
+    /// in `<env>/persona.gen`. This is the only command that overwrites a
+    /// persona — `run` never does.
+    Persona {
+        /// Blueprint whose env receives the persona.
+        name: String,
+        /// File holding the new CLAUDE.md.
+        #[arg(long)]
+        from: PathBuf,
+        /// Project holding the env dir (default: current directory).
+        #[arg(long)]
+        project: Option<PathBuf>,
     },
     /// Mute or unmute the voice (applies to every env).
     Voice {
@@ -193,6 +211,7 @@ fn main() {
         Some(Commands::Update { force }) => update::run(force),
         Some(Commands::Completions { shell }) => cmd_completions(shell),
         Some(Commands::Docs { name }) => cmd_docs(name),
+        Some(Commands::Persona { name, from, project }) => cmd_persona(name, from, project),
         Some(Commands::Voice { action }) => match action {
             VoiceAction::Mute { project } => voice::mute(project),
             VoiceAction::Unmute { project } => voice::unmute(project),
@@ -499,9 +518,9 @@ pub(crate) fn run_blueprint(
     // moved or deleted after the blueprint was created, launched a silently
     // persona-less agent that looked fine.
     let claude_md = match &bp.claude_md {
-        Some(spec) => Some(templates::resolve(spec).with_context(|| {
-            format!("blueprint '{name}' has an unusable persona — fix it with: aello edit {name} --claude-md <coder|sysadmin|path>")
-        })?),
+        Some(spec) => templates::resolve(spec).with_context(|| {
+            format!("blueprint '{name}' has an unusable persona — fix it with: aello edit {name} --claude-md <coder|none|custom|path>")
+        })?,
         None => None,
     };
 
@@ -574,7 +593,7 @@ fn cmd_init() -> Result<()> {
     validate_name(&name)?;
     let model = prompt("Model (opus/sonnet/haiku or a claude-* id)", "sonnet")?;
     let model = validate_model(&model)?;
-    let persona = prompt_optional("Persona (coder/sysadmin/path, blank for none)")?;
+    let persona = prompt_optional("Persona (coder for a coding project, blank for none)")?;
     if let Some(p) = &persona {
         templates::resolve(p)?; // fail now on a bad name/path, not on first run
     }
@@ -649,6 +668,46 @@ fn prompt_optional(label: &str) -> Result<Option<String>> {
     }
     let v = line.trim();
     Ok((!v.is_empty()).then(|| v.to_string()))
+}
+
+/// Accept a generated persona into a placed env.
+///
+/// Three writes that belong together: the persona file, the blueprint's
+/// `claude_md = "custom"` so `place` stops seeding a template over it, and the
+/// generation sidecar. Doing this through aello rather than by hand is what
+/// keeps the config edit safe — `Config` is serialized from the struct, so a
+/// key written into `config.toml` by anything else is dropped on the next save.
+fn cmd_persona(name: String, from: PathBuf, project: Option<PathBuf>) -> Result<()> {
+    let mut cfg = config::load()?;
+    let bp = cfg
+        .find(&name)
+        .with_context(|| format!("no blueprint named '{name}'"))?;
+    let bp_name = bp.name.clone();
+
+    let content = std::fs::read_to_string(&from)
+        .with_context(|| format!("could not read the persona at {}", from.display()))?;
+    if content.trim().is_empty() {
+        anyhow::bail!("{} is empty — refusing to blank a persona", from.display());
+    }
+
+    let project = match project {
+        Some(p) => p,
+        None => std::env::current_dir().context("could not read the current directory")?,
+    };
+    let env = project::env_dir(&project, &bp_name);
+    let (gen, date) = project::accept_persona(&env, &content)?;
+
+    // Flip to `custom` last: if the write above failed, the config still points
+    // at whatever was seeding the persona before.
+    if let Some(bp) = cfg.blueprints.iter_mut().find(|b| b.name == bp_name) {
+        bp.claude_md = Some(templates::CUSTOM.to_string());
+    }
+    config::save(&cfg)?;
+
+    println!("{bp_name}: persona accepted as gen{gen} ({date})");
+    println!("  {}", env.join("CLAUDE.md").display());
+    println!("  claude_md = \"custom\" — aello will not overwrite it");
+    Ok(())
 }
 
 /// Print a bundled doc to stdout, or list them all when no name is given. The

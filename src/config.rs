@@ -70,6 +70,7 @@ fn load_path(path: &std::path::Path) -> Result<Config> {
             // Pre-0.2 configs carry five capability booleans per blueprint; fold
             // them into a role here so nothing downstream ever sees the old shape.
             cfg.migrate_roles();
+            cfg.migrate_personas();
             Ok(cfg)
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Config::default()),

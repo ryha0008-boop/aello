@@ -124,11 +124,11 @@ Those pages are generated from [`docs/`](docs/) in this repo, and the same files
 aello                                          # interactive TUI (no args)
 aello --version
 aello init                                     # first-run: login + first blueprint
-aello add <name> --model <m> [--claude-md <coder|sysadmin|path>]
+aello add <name> --model <m> [--claude-md <coder|none|path>]
         [--role maintainer|contributor|standalone]
 aello list [--json]
 aello remove <name> [--yes] [--purge]         # --purge also deletes the placed env dir + mirror
-aello edit <name> [--rename <new>] [--model <m>] [--claude-md <coder|sysadmin|path>]
+aello edit <name> [--rename <new>] [--model <m>] [--claude-md <coder|none|custom|path>]
         [--role maintainer|contributor|standalone]
 aello run [name] [--resume [id]] [-p <prompt>] [-- <extra args for claude>]
 aello login                                    # store the shared Claude token

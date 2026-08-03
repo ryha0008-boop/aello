@@ -120,8 +120,9 @@ impl Role {
 pub struct Blueprint {
     pub name: String,
     pub model: String,
-    /// Global persona: a built-in template name (`coder`, `sysadmin`) or a path
-    /// to a CLAUDE.md file, placed into the env dir as global instructions.
+    /// Global persona: `coder`, `none`, `custom`, or a path to a CLAUDE.md
+    /// file. `custom` means the env's own CLAUDE.md is authoritative and aello
+    /// writes nothing — that is the steady state once a persona is generated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claude_md: Option<String>,
     /// What this blueprint is responsible for. See [`Role`].
@@ -177,6 +178,31 @@ impl Config {
         }
     }
 
+    /// Fold pre-`custom` persona values into the three the add flow now offers.
+    ///
+    /// Two moves, both idempotent and both run on every load for the same reason
+    /// `migrate_roles` is — a restored backup heals itself instead of loading
+    /// with values nothing understands:
+    ///
+    /// - **absent → `none`.** A blank persona becomes a stated decision rather
+    ///   than a missing key, which is what lets `custom` mean something.
+    /// - **`sysadmin` → `custom`.** The template is gone, and the env that used
+    ///   it already holds the text `place` wrote at first placement — personas
+    ///   are never clobbered. Calling it `coder` would be false; `custom` says
+    ///   what is true, that the persona now lives in the env dir.
+    ///
+    /// Paths are left exactly as they are: several blueprints point at persona
+    /// files the user maintains, and some share one file deliberately.
+    pub fn migrate_personas(&mut self) {
+        for bp in &mut self.blueprints {
+            match bp.claude_md.as_deref() {
+                None => bp.claude_md = Some(crate::templates::NONE.to_string()),
+                Some("sysadmin") => bp.claude_md = Some(crate::templates::CUSTOM.to_string()),
+                _ => {}
+            }
+        }
+    }
+
     pub fn find(&self, name: &str) -> Option<&Blueprint> {
         self.blueprints.iter().find(|b| b.name == name)
     }
@@ -206,6 +232,34 @@ mod tests {
             role: Role::Standalone,
             legacy_caps: None,
         }
+    }
+
+    #[test]
+    fn persona_migration_folds_absent_and_sysadmin() {
+        let absent = bp("a");
+        let mut sysadmin = bp("b");
+        sysadmin.claude_md = Some("sysadmin".into());
+        let mut coder = bp("c");
+        coder.claude_md = Some("coder".into());
+        let mut path = bp("d");
+        path.claude_md = Some(r"C:\personas\driver.CLAUDE.md".into());
+
+        let mut cfg = Config { blueprints: vec![absent, sysadmin, coder, path], ..Config::default() };
+        cfg.migrate_personas();
+
+        // A missing key becomes a stated decision.
+        assert_eq!(cfg.blueprints[0].claude_md.as_deref(), Some("none"));
+        // The dropped template points at the env's own copy, which place() left
+        // alone — calling this "coder" would claim text the env does not have.
+        assert_eq!(cfg.blueprints[1].claude_md.as_deref(), Some("custom"));
+        // Untouched: still a real template, and still a user-maintained file.
+        assert_eq!(cfg.blueprints[2].claude_md.as_deref(), Some("coder"));
+        assert_eq!(cfg.blueprints[3].claude_md.as_deref(), Some(r"C:\personas\driver.CLAUDE.md"));
+
+        // Idempotent — it runs on every load.
+        cfg.migrate_personas();
+        assert_eq!(cfg.blueprints[0].claude_md.as_deref(), Some("none"));
+        assert_eq!(cfg.blueprints[1].claude_md.as_deref(), Some("custom"));
     }
 
     /// The two fleet blueprints that didn't hold an all-or-nothing cap set are

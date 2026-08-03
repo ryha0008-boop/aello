@@ -16,7 +16,7 @@ This walks you through putting an **existing** repo under an aello blueprint —
 aello add <Name>            # or use the TUI: press [A]
 ```
 
-At the role picker, choose **maintainer** for a normal project repo — it owns `CLAUDE.md`, `CHANGELOG.md`, `docs/`, `README.md` and git. (Pick a built-in persona — `coder` or `sysadmin` — or leave it none.)
+At the role picker, choose **maintainer** for a normal project repo — it owns `CLAUDE.md`, `CHANGELOG.md`, `docs/`, `README.md` and git. (Pick `coder` for a coding project; anything else starts on `none` and earns a persona later.)
 
 ### 2. Place the env without starting a session
 

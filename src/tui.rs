@@ -64,9 +64,9 @@ const MODELS: &[(&str, &str)] = &[
 /// Global-persona choices for the add flow. Index 0 = none; the rest are
 /// built-in templates (kept in sync with `templates::BUILTINS`).
 const PERSONAS: &[(&str, &str)] = &[
-    ("none", "no global persona"),
+    ("none", "not a coding project — blank until it earns one"),
     ("coder", "coding agent"),
-    ("sysadmin", "ops / devops"),
+    ("custom", "this env's own CLAUDE.md"),
 ];
 
 /// Picker index for a role, so edit mode opens on the current one.
@@ -1542,9 +1542,15 @@ mod tests {
 
     #[test]
     fn personas_match_builtins() {
-        // Picker = "none" + every built-in template, in order.
-        let picker: Vec<&str> = PERSONAS.iter().skip(1).map(|(id, _)| *id).collect();
-        assert_eq!(picker, crate::templates::BUILTINS);
+        // Same three values, compared as sets: the picker leads with "none"
+        // because index 0 is what an unrecognised value falls back to, while
+        // BUILTINS lists the coding default first. Order differing is fine;
+        // the sets differing means a value exists that cannot be picked.
+        let mut picker: Vec<&str> = PERSONAS.iter().map(|(id, _)| *id).collect();
+        let mut builtins: Vec<&str> = crate::templates::BUILTINS.to_vec();
+        picker.sort_unstable();
+        builtins.sort_unstable();
+        assert_eq!(picker, builtins);
     }
 
     #[test]
@@ -1618,7 +1624,7 @@ mod tests {
         // Known aliases / built-ins map to their picker row.
         assert_eq!(model_index("opus"), 0);
         assert_eq!(model_index("haiku"), 2);
-        assert_eq!(persona_index(Some("sysadmin")), 2);
+        assert_eq!(persona_index(Some("custom")), 2);
         // Unknown values fall back to index 0 (opus / "none").
         assert_eq!(model_index("claude-opus-4-8"), 0);
         assert_eq!(persona_index(None), 0);
