@@ -82,11 +82,23 @@ archived = ""
 if transcript_path:
     try:
         dest = os.path.join(contextdb_dir, f"{ts}_{session}_transcript.jsonl")
+        # Windows caps paths at 260 characters unless long paths are enabled
+        # (they are off by default). Claude Code's transcript lives under
+        # <project>/.claude-env-<name>/projects/<encoded-cwd>/, and the encoded
+        # cwd repeats the whole project path — so a deep project blows the limit
+        # and `open()` fails. Measured: a 325-char path archived nothing, and the
+        # `except` below recorded that honestly rather than crashing, which is
+        # exactly how it would go unnoticed. The `\\?\` prefix opts out of the
+        # limit; it needs an absolute path with native separators.
+        src_path = transcript_path
+        if os.name == "nt" and not src_path.startswith("\\\\?\\"):
+            src_path = "\\\\?\\" + os.path.abspath(src_path)
+            dest = "\\\\?\\" + os.path.abspath(dest)
         # Stream it: transcripts run to tens of MB and this is a session-exit
         # hook, so never hold one in memory. Source is opened BEFORE the
         # destination on purpose — reversed, an unreadable transcript would
         # leave a 0-byte file behind that looks like a successful archive.
-        with open(transcript_path, "rb") as src, open(dest, "wb") as out:
+        with open(src_path, "rb") as src, open(dest, "wb") as out:
             while True:
                 chunk = src.read(1 << 20)
                 if not chunk:

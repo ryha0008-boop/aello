@@ -21,6 +21,15 @@
   possible: a version with no tag yet is published exactly as written.
 
 ### Added
+- **Every env now launches with `--thinking-display summarized`**, so each turn's
+  reasoning is captured as a readable summary instead of an empty block. The
+  API's default is `omitted`: thinking blocks arrive with empty text and only an
+  opaque signature, which meant contextdb archived a full record of what was done
+  and nothing of what was thought — 2,842 thinking blocks across 53 transcripts,
+  every one empty. `display` controls visibility only; thinking happens and is
+  billed identically, so this costs nothing. The raw chain of thought is never
+  returned by any model — a summary is the ceiling. Override for one run with
+  `aello run <name> -- --thinking-display omitted`.
 - The README links the live docs site and carries a docs badge.
 - **`docs/upgrading.md`** (`aello docs upgrading`) — the page to point an
   environment at the first time it meets 0.2: what migrates itself, the one case
@@ -51,6 +60,11 @@
   only when the key is absent, so a value you chose is left alone. Expect
   contextdb to grow: transcripts are 1.3 MB at the median and tens of MB at the
   tail.
+
+  The copy also opts out of Windows' 260-character `MAX_PATH` (`\?\` prefix).
+  The encoded-cwd directory repeats the whole project path, so a deep project
+  pushes the transcript past the limit and the copy fails — measured at 325
+  chars, where the archive quietly degraded back to a pointer.
 
   The same audit confirmed **PostCompact is dormant, not broken** — it fires only
   on compaction, which a 1M-context session ended with `/clear` never reaches

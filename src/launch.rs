@@ -36,6 +36,25 @@ fn claude_exe() -> std::ffi::OsString {
     std::ffi::OsString::from("claude")
 }
 
+/// Ask Claude Code for a readable summary of each turn's reasoning.
+///
+/// Without it the API's default is `omitted`: the response still carries
+/// `thinking` blocks, but their text is an empty string and only an opaque
+/// signature survives. That is what lands in the transcript, so contextdb
+/// archived a complete record of what was *done* and nothing of what was
+/// *thought* — measured 2026-08-03 across 53 transcripts and 2,842 thinking
+/// blocks, every one empty.
+///
+/// `display` controls visibility only — thinking happens and is billed
+/// identically either way, so this costs nothing. The raw chain of thought is
+/// never returned on any model; a summary is the most that exists.
+///
+/// Unconditional for the same reason the voice is: it applies to every env and
+/// there is no per-blueprint reason to differ. `aello run <name> -- \
+/// --thinking-display omitted` turns it off for one run, since user extras are
+/// appended after this.
+const THINKING_DISPLAY: &[&str] = &["--thinking-display", "summarized"];
+
 pub fn launch(
     env_dir: &Path,
     name: &str,
@@ -73,6 +92,8 @@ pub fn launch(
     if let Some(p) = prompt {
         c.args(["-p", p]);
     }
+    c.args(THINKING_DISPLAY);
+    // User `--` extras go last so any of them override what aello chose above.
     c.args(extra);
 
     let status = c
@@ -91,5 +112,15 @@ mod tests {
             git_identity("coder"),
             ("coder".to_string(), "coder@aello.local".to_string())
         );
+    }
+
+    /// `summarized` is the only value that puts reasoning text in the response —
+    /// the API's default (`omitted`) ships thinking blocks whose text is empty,
+    /// which is what left contextdb with no record of reasoning at all. A typo
+    /// here fails nothing at runtime: Claude Code would reject the value, or
+    /// worse accept `omitted` and archive empty blocks exactly as before.
+    #[test]
+    fn thinking_display_asks_for_summaries() {
+        assert_eq!(THINKING_DISPLAY, &["--thinking-display", "summarized"]);
     }
 }

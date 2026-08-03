@@ -975,6 +975,10 @@ mod tests {
         assert!(s.contains("transcript_archived"), "the record must say whether the copy landed");
         // Streamed, not read into memory — these run to tens of MB at session exit.
         assert!(s.contains("src.read("), "the copy must stream rather than slurp");
+        // Windows MAX_PATH: the encoded-cwd directory repeats the whole project
+        // path, so a deep project pushes the transcript past 260 chars and the
+        // copy silently degrades back to a pointer. Measured at 325 chars.
+        assert!(s.contains(r"\\\\?\\"), "the copy must opt out of Windows MAX_PATH");
         // The handoff note is the part that exists nowhere else; a failed copy
         // must not take it down with it.
         assert!(
