@@ -88,6 +88,12 @@ Records written before the transcript was *copied* stored only its path, and Cla
 
 Two things changed: SessionEnd now copies the transcript next to the record (`<ts>_<session>_transcript.jsonl`, named in the record's `transcript_archived` field), and placement sets `cleanupPeriodDays` to 365. The retention is only filled in when the key is **absent**, so if you deliberately keep it short, that stands — and old records whose transcript is already gone cannot be recovered.
 
+## A transcript wasn't archived (`transcript_archived` is empty)
+
+The record kept the original path but the copy didn't happen. On Windows the usual cause is path length: Claude Code stores transcripts under `<project>/.claude-env-<name>/projects/<encoded-cwd>/`, and the encoded cwd repeats the whole project path — so a deeply nested project can push it past the 260-character `MAX_PATH` limit, which is enforced unless long paths are enabled.
+
+aello opts out of that limit, so a current build handles it. If you see it on an older build, either move the project somewhere shallower or enable long paths (`LongPathsEnabled`). The same limit is why PowerShell can't traverse those directories either.
+
 ## An env has no memory of a previous session
 
 Two separate things get confused here:

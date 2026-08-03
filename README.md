@@ -206,6 +206,8 @@ For a maintainer or contributor, commits made through a blueprint are authored a
 
 Your blueprints, login token, and transcript folder live in a `config.toml` in your OS's usual config location. The token is stored in plain text on your own machine — regenerate it once a year with `aello login`.
 
+**The transcript folder grows.** When a session ends, aello archives it there — the `/handoff` note plus a full copy of the transcript, including every tool call and result and a summary of the agent's reasoning. Transcripts run about 1.3 MB each and occasionally tens of MB, so expect gigabytes over time. Point it somewhere roomy with `C` in the TUI, or prune it yourself; nothing else reads it. Details in [`docs/concepts.md`](docs/concepts.md).
+
 ## Self-update
 
 ```sh
