@@ -85,7 +85,7 @@ NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if IS_WIN else {}
 # comparing it against the value here is how a vendored copy learns it has
 # fallen behind. Station-only changes leave it alone: a version that moves for
 # reasons the hook never executes trains everyone to ignore the warning.
-HOOK_VERSION = 6
+HOOK_VERSION = 7
 
 MAX_CHARS = int(os.environ.get("REVOICED_MAX_CHARS", "1200"))
 KEEP = int(os.environ.get("REVOICED_HISTORY", "200"))
@@ -513,13 +513,21 @@ def last_assistant_text(transcript: Path) -> str:
 # skill text a command expands into. A prompt shown back to you has to be what
 # you wrote, or the pair is worse than no pair at all.
 NOISE = re.compile(
-    r"(?s)<(system-reminder|local-command-stdout|command-message|command-args)>"
+    r"(?s)<(system-reminder|local-command-stdout|command-message)>"
     r".*?</\1>|<\1\s*/>"
 )
 # A slash command reaches the transcript as its own little document. The name is
 # the ask - "/handoff" is a thing you asked for - so it is kept and the wrapper
 # around it is not.
+#
+# The arguments are kept too, and that is not a detail: for "/note <the whole
+# message>" the arguments ARE the prompt, and the first version of this dropped
+# them as wrapper noise. A 272-character note recorded as "/note". A bare name
+# is worse than recording nothing, because it reads as complete rather than as
+# truncated - and it is not one command's problem: "/loop 5m /foo" recorded as
+# "/loop". Found by TechnicalDirector, against a real transcript.
 COMMAND = re.compile(r"(?s)<command-name>\s*(.*?)\s*</command-name>")
+ARGS = re.compile(r"(?s)<command-args>\s*(.*?)\s*</command-args>")
 # Written by the harness where you pressed escape, not typed by you. Dropping it
 # loses nothing: the message you interrupted it with is the next one along, and
 # that is kept.
@@ -571,7 +579,11 @@ def user_prompts(transcript: Path, answer: str = "") -> list:
         if not text:
             continue      # a tool result: content is blocks, none of them text
         named = COMMAND.search(text)
-        text = named.group(1) if named else NOISE.sub("", text)
+        if named:
+            args = ARGS.search(text)
+            text = (named.group(1) + " " + (args.group(1) if args else "")).strip()
+        else:
+            text = NOISE.sub("", text)
         text = text.strip()
         if not text or INTERRUPT.match(text):
             continue

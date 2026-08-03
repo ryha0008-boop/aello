@@ -3,6 +3,13 @@
 ## [Unreleased]
 
 ### Changed
+- **Voice hook re-vendored at `HOOK_VERSION = 7`.** Upstream's prompt capture
+  treated `<command-args>` as wrapper noise and kept only the command name, so a
+  slash command that takes arguments recorded as a bare name — `/note` for a turn
+  whose arguments held 272 characters of what the user actually wrote, `/loop`
+  for `/loop 5m /foo`. Reported from here after running upstream's own
+  `user_prompts()` against a live transcript from a vendored copy; fixed upstream
+  in `6f7a14d` and vendored at 7. Only `speak.py` moved.
 - **Voice hook re-vendored at `HOOK_VERSION = 6`.** Upstream `revoiced` now
   records what you asked alongside what was answered, so a turn reads as a pair
   in its history — taken from the transcript the hook already opens to find the
