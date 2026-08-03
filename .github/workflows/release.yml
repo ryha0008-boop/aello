@@ -10,7 +10,11 @@ name: release
 #      `install.sh` and every already-installed binary hard-code that download
 #      URL, so it has to keep working forever.
 #
-# Bump minor/major by hand in Cargo.toml for big updates — patch is automatic.
+# Patch is automatic; bump minor/major by hand in Cargo.toml for big updates.
+# The bump only happens when the version in Cargo.toml has ALREADY been released
+# (a `vX.Y.Z` tag exists). A version a human set by hand is published exactly as
+# written — otherwise a deliberate 0.2.0 would ship as 0.2.1, since a patch bump
+# can only ever produce X.Y.(Z+1) and the intended version would never exist.
 # The bump commit is pushed with GITHUB_TOKEN, which does NOT re-trigger
 # workflows, so there is no infinite loop.
 on:
@@ -23,7 +27,7 @@ permissions:
 
 jobs:
   bump:
-    name: bump patch version
+    name: resolve version
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.bump.outputs.version }}
@@ -32,21 +36,36 @@ jobs:
       - uses: actions/checkout@v5
         with:
           ref: main
-      - name: bump patch in Cargo.toml
+          # Tags decide whether this version was already released, so they have
+          # to be present — a shallow checkout without them would look like
+          # "nothing is released yet" and republish the current version forever.
+          fetch-depth: 0
+          fetch-tags: true
+      - name: resolve the version to release
         id: bump
         run: |
           cur=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
-          IFS=. read -r MA MI PA <<< "$cur"
-          new="$MA.$MI.$((PA + 1))"
-          # Replace only the first (package) version line — dep versions are not at column 0.
-          sed -i -E "0,/^version = .*/s//version = \"$new\"/" Cargo.toml
+          if git rev-parse -q --verify "refs/tags/v$cur" >/dev/null; then
+            # Already released → this is an ordinary push, so patch-bump it.
+            IFS=. read -r MA MI PA <<< "$cur"
+            new="$MA.$MI.$((PA + 1))"
+            # Replace only the first (package) version line — dep versions are not at column 0.
+            sed -i -E "0,/^version = .*/s//version = \"$new\"/" Cargo.toml
+            echo "bumped $cur -> $new"
+            git config user.name  "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git commit -am "release: v$new [skip ci]"
+            git push origin main
+          else
+            # A human set this version by hand (a minor/major bump). Ship it
+            # unchanged: a patch bump can only ever produce X.Y.(Z+1), so
+            # bumping here would make a deliberate 0.2.0 come out as 0.2.1 and
+            # the intended version would never exist as a tag.
+            new="$cur"
+            echo "releasing $new as set in Cargo.toml (no tag v$new yet)"
+          fi
           echo "version=$new" >> "$GITHUB_OUTPUT"
-          echo "bumped $cur -> $new"
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git commit -am "release: v$new [skip ci]"
-          git push origin main
-          # Tag the exact bump commit, not "whatever main points at later".
+          # Tag the exact commit we are releasing, not "whatever main points at later".
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
   build:
