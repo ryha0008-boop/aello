@@ -31,6 +31,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 import uuid
@@ -39,9 +40,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import duck as ducking
 
-# focus and notify are optional siblings. speak.py gets copied places - aello
+# duck, focus and notify are optional siblings. speak.py gets copied places - aello
 # vendors it into an env dir - and a partial copy must still speak rather than
 # ImportError on every response. Absent, they degrade to exactly what they
 # already return off Windows: no window, no pid, no toast. Every caller handles
@@ -54,6 +54,19 @@ import duck as ducking
 # the hook executes. MISSING is what makes that visible: it is recorded on every
 # turn and printed by --status.
 MISSING = []
+# duck was the one imported unguarded, which made it the one that could take
+# everything down: a four-file vendor raised ImportError at module scope, before
+# hook() existed to swallow it and before --hook-version could answer - so the
+# env fell totally silent and all three diagnostics built for exactly this were
+# dead too. Absent, ducking is simply not done, which is what it already does
+# off Windows.
+try:
+    import duck as ducking
+except ImportError:
+    MISSING.append("duck")
+    ducking = SimpleNamespace(duck=lambda *a, **k: False,
+                              restore=lambda *a, **k: None,
+                              recover=lambda *a, **k: None)
 try:
     import focus as focusing
 except ImportError:
@@ -85,30 +98,48 @@ NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if IS_WIN else {}
 # comparing it against the value here is how a vendored copy learns it has
 # fallen behind. Station-only changes leave it alone: a version that moves for
 # reasons the hook never executes trains everyone to ignore the warning.
-HOOK_VERSION = 10
+HOOK_VERSION = 11
 
-MAX_CHARS = int(os.environ.get("REVOICED_MAX_CHARS", "1200"))
-KEEP = int(os.environ.get("REVOICED_HISTORY", "1000"))
+
+def _num(name: str, default, cast=int):
+    """An env var that is set but empty must not kill the hook.
+
+    `int(os.environ.get(NAME, "1200"))` applies its default only to an *absent*
+    key: `REVOICED_PLAY_MAX=""` in a settings.json env block yields `''` and
+    raises at module scope - before hook() exists to swallow it, and taking
+    serve.py's `import speak` down with it. Unguardable from outside, and it
+    prints a traceback into the user's session on every response, which is the
+    one thing this file must never do. Anything unparseable falls back rather
+    than raising, for the same reason.
+    """
+    try:
+        return cast(os.environ.get(name, "").strip() or default)
+    except (TypeError, ValueError):
+        return cast(default)
+
+
+MAX_CHARS = _num("REVOICED_MAX_CHARS", 1200)
+KEEP = _num("REVOICED_HISTORY", 1000)
 # History records what you asked as well as what was answered, so a turn reads
 # as a pair. Off with REVOICED_PROMPTS=0, which stops it being captured at all
 # rather than merely hiding it - what you typed is the one thing here that was
 # never the machine's to keep. The cap is per turn, and generous: a prompt is
 # read on screen, not spoken, so there is no MAX_CHARS-style budget to respect,
-# only the 200-line file. A pasted log is what it guards against.
+# only the trimmed file itself. A pasted log is what it guards against.
 PROMPTS = os.environ.get("REVOICED_PROMPTS", "1") != "0"
-PROMPT_MAX = int(os.environ.get("REVOICED_PROMPT_MAX", "4000"))
+PROMPT_MAX = _num("REVOICED_PROMPT_MAX", 4000)
 ENFORCE = os.environ.get("REVOICED_ENFORCE", "1") != "0"
-LEASE_TTL = float(os.environ.get("REVOICED_LEASE_TTL", "43200"))  # 12h
+LEASE_TTL = _num("REVOICED_LEASE_TTL", 43200, float)  # 12h
 # How long a lease is believed on its own word, before its terminal has to
 # still be on screen for it to count as running. Long enough that an agent
 # thinking hard is never called dead; short enough that a window you closed
 # stops claiming to be running while you are still looking at the page.
-LEASE_GRACE = float(os.environ.get("REVOICED_LEASE_GRACE", "300"))  # 5min
+LEASE_GRACE = _num("REVOICED_LEASE_GRACE", 300, float)  # 5min
 # The longest a single line may hold the speaker lock. That lock is machine-wide
 # and heartbeated for exactly as long as the player lives, so a player that
 # never exits silences every env on the box and nothing else ever gives up.
 # 0 turns the cap off. A full-length line is well under a minute of speech.
-PLAY_MAX = float(os.environ.get("REVOICED_PLAY_MAX", "300"))  # 5min
+PLAY_MAX = _num("REVOICED_PLAY_MAX", 300, float)  # 5min
 
 # Used when the pool is empty, so a fresh install still speaks.
 DEFAULT_PRESET = {
@@ -145,34 +176,76 @@ AUDIO = DATA / "audio"
 # --- small file lock -------------------------------------------------------
 # Holders touch the lock while they work; anything that stops being touched is
 # assumed dead and stolen, so a killed worker can't wedge the queue.
+_HELD = threading.local()
 
 @contextmanager
 def lock(name: str, stale: float = 5.0, timeout: float = 600.0):
+    """A lock file that knows who owns it.
+
+    It used to be empty and anonymous, and released with a bare `unlink` of the
+    path. So a holder that ran long enough to be legitimately stolen from went
+    on to delete its *successor's* live lock file on the way out, and a third
+    caller then acquired while the second still believed it held - two
+    concurrent read-modify-writes of state.json, which is the one thing this
+    project's central invariant exists to prevent. No race window needed: the
+    steal is the normal, documented path.
+
+    So the token is written into the file and checked before the unlink, and
+    the steal goes through `os.replace` of a uniquely named file - atomic on
+    Windows and POSIX alike, so of two waiters that both judge a lock stale
+    exactly one can win.
+    """
     path = RUN / f"{name}.lock"
+    token = f"{os.getpid()}-{uuid.uuid4().hex}"
     deadline = time.time() + timeout
     held = False
+    # Which locks *this thread* holds, so write_state can refuse an unlocked
+    # write. Thread-local because the station serves every request on a new one.
+    names = getattr(_HELD, "names", None)
+    if names is None:
+        names = _HELD.names = set()
     while time.time() < deadline:
         try:
             fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, token.encode("utf-8"))
             os.close(fd)
             held = True
             break
         except FileExistsError:
             try:
                 if time.time() - path.stat().st_mtime > stale:
-                    path.unlink()
+                    mine = path.with_name(f"{name}.{token}.steal")
+                    mine.write_text(token, encoding="utf-8")
+                    os.replace(mine, path)
+                    # Whoever's rename landed last owns it, and everyone else
+                    # reads back somebody else's token and keeps waiting.
+                    held = _owns(path, token)
+                    if held:
+                        break
+                    mine.unlink(missing_ok=True)
                     continue
             except OSError:
                 pass
             time.sleep(0.2)
+    if held:
+        names.add(name)
     try:
         yield held
     finally:
         if held:
+            names.discard(name)
             try:
-                path.unlink()
+                if _owns(path, token):
+                    path.unlink()
             except OSError:
                 pass
+
+
+def _owns(path: Path, token: str) -> bool:
+    try:
+        return path.read_text(encoding="utf-8").strip() == token
+    except OSError:
+        return False
 
 
 def touch(name: str) -> None:
@@ -185,10 +258,21 @@ def touch(name: str) -> None:
 # --- state -----------------------------------------------------------------
 
 def read_state() -> dict:
+    # "Absent" and "there but unreadable" are two different answers and used to
+    # be one. A truncated state.json parsed as ValueError, came back as bare
+    # defaults, and the next of the twenty-odd writers persisted those defaults
+    # over the real file - every preset, pin, lease, colour and mute gone, with
+    # no error anywhere. `_intact` is what write_state refuses to overwrite on.
+    s, intact = {}, True
     try:
         s = json.loads(STATE.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        s = {}
+        if not isinstance(s, dict):
+            s, intact = {}, False
+    except OSError:
+        pass                      # no file yet, which is a legitimate empty
+    except ValueError:
+        intact = False            # present and corrupt: defaults are not the truth
+    s["_intact"] = intact
     s.setdefault("global", False)
     s.setdefault("projects", {})
     s.setdefault("presets", [])
@@ -206,9 +290,47 @@ def read_state() -> dict:
 
 
 def write_state(state: dict) -> None:
-    tmp = STATE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
-    tmp.replace(STATE)
+    """Publish state.json, or decline to.
+
+    Three ways this used to lose everything in the file:
+
+    A shared staging path. `STATE.with_suffix(".tmp")` is one name for all 41
+    environments and the station, so two writers overlapping meant one
+    published the other's bytes and the loser's `replace` raised - uncaught all
+    the way out to a traceback in the user's session. It is per-process and
+    unique now.
+
+    No flush. `replace` is atomic with respect to the *name*, not to bytes that
+    are still in the OS cache, so a crash mid-write published a truncated file.
+
+    And a write on top of a file it could not read: see read_state. If what we
+    are holding was reconstructed out of defaults because the real thing was
+    unparseable, writing it is how a corrupt file becomes a lost one.
+    """
+    if not state.pop("_intact", True):
+        return
+    if "state" not in getattr(_HELD, "names", ()):
+        # Every one of the twenty-odd call sites is inside lock("state"), but
+        # lock() yields False on timeout rather than raising and not one site
+        # checked - so a starve turned the project's central invariant off
+        # silently. Refusing here costs one dropped write and cannot corrupt.
+        return
+    tmp = STATE.with_name(f"state.{os.getpid()}-{uuid.uuid4().hex}.tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(state, fh, indent=2, allow_nan=False)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, STATE)
+    except (OSError, ValueError):
+        # allow_nan=False raises on a NaN that reached state some other way:
+        # json.dumps would happily emit a literal NaN, which every browser's
+        # JSON.parse rejects - and the page polls this every two seconds, so
+        # one bad float killed it permanently. Better to drop the write.
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def is_muted(cwd: str, key: str = "") -> bool:
@@ -513,10 +635,12 @@ def last_assistant_text(transcript: Path) -> str:
 # person: reminders, the transcript of a slash command's own output, and the
 # skill text a command expands into. A prompt shown back to you has to be what
 # you wrote, or the pair is worse than no pair at all.
-NOISE = re.compile(
-    r"(?s)<(system-reminder|local-command-stdout|command-message)>"
-    r".*?</\1>|<\1\s*/>"
-)
+# The self-closing arm has to name the tags again rather than reuse \1: in that
+# branch group 1 never participated in the match, so the backreference could not
+# match anything and `<system-reminder/>` sailed through into the recorded
+# prompt as something the user typed - the one thing this is here to stop.
+_NOISE_TAGS = "system-reminder|local-command-stdout|command-message"
+NOISE = re.compile(rf"(?s)<({_NOISE_TAGS})>.*?</\1>|<(?:{_NOISE_TAGS})\s*/>")
 # A slash command reaches the transcript as its own little document. The name is
 # the ask - "/handoff" is a thing you asked for - so it is kept and the wrapper
 # around it is not.
@@ -824,6 +948,28 @@ def read_history() -> list:
 # hits the one utterance actually playing - whoever is queued behind reads the
 # new value when its turn comes and is untouched.
 
+def _sweep_tokens(keep: float = 172800.0) -> None:
+    """Drop session claim files nobody can ever read again.
+
+    One is written per session and removed by nothing, so they accumulate for
+    the life of the machine - 135 were on disk against four live leases. Inert,
+    because `session_token` looks one up by exact uuid and a stale file can
+    never collide with a new session. But a directory that only grows is a leak
+    whoever reads it next has to reason about, and two days is far longer than
+    any session that could still be claimed.
+    """
+    cut = time.time() - keep
+    try:
+        for f in RUN.glob("session-*.job"):
+            try:
+                if f.stat().st_mtime < cut:
+                    f.unlink()
+            except OSError:
+                pass       # in use, or already gone; the next turn tries again
+    except OSError:
+        pass
+
+
 def session_token(session: str) -> str:
     try:
         return (RUN / f"session-{session}.job").read_text(encoding="utf-8").strip()
@@ -883,6 +1029,14 @@ def worker(job_file: Path) -> None:
     spoken = f"{job['project']}. {job['text']}"
     mp3 = AUDIO / f"{job['id']}.mp3"
 
+    # Sample the stop token *before* synthesis, not after. Synthesis is the
+    # slow part - an edge-tts subprocess, or an ElevenLabs request - and every
+    # writer of this token writes a fresh uuid, so a stop or a mute pressed
+    # while it ran used to become this worker's own baseline and compare equal
+    # forever after. With 41 environments some worker is inside that window
+    # most of the time, which is why Stop sometimes did nothing.
+    stop_at_start = stop_token()
+
     # Synthesise before queueing, so waiting responses render in parallel.
     have_audio = synthesize(preset, spoken, mp3)
 
@@ -906,9 +1060,10 @@ def worker(job_file: Path) -> None:
         **({"missing": list(MISSING)} if MISSING else {}),
     })
 
-    stop_at_start = stop_token()
     if session_token(job["session"]) not in ("", job["id"]):
         return
+    if stop_token() != stop_at_start:
+        return                      # stopped while this was being synthesised
 
     duck_file = RUN / "duck.json"
     ducking.recover(duck_file)      # a previous worker may have died mid-duck
@@ -930,11 +1085,21 @@ def worker(job_file: Path) -> None:
         # Read skip only now we hold the lock: anything still queued picks up
         # the current value at its own turn, so a skip never reaches past this.
         skip_at_start = skip_token()
+        # Keep the lock's mtime moving across everything before playback. The
+        # only heartbeat used to be inside the player loop, so from acquisition
+        # until Popen the mtime sat frozen through a state read, ducking's cold
+        # `import comtypes` and a full session enumeration - and the station
+        # calls a duck file with a speaker lock older than 3s abandoned. That
+        # is how a poll came to restore the volume of a worker that was about
+        # to speak, and then delete the record.
+        touch("speaker")
         # Duck first: the player's own session doesn't exist yet, so it is
         # never caught by this and stays at full volume.
         level = float(read_state().get("duck", 15)) / 100.0
         playing = RUN / "playing.json"
+        touch("speaker")
         ducking.duck(level, duck_file)
+        touch("speaker")
         # Everything from here to the restore is inside the try, including the
         # bookkeeping. Anything that throws between lowering the volume and the
         # finally leaves every other application at 15% until something else
@@ -959,6 +1124,7 @@ def worker(job_file: Path) -> None:
             # agent works, so a pop-up drawn inside it announces nothing.
             notifying.show(job["project"], job["text"],
                            job.get("key") or job["cwd"], job["id"])
+            touch("speaker")
             run_cancellable(cmd, job["id"], job["session"], stop_at_start,
                             skip_at_start)
         finally:
@@ -1063,6 +1229,7 @@ def hook() -> None:
 
     # Claim the session: any worker still speaking for it stands down.
     (RUN / f"session-{session}.job").write_text(job["id"], encoding="utf-8")
+    _sweep_tokens()
 
     job_file = RUN / f"{job['id']}.job"
     job_file.write_text(json.dumps(job), encoding="utf-8")
@@ -1200,4 +1367,15 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        # Fail silent is the rule for the hook and there was nothing enforcing
+        # it at the top: any unhandled error - a corrupt payload, a state file
+        # mid-write, a Windows API refusing - printed a traceback straight into
+        # the user's Claude Code session, on a path that runs after every single
+        # response. A hook that says nothing is the contract; --status and the
+        # MISSING field are where problems are meant to surface.
+        if os.environ.get("REVOICED_DEBUG"):
+            raise
+        sys.exit(0)

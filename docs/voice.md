@@ -42,7 +42,7 @@ The call is deliberately **not** cached behind a marker file. The handler comman
 - `aello voice status` prints the version **aello vendored**.
 - `python <env>/hooks/speak.py --hook-version` prints the version **that env runs**, and prints before any optional import, so even a partial copy answers.
 
-If they disagree, that env is behind and its next `run` refreshes it. Being behind is not always harmless: a copy below 10 lowers other applications' volumes and can fail to put them back, permanently — see [troubleshooting.md](troubleshooting.md). Two unit tests keep the vendored copy honest: one compares the recorded constant against the vendored `speak.py`, and one digests **all five** files — the constant lives in `speak.py` alone, so a re-vendor touching only `duck.py` or `win_audio.ps1` would otherwise slip past. The digest test prints the new value when it fails.
+If they disagree, that env is behind and its next `run` refreshes it. Being behind is not always harmless: a copy below 11 lowers other applications' volumes and can fail to put them back, permanently — see [troubleshooting.md](troubleshooting.md). Two unit tests keep the vendored copy honest: one compares the recorded constant against the vendored `speak.py`, and one digests **all five** files — the constant lives in `speak.py` alone, so a re-vendor touching only `duck.py` or `win_audio.ps1` would otherwise slip past. The digest test prints the new value when it fails.
 
 ## Shared state, per-env scripts
 

@@ -109,6 +109,40 @@ def _volume(session):
         return session._ctl.QueryInterface(ISimpleAudioVolume)
 
 
+def _ident(session) -> str:
+    """What the record is keyed on: a session, never a process.
+
+    One pid owns several sessions - a browser or a game runs a media stream and
+    a notification stream under the same process, and `GetAllSessions()` yields
+    one control for each. Keyed on the pid, the second reading overwrote the
+    first while *both* were lowered, so the restore raised one and left the
+    other down with its record already deleted: 1.0 to 0.15 to 0.0225 to the
+    0.01 floor in three turns, permanently. `InstanceIdentifier` carries a
+    per-instance index (`...|1%b13596`) and separates them.
+
+    The pid is what a process outliving its session is checked with, so it is
+    kept alongside rather than instead.
+    """
+    try:
+        return session.InstanceIdentifier
+    except Exception:
+        return f"pid:{session.Process.pid}"
+
+
+def _entry(key: str, value) -> dict:
+    """One saved reading, tolerating the pid-keyed records written before.
+
+    A copy still on HOOK_VERSION 10 may have left a `{pid: float}` record on
+    disk, and the machine has 41 of them. The key was the pid then, so it is
+    read back as one - dropping these would leave exactly the stuck-quiet
+    application this whole file exists to prevent.
+    """
+    if isinstance(value, dict):
+        return {"vol": float(value.get("vol", 1.0)),
+                "pid": int(value.get("pid") or 0)}
+    return {"vol": float(value), "pid": int(key) if key.isdigit() else 0}
+
+
 def duck(level: float, store: Path) -> bool:
     """Scale other apps to `level` (0.0 mutes, 1.0 disables ducking)."""
     if os.name != "nt" or level >= 1.0:
@@ -142,8 +176,9 @@ def _duck(level: float, store: Path) -> bool:
     # retried on every cycle until its session is back or its process is gone.
     pending = {}
     try:
-        pending = json.loads(store.read_text(encoding="utf-8")).get("volumes", {})
-    except (OSError, ValueError, AttributeError):
+        left = json.loads(store.read_text(encoding="utf-8")).get("volumes", {})
+        pending = {k: _entry(k, v) for k, v in left.items()}
+    except (OSError, ValueError, AttributeError, TypeError):
         pass
 
     try:
@@ -160,7 +195,7 @@ def _duck(level: float, store: Path) -> bool:
             current = vol.GetMasterVolume()
             if current <= 0.0:
                 continue                   # already silent, leave it alone
-            saved[str(s.Process.pid)] = current
+            saved[_ident(s)] = {"vol": current, "pid": s.Process.pid}
             # Never land on exactly zero unless that is what was asked for.
             # A session at 0.0 is skipped by the guard above for good, so it
             # can never be saved and never be put back - it is the one value
@@ -171,9 +206,9 @@ def _duck(level: float, store: Path) -> bool:
             continue
     if not saved:
         return False
-    # A pending reading wins over a live one for the same process: if its
-    # session came back between the retry and here, what is on the device is
-    # the volume this left it at, and the file holds what it was before that.
+    # A pending reading wins over a live one for the same session: if it came
+    # back between the retry and here, what is on the device is the volume this
+    # left it at, and the file holds what it was before that.
     saved = {**saved, **pending}
     # Write the record first, then lower - the order the docstring has always
     # claimed and the code never had. Windows keeps a per-application volume
@@ -196,8 +231,17 @@ def _duck(level: float, store: Path) -> bool:
 def restore(store: Path) -> None:
     if os.name != "nt":
         return
-    with _lock(store):
-        _restore(store)                    # unlocked only if the lock is wedged
+    with _lock(store) as held:
+        # Contended is not wedged. Falling through on a mere 5s timeout let the
+        # station's poll restore every session and delete the record while a
+        # worker was still inside the lowering loop - the record gone, the
+        # volumes on their way down, and nothing left that knew what normal
+        # was. `_lock` already steals a genuinely dead lock after LOCK_STALE,
+        # so a timeout here means somebody live is holding it: leave it to
+        # them. The station retries in two seconds and every later duck retries
+        # leftovers anyway, so nothing is lost by waiting.
+        if held:
+            _restore(store)
 
 
 def _restore(store: Path) -> None:
@@ -205,7 +249,7 @@ def _restore(store: Path) -> None:
         data = json.loads(store.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return
-    saved = data.get("volumes", {})
+    saved = {k: _entry(k, v) for k, v in data.get("volumes", {}).items()}
     try:
         sessions = _sessions()
     except Exception:
@@ -213,13 +257,17 @@ def _restore(store: Path) -> None:
     for s in sessions:
         if not s.Process:
             continue
-        want = saved.pop(str(s.Process.pid), None)
+        key = _ident(s)
+        want = saved.pop(key, None)
+        if want is None:                   # a record from before sessions were the key
+            key = str(s.Process.pid)
+            want = saved.pop(key, None)
         if want is None:
             continue
         try:
-            _volume(s).SetMasterVolume(float(want), None)
+            _volume(s).SetMasterVolume(float(want["vol"]), None)
         except Exception:
-            saved[str(s.Process.pid)] = want
+            saved[key] = want
     # Delete only what was actually put back. An application whose audio session
     # has gone quiet is not in the enumeration at all - a dictation app, a chat
     # notification, anything that opens the device per sound - and dropping the
@@ -228,8 +276,7 @@ def _restore(store: Path) -> None:
     # duck, recover() and every station poll try it again, and it lands the
     # moment that application next has a session. Once its process is gone the
     # entry can never match anything again, so it is forgotten.
-    saved = {pid: v for pid, v in saved.items()
-             if str(pid).isdigit() and _alive(int(pid))}
+    saved = {k: v for k, v in saved.items() if _alive(v["pid"])}
     if not saved:
         store.unlink(missing_ok=True)
         return

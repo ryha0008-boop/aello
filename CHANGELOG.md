@@ -3,6 +3,30 @@
 ## [Unreleased]
 
 ### Fixed
+- **The ducking fix at 10 was incomplete, and 10 is still damaging.** The
+  vendored voice hooks move to `HOOK_VERSION` 11. Upstream keyed its record of
+  the pre-duck volume on the process id, and **one process owns several audio
+  sessions** — a browser runs a media stream and a notification stream under one
+  pid, and `GetAllSessions()` yields a control for each. The second reading
+  overwrote the first while both were being lowered, so the restore raised one
+  and left the other down with its record already deleted: the same 1.0 → 0.15 →
+  0.0225 → floor ratchet as at 8, just needing two sessions to trigger. Measured
+  on this machine *after* the 41-env re-vendor at 10: five applications at
+  exactly 0.15 from one duck. Records are keyed on `InstanceIdentifier` now,
+  with the pid kept for the liveness check, and version 11 still honours the
+  pid-keyed records that copies on 10 left behind rather than stranding the
+  applications they describe. `restore()` also no longer runs unlocked when the
+  lock is merely contended, which let the station's poll delete a record while a
+  worker was still inside the lowering loop.
+
+  Also at 11: `import duck` in `speak.py` is guarded like `focus` and `notify`,
+  so a partial vendor reports through `MISSING` instead of raising at module
+  scope — that failure killed `--hook-version` and `--status` too, leaving an
+  env silent with every diagnostic built for it dead as well. The lock file
+  carries an owner token (a holder that was legitimately stolen from used to
+  delete its successor's live lock), `state.tmp` is per-process, and a
+  `state.json` that cannot be parsed is never written over.
+
 - **Ducked audio comes back up.** The vendored voice hooks move from
   `HOOK_VERSION` 8 to 10, which carries an upstream fix for a bug that
   permanently lowered the machine's per-application volumes. `duck.py` deleted

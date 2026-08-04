@@ -117,9 +117,11 @@ Quick first checks: `aello voice status` (mute state and `HOOK_VERSION`), and wh
 
 ## Applications got quiet and stayed quiet
 
-The hook lowers other applications while it speaks and puts them back afterwards. Before `HOOK_VERSION` 10 it could lose its record of what "back" was and lower them again on the next line, compounding — 0.15, then 0.0225, down to the floor. Windows keeps per-application volume in the registry against the executable's path, so this survives the process and the reboot; it does not clear itself.
+The hook lowers other applications while it speaks and puts them back afterwards. Before `HOOK_VERSION` 11 it could lose its record of what "back" was and lower them again on the next line, compounding — 0.15, then 0.0225, down to the floor. Windows keeps per-application volume in the registry against the executable's path, so this survives the process and the reboot; it does not clear itself.
 
-Run `aello voice status` and check the version. Below 10, `aello run` the env once to refresh its copy — the fix is upstream and arrives with the hook files.
+It lost the record two different ways. At 8 it deleted the record whenever it could not enumerate audio sessions. At 10 it kept the record but keyed it on the process id — and **one process owns several audio sessions**, so a browser's media and notification streams shared one slot, the second overwrote the first while both were lowered, and the restore raised one and left the other down with nothing left to restore it from. 10 is therefore still damaging, not merely stale.
+
+Run `aello voice status` and check the version. Below 11, `aello run` the env once to refresh its copy — the fix is upstream and arrives with the hook files.
 
 Then repair what was already done, and **do not trust a live-session check for this**. Enumerating audio sessions reads only the endpoint currently in use, while the stored volume is per endpoint: an application can read a healthy 1.0 on your speakers and still be at 0.0225 on your headphones. The values live under `HKCU\Software\Microsoft\Internet Explorer\LowRegistry\Audio\PolicyConfig\PropertyStore\<id>\{GUID}`, value `3` — a `VT_R4` PROPVARIANT with the float at byte offset 8. Setting the ducked ones back to `1.0` is safe. A value of exactly `0` is **not** duck damage — the clamp floor is 0.01 and repeated ducking never reaches zero — so that one is your own mute and should be left alone.
 

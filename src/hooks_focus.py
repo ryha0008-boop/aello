@@ -17,7 +17,13 @@ offer the button - same shape as duck.py.
 
 import os
 import re
+import threading
 import time
+
+# The foreground and the clipboard are one per machine, and serve.py answers
+# every request on a new thread. Anything that takes either one goes through
+# this.
+_INPUT_LOCK = threading.RLock()
 
 IS_WIN = os.name == "nt"
 
@@ -700,6 +706,30 @@ def _clip_get() -> str:
         u32.CloseClipboard()
 
 
+def _clip_had_anything() -> bool:
+    """Was there *something* on the clipboard, whatever its flavour?
+
+    `_clip_get` returns "" for four different states - refused, no text format,
+    lock failed, genuinely empty - and `if saved:` read all four as "nothing to
+    put back". So the happy path lost data: take a screenshot with Win+Shift+S,
+    press Send, and the image is gone with our line sitting in its place. This
+    is what tells the two apart; it needs no open handle.
+    """
+    try:
+        return int(u32.CountClipboardFormats()) > 0
+    except Exception:
+        return False
+
+
+def _clip_clear() -> None:
+    if not u32.OpenClipboard(None):
+        return
+    try:
+        u32.EmptyClipboard()
+    finally:
+        u32.CloseClipboard()
+
+
 def _clip_set(text: str) -> bool:
     buf = ctypes.create_unicode_buffer(text)
     h = k32.GlobalAlloc(GMEM_MOVEABLE, ctypes.sizeof(buf))
@@ -741,22 +771,50 @@ def send_text(info: dict, project: str, text: str) -> bool:
     line = " ".join(text.split())
     if not line:
         return False
-    if not raise_window(info, project):
-        return False
 
-    saved = _clip_get()
-    if not _clip_set(line):
-        return False
-    try:
-        time.sleep(0.15)      # the terminal needs a moment before it reads input
-        if not _keys(_key(VK_CONTROL), _key(VK_V),
-                     _key(VK_V, up=True), _key(VK_CONTROL, up=True)):
+    # One sender at a time. The clipboard and the foreground are machine-wide,
+    # and the station answers every request on its own thread - two Sends
+    # crossing meant each restored whatever the other had staged.
+    with _INPUT_LOCK:
+        hwnd = _resolve(info, project)
+        if not hwnd:
             return False
-        # Enter goes in its own call: the prompt can still be drawing the
-        # pasted text, and a submit that races that loses characters.
-        time.sleep(0.25)
-        return _keys(_key(VK_RETURN), _key(VK_RETURN, up=True))
-    finally:
-        time.sleep(0.15)      # paste has to read it before it is taken away
-        if saved:
-            _clip_set(saved)
+
+        # Stage the clipboard *before* taking the foreground, so the only thing
+        # between the check and the keys is the deliberate sleep. Both calls
+        # block on whoever owns the clipboard, which made the old gap unbounded
+        # rather than the 400ms it looked like.
+        had = _clip_had_anything()
+        saved = _clip_get()
+        if not _clip_set(line):
+            return False
+        try:
+            if not raise_hwnd(hwnd):
+                return False
+            time.sleep(0.15)   # the terminal needs a moment before it reads input
+            # Re-check before *every* batch, which zoom_out has always done and
+            # this - the one function that sends unrecoverable text into a
+            # prompt that submits on Enter - did not. Windows applies no
+            # foreground lock to a user-initiated activation, so a click, an
+            # alt-tab, a UAC prompt or another /api/focus on another thread all
+            # move it out from under us between the check and the paste.
+            if u32.GetForegroundWindow() != hwnd:
+                return False
+            if not _keys(_key(VK_CONTROL), _key(VK_V),
+                         _key(VK_V, up=True), _key(VK_CONTROL, up=True)):
+                return False
+            # Enter goes in its own call: the prompt can still be drawing the
+            # pasted text, and a submit that races that loses characters.
+            time.sleep(0.25)
+            if u32.GetForegroundWindow() != hwnd:
+                return False   # pasted but not submitted; the text is recoverable
+            return _keys(_key(VK_RETURN), _key(VK_RETURN, up=True))
+        finally:
+            time.sleep(0.15)   # paste has to read it before it is taken away
+            if saved:
+                _clip_set(saved)
+            elif had:
+                # Something was there that we could not carry - an image, a file
+                # selection, a spreadsheet range. Leaving our line behind would
+                # be a silent substitution; an empty clipboard is at least true.
+                _clip_clear()
