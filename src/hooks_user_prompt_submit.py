@@ -1,4 +1,8 @@
-"""UserPromptSubmit hook — the four response rules, injected on every prompt.
+r"""UserPromptSubmit hook — the four response rules, injected on every prompt.
+
+Raw docstring on purpose: it quotes `extract_tldr`'s regex below, and an
+unrecognised escape in a plain string is a SyntaxWarning on stderr — once per
+prompt, in every env, from a file whose entire job is to be quiet.
 
 Style decays. An instruction delivered once at session start is thoroughly
 buried by turn eighty, which is exactly when padding and reflexive agreement
