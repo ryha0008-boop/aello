@@ -54,6 +54,8 @@ The voice hook is vendored from the [`revoiced`](voice.md) project as **five fil
 
 Step 4 is not housekeeping you can defer. A stale copy is not merely missing a feature — at `HOOK_VERSION` 8 **and again at 10** it permanently lowered the machine's per-application volumes, by two different mechanisms, and every env still on either kept doing so. Treat a re-vendor as a rollout: install first (a stale binary rewrites the bundled files on the next `place` and undoes a backfill one env at a time), then push the five files into every placed env, then **ask each copy its own version** rather than trusting that the copy landed.
 
+And when the bump is a fix for damage, **sweep again a day later**. The 10 rollout was verified 41/41 and the damage came back within hours, because the sweep proved only that the copies had changed — not that the new copy was harmless. 11 fixed what 10 had missed; the second sweep is what tells you which of those you are in.
+
 Two tests guard this, and they guard different things. The first compares the recorded constant against the vendored `speak.py`. The second digests **all five** files (CRLF-normalised, so a Windows checkout and Linux CI agree) — because `HOOK_VERSION` lives in `speak.py` alone, a re-vendor touching only `duck.py` or `win_audio.ps1` would otherwise slip past. That second test has already caught three bumps — including 8 → 10, where only `duck.py` and `focus.py` had moved in a way that mattered, so the constant test alone would have passed a stale vendor.
 
 Ask a *placed copy* what it has:
