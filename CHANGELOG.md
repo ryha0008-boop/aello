@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+### Fixed
+- **Ducked audio comes back up.** The vendored voice hooks move from
+  `HOOK_VERSION` 8 to 10, which carries an upstream fix for a bug that
+  permanently lowered the machine's per-application volumes. `duck.py` deleted
+  its record of the original volumes whenever it could not enumerate audio
+  sessions — which was every poll from a second thread, since comtypes
+  initialises COM per thread — so the next duck read an already-lowered volume
+  as normal and lowered it again. Windows keeps per-application volume in the
+  registry against the executable's path, so this outlived the session, the
+  process and the reboot: applications ended up at 0.15, then 0.0225, then the
+  0.01 floor, with nothing on disk recording what normal had been.
+
+  Upstream also takes a lock on the record, writes it *before* lowering
+  anything, and keeps entries it could not restore instead of dropping the whole
+  store. Measured here before the re-vendor: one application sitting at 0.15
+  with no `duck.json` beside it. Existing envs adopt the fix on their next
+  `aello run` — until then their copy is still the one doing the damage.
+
+  Also in the bump: a `spoken` lifetime counter that revoiced keeps in the
+  shared `state.json` (aello's keys are untouched), and a `REVOICED_HISTORY`
+  default of 1000 rather than 200, so the shared data directory grows to roughly
+  92 MB of audio instead of 18.5 MB.
+
 ### Added
 - **No plans, anywhere.** The per-turn `UserPromptSubmit` hook gains a fourth
   rule — never present a plan for approval, never use plan mode; ask a short

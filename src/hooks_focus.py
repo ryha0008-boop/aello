@@ -146,6 +146,12 @@ def _class_of(hwnd: int) -> str:
 _TERMINALS = ("CASCADIA_HOSTING_WINDOW_CLASS", "ConsoleWindowClass")
 # File Explorer: a folder window, then the tree view of one.
 _FOLDERS = ("CabinetWClass", "ExploreWClass")
+# VS Code is Electron, and so is every Chromium browser and half the chat apps
+# on the machine - the class alone would match all of them. The title is what
+# separates it: VS Code always ends its title with the product name, and the
+# Insiders build appends to that rather than replacing it.
+_EDITORS = ("Chrome_WidgetWin_1",)
+_EDITOR_MARK = "visual studio code"
 
 
 def _windows_in(classes: tuple) -> list:
@@ -310,8 +316,8 @@ def _frame_padding(hwnd: int) -> tuple:
     """How far a window's rect reaches past what you can actually see.
 
     A window carries an invisible resize border several pixels wide, so one
-    moved to exactly half the screen sits visibly short of the middle with a
-    gap down the join. Snapping accounts for it; SetWindowPos does not, so the
+    moved to an exact fraction of the screen sits visibly short of the join,
+    with a gap down it. Snapping accounts for it; SetWindowPos does not, so the
     difference between the drawn frame and the window rect is added back. A
     call that fails gives no correction rather than a wrong one.
     """
@@ -325,13 +331,15 @@ def _frame_padding(hwnd: int) -> tuple:
             win.right - frame.right, win.bottom - frame.bottom)
 
 
-def half_right(hwnd: int) -> bool:
-    """Put a window on the right half of its screen, full height.
+def right_third(hwnd: int) -> bool:
+    """Put a window on the right third of its screen, full height.
 
-    What Win+Right does by hand. Windows offers no "snap this" call, so the
-    rectangle is worked out and set directly. Placed without activating: the
-    window wt just opened already has the foreground, and taking it a second
-    time from a background process is what Windows refuses anyway.
+    A third rather than the half Win+Right gives: the station is the thing being
+    watched and a terminal only has to be readable beside it. Windows offers no
+    "snap this" call for either, so the rectangle is worked out and set
+    directly. Placed without activating: the window wt just opened already has
+    the foreground, and taking it a second time from a background process is
+    what Windows refuses anyway.
     """
     if not IS_WIN or not hwnd:
         return False
@@ -340,7 +348,10 @@ def half_right(hwnd: int) -> bool:
             u32.ShowWindow(hwnd, SW_RESTORE)
         left, top, right, bottom = _work_area(hwnd)
         pl, pt, pr, pb = _frame_padding(hwnd)
-        x = left + (right - left) // 2
+        # Measured off the right edge, not along from the left: rounding a
+        # third has to land the window flush with the screen edge, and
+        # `left + 2 * w // 3` leaves a pixel of desktop showing at the far side.
+        x = right - (right - left) // 3
         return bool(u32.SetWindowPos(
             hwnd, 0, x - pl, top - pt,
             (right - x) + pl + pr, (bottom - top) + pt + pb,
@@ -524,6 +535,83 @@ def raise_folder(before: set, name: str, wait: float = 5.0) -> bool:
         if time.monotonic() >= deadline:
             return False
         time.sleep(0.1)
+
+
+def editor_windows() -> set:
+    """Every VS Code window on the desktop right now, by handle.
+
+    Taken just before opening one, for the same reason `terminal_windows()` is:
+    the window that turns up has to be told from the ones already there.
+    """
+    if not IS_WIN:
+        return set()
+    try:
+        return {h for h in _windows_in(_EDITORS)
+                if _EDITOR_MARK in (_title(h) or "").lower()}
+    except OSError:
+        return set()
+
+
+def new_editor_window(before: set, folder: str, wait: float = 30.0) -> int:
+    """The VS Code window showing `folder`, once it exists. 0 if none does.
+
+    Waits far longer than `new_window` does for a terminal. `code` is a shim
+    that hands off and exits, and a cold start of Electron on this machine is
+    several seconds - a six-second budget returned 0 while the window was still
+    on its way, so the folder opened unplaced and the caller reported failure
+    for something that had worked.
+
+    Matched by title as well as by novelty, because `code <folder>` *reuses* a
+    window already showing that folder rather than opening a second one, in
+    which case nothing new ever appears. VS Code titles a window
+    "<file> - <folder> - Visual Studio Code", so the folder is looked for as one
+    of the ` - ` separated parts and compared exactly: the near-match rule
+    elsewhere would let a window on `work` answer for `structuredwork`.
+    """
+    if not IS_WIN:
+        return 0
+    want = _clean(folder)
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            now = list(editor_windows())
+        except OSError:
+            return 0
+        fresh = [h for h in now if h not in before]
+        named = [h for h in now
+                 if want in {_clean(p) for p in (_title(h) or "").split(" - ")}]
+        hit = ([h for h in fresh if h in named] or named or fresh)
+        if hit:
+            return hit[0]
+        if time.monotonic() >= deadline:
+            return 0
+        time.sleep(0.2)
+
+
+def left_two_thirds(hwnd: int) -> bool:
+    """Put a window on the left two thirds of its screen, full height.
+
+    The other side of `right_third`: an editor filling what a launched terminal
+    leaves. Measured along from the left edge and stopped where the terminal
+    starts - the *same* expression, `right - (right - left) // 3` - so the two
+    always meet exactly, whatever the rounding does on a width that is not
+    divisible by three. Working out two thirds independently is what leaves a
+    seam or an overlap down the join.
+    """
+    if not IS_WIN or not hwnd:
+        return False
+    try:
+        if u32.IsIconic(hwnd) or u32.IsZoomed(hwnd):
+            u32.ShowWindow(hwnd, SW_RESTORE)
+        left, top, right, bottom = _work_area(hwnd)
+        pl, pt, pr, pb = _frame_padding(hwnd)
+        x = right - (right - left) // 3
+        return bool(u32.SetWindowPos(
+            hwnd, 0, left - pl, top - pt,
+            (x - left) + pl + pr, (bottom - top) + pt + pb,
+            SWP_NOZORDER | SWP_NOACTIVATE))
+    except OSError:
+        return False
 
 
 def raise_hwnd(hwnd: int) -> bool:

@@ -85,10 +85,10 @@ NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if IS_WIN else {}
 # comparing it against the value here is how a vendored copy learns it has
 # fallen behind. Station-only changes leave it alone: a version that moves for
 # reasons the hook never executes trains everyone to ignore the warning.
-HOOK_VERSION = 8
+HOOK_VERSION = 10
 
 MAX_CHARS = int(os.environ.get("REVOICED_MAX_CHARS", "1200"))
-KEEP = int(os.environ.get("REVOICED_HISTORY", "200"))
+KEEP = int(os.environ.get("REVOICED_HISTORY", "1000"))
 # History records what you asked as well as what was answered, so a turn reads
 # as a pair. Off with REVOICED_PROMPTS=0, which stops it being captured at all
 # rather than merely hiding it - what you typed is the one thing here that was
@@ -201,6 +201,7 @@ def read_state() -> dict:
     s.setdefault("prompts", {})   # cwd -> {subject, style, energy, palette, extra}
     s.setdefault("promptbase", "")  # the tail every generated prompt ends with
     s.setdefault("profiles", {})  # env dir -> {name, cwd, blueprint, launch, pid}
+    s.setdefault("spoken", 0)     # turns ever spoken; survives the history trim
     return s
 
 
@@ -750,6 +751,30 @@ def fallback_cmd(text: str) -> list | None:
 
 # --- history ---------------------------------------------------------------
 
+def count_spoken(seed: int) -> None:
+    """Total turns ever spoken, which history itself can never answer.
+
+    `history.jsonl` is trimmed to KEEP on every write, so counting its lines
+    stops dead at exactly that and reads as a total - the page said "200 kept"
+    for weeks because that was the only honest thing it could say. This is the
+    one number here that has to outlive the trim, so it goes in state.json: a
+    read-modify-write inside lock("state") like everything else there, never a
+    wholesale rewrite, because aello owns three keys in the same file.
+
+    `seed` is what history can still see, used only the first time. Everything
+    said before this existed was trimmed away and is not recoverable, so the
+    count starts as a floor rather than as a fiction or a zero.
+
+    Taken inside lock("history"), which is a new order - nothing anywhere takes
+    the history lock while holding state, so it cannot cycle.
+    """
+    with lock("state", stale=5.0, timeout=15.0):
+        st = read_state()
+        counted = int(st.get("spoken") or 0)
+        st["spoken"] = counted + 1 if counted else seed
+        write_state(st)
+
+
 def record(entry: dict) -> None:
     with lock("history", stale=10.0, timeout=15.0):
         with HISTORY.open("a", encoding="utf-8") as fh:
@@ -758,6 +783,7 @@ def record(entry: dict) -> None:
             lines = HISTORY.read_text(encoding="utf-8").splitlines()
         except OSError:
             return
+        count_spoken(len(lines))
         if len(lines) <= KEEP:
             return
         lines = lines[-KEEP:]
