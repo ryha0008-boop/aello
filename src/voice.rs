@@ -33,11 +33,19 @@ fn data_dir() -> Result<PathBuf> {
     Ok(base.context("could not determine the data directory")?.join("revoiced"))
 }
 
-fn read_state(dir: &Path) -> serde_json::Value {
-    std::fs::read_to_string(dir.join("state.json"))
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_else(|| serde_json::json!({}))
+/// Absent is fine — the hook has never run here. Present but unparseable is
+/// not: the voice pool and every live lease are in this file, and reading a
+/// corrupt one as `{}` and then writing that back erases the lot on the next
+/// mute. Upstream stopped doing exactly this at hook version 11; the same rule
+/// has to hold on aello's side, since both write the same file.
+fn read_state(dir: &Path) -> Result<serde_json::Value> {
+    let path = dir.join("state.json");
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return Ok(serde_json::json!({}));
+    };
+    serde_json::from_str(&raw).with_context(|| {
+        format!("voice state at {} is not valid JSON — refusing to overwrite it", path.display())
+    })
 }
 
 /// Write state back the way the hook does — to a temp file, then rename — so a
@@ -45,8 +53,9 @@ fn read_state(dir: &Path) -> serde_json::Value {
 ///
 /// The temp name carries this process id. Both languages used to stage through
 /// the same fixed `state.tmp`, so aello and a `speak.py` worker writing at once
-/// could interleave into one file and rename the result into place — and both
-/// readers fall back to empty defaults on a corrupt state, losing the pool.
+/// could interleave into one file and rename the result into place. What made
+/// that unrecoverable was the read side, which is why `read_state` now refuses
+/// a corrupt file rather than writing empty defaults over it.
 fn write_state(dir: &Path, v: &serde_json::Value) -> Result<()> {
     std::fs::create_dir_all(dir).context("could not create the voice state dir")?;
     let tmp = dir.join(format!("state.{}.tmp", std::process::id()));
@@ -79,7 +88,7 @@ fn current_project() -> Result<String> {
 
 pub fn mute(project_only: bool) -> Result<()> {
     let dir = data_dir()?;
-    let mut state = read_state(&dir);
+    let mut state = read_state(&dir)?;
     let obj = state.as_object_mut().context("voice state is not an object")?;
     if project_only {
         let target = current_project()?;
@@ -106,7 +115,7 @@ pub fn mute(project_only: bool) -> Result<()> {
 
 pub fn unmute(project_only: bool) -> Result<()> {
     let dir = data_dir()?;
-    let mut state = read_state(&dir);
+    let mut state = read_state(&dir)?;
     let obj = state.as_object_mut().context("voice state is not an object")?;
     if project_only {
         let target = current_project()?;
@@ -128,7 +137,7 @@ pub fn unmute(project_only: bool) -> Result<()> {
 /// and the state file doesn't exist yet.
 pub fn is_globally_muted() -> bool {
     data_dir()
-        .map(|dir| read_state(&dir).get("global").and_then(|g| g.as_bool()).unwrap_or(false))
+        .map(|dir| read_state(&dir).ok().and_then(|s| s["global"].as_bool()).unwrap_or(false))
         .unwrap_or(false)
 }
 
@@ -137,7 +146,7 @@ pub fn is_globally_muted() -> bool {
 /// TUI owns the alternate screen, so a stray println would corrupt the display.
 pub fn toggle_global_mute() -> Result<bool> {
     let dir = data_dir()?;
-    let mut state = read_state(&dir);
+    let mut state = read_state(&dir)?;
     let obj = state.as_object_mut().context("voice state is not an object")?;
     let muted = !obj.get("global").and_then(|g| g.as_bool()).unwrap_or(false);
     obj.insert("global".into(), serde_json::Value::Bool(muted));
@@ -157,7 +166,7 @@ pub fn stop() -> Result<()> {
 
 pub fn status() -> Result<()> {
     let dir = data_dir()?;
-    let state = read_state(&dir);
+    let state = read_state(&dir)?;
     let muted = state.get("global").and_then(|g| g.as_bool()).unwrap_or(false);
     let projects: Vec<&str> = state
         .get("projects")
@@ -241,11 +250,11 @@ mod tests {
         )
         .unwrap();
 
-        let mut state = read_state(dir.path());
+        let mut state = read_state(dir.path()).unwrap();
         state.as_object_mut().unwrap().insert("global".into(), serde_json::Value::Bool(true));
         write_state(dir.path(), &state).unwrap();
 
-        let back = read_state(dir.path());
+        let back = read_state(dir.path()).unwrap();
         assert_eq!(back["global"], serde_json::json!(true));
         assert_eq!(back["duck"], serde_json::json!(15));
         assert_eq!(back["presets"].as_array().unwrap().len(), 1);
@@ -276,7 +285,7 @@ mod tests {
         // The same logic the TUI's M key runs, against a temp dir rather than
         // the real machine-wide one.
         let flip = |dir: &Path| {
-            let mut state = read_state(dir);
+            let mut state = read_state(dir).unwrap();
             let obj = state.as_object_mut().unwrap();
             let muted = !obj.get("global").and_then(|g| g.as_bool()).unwrap_or(false);
             obj.insert("global".into(), serde_json::Value::Bool(muted));
@@ -285,10 +294,10 @@ mod tests {
         };
 
         assert!(flip(dir.path()), "first press mutes");
-        assert_eq!(read_state(dir.path())["global"], serde_json::json!(true));
+        assert_eq!(read_state(dir.path()).unwrap()["global"], serde_json::json!(true));
         assert!(!flip(dir.path()), "second press unmutes");
 
-        let back = read_state(dir.path());
+        let back = read_state(dir.path()).unwrap();
         assert_eq!(back["global"], serde_json::json!(false));
         assert_eq!(back["duck"], serde_json::json!(15));
         assert_eq!(back["presets"].as_array().unwrap().len(), 1);
@@ -297,6 +306,20 @@ mod tests {
     #[test]
     fn missing_state_file_reads_as_empty_object() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(read_state(dir.path()), serde_json::json!({}));
+        assert_eq!(read_state(dir.path()).unwrap(), serde_json::json!({}));
+    }
+
+    /// The pool and the leases only exist in this file. Reading a truncated one
+    /// as `{}` and writing it back is how a single interrupted write turns into
+    /// a permanent loss, so a mute over corrupt state must fail loudly instead.
+    #[test]
+    fn a_corrupt_state_file_is_refused_rather_than_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        std::fs::write(&path, r#"{"presets": [{"id": "a"}], "leas"#).unwrap();
+
+        assert!(read_state(dir.path()).is_err(), "a half-written state must not read as empty");
+        // And the bytes are still there for the hook to recover from.
+        assert!(std::fs::read_to_string(&path).unwrap().contains("presets"));
     }
 }

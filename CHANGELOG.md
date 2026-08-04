@@ -27,6 +27,14 @@
   delete its successor's live lock), `state.tmp` is per-process, and a
   `state.json` that cannot be parsed is never written over.
 
+- **`aello voice` no longer erases the voice pool when the state file is
+  corrupt.** `read_state` treated an unparseable `state.json` exactly like a
+  missing one — empty defaults — and the next `mute`/`unmute`/`M` wrote those
+  back, taking every preset and lease with them. Absent still reads as empty;
+  present-but-unparseable now fails with the path and leaves the bytes alone for
+  the hook to recover from. Found by reading upstream's fix for the same bug on
+  the Python side, since both processes write this one file.
+
 - **Ducked audio comes back up.** The vendored voice hooks move from
   `HOOK_VERSION` 8 to 10, which carries an upstream fix for a bug that
   permanently lowered the machine's per-application volumes. `duck.py` deleted
