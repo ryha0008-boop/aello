@@ -115,6 +115,14 @@ The voice has its own troubleshooting section, including the partial-copy trap w
 
 Quick first checks: `aello voice status` (mute state and `HOOK_VERSION`), and whether the response actually ended with a `TL;DR:` line — that line is the only thing the hook speaks.
 
+## Applications got quiet and stayed quiet
+
+The hook lowers other applications while it speaks and puts them back afterwards. Before `HOOK_VERSION` 10 it could lose its record of what "back" was and lower them again on the next line, compounding — 0.15, then 0.0225, down to the floor. Windows keeps per-application volume in the registry against the executable's path, so this survives the process and the reboot; it does not clear itself.
+
+Run `aello voice status` and check the version. Below 10, `aello run` the env once to refresh its copy — the fix is upstream and arrives with the hook files.
+
+Then repair what was already done, and **do not trust a live-session check for this**. Enumerating audio sessions reads only the endpoint currently in use, while the stored volume is per endpoint: an application can read a healthy 1.0 on your speakers and still be at 0.0225 on your headphones. The values live under `HKCU\Software\Microsoft\Internet Explorer\LowRegistry\Audio\PolicyConfig\PropertyStore\<id>\{GUID}`, value `3` — a `VT_R4` PROPVARIANT with the float at byte offset 8. Setting the ducked ones back to `1.0` is safe. A value of exactly `0` is **not** duck damage — the clamp floor is 0.01 and repeated ducking never reaches zero — so that one is your own mute and should be left alone.
+
 ## Plan mode is refused
 
 Working as intended. Every env registers a `PreToolUse` hook matching `EnterPlanMode|ExitPlanMode` that denies both, so an agent asked to plan will report the tool coming back with "Plan mode is disabled in every aello environment" instead of entering it. The per-turn rules say the same thing in words, which is what also stops a numbered proposal written as ordinary prose.
