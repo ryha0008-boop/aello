@@ -10,7 +10,15 @@
   above it. The shape of an answer is fixed as prose → steps → `TL;DR:`, so a
   long reply can be skipped entirely and still acted on — which is the point,
   since a wall of findings is not an instruction. The list is omitted when
-  nothing is waiting on you. ~250 tokens a turn, up from ~190.
+  nothing is waiting on you. ~300 tokens a turn, up from ~190.
+
+  The steps have to **stand alone**, and saying so is load-bearing: the first
+  wording produced correct steps underneath an essay that still had to be read
+  to make sense of them — the exact failure the rule exists to prevent. It now
+  states the assumption outright (the user skips every word above the steps, so
+  no step may say "as described above") and the concise rule caps the prose at a
+  few sentences, with anything that matters moved into a step rather than a
+  paragraph. The two only work as a pair.
 
   The no-plans rule needed rewording to sit beside it: it used to ban "numbered
   proposals", which is exactly what the new rule asks for. It now bans laying

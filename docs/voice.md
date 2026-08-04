@@ -68,15 +68,17 @@ If you unregister the hook by hand, `place` falls back to appending the TL;DR se
 
 ## The five response rules
 
-The same hook carries five rules, injected together on every prompt in every env (~250 tokens per turn):
+The same hook carries five rules, injected together on every prompt in every env (~300 tokens per turn):
 
-- **Be concise** — no preamble, no filler, no hedging, no restating the question.
+- **Be concise** — no preamble, no filler, no hedging, no restating the question; the prose stays at a few sentences, and anything that matters goes in a step rather than a paragraph.
 - **No sycophancy** — don't open with praise or agreement, don't validate an unchecked premise, don't soften a finding to be agreeable; say plainly when the user is wrong, and say "I don't know" when that's the answer.
 - **No plans** — never hand over a plan for approval and never use plan mode; ask a short question or do the work, and where the choice is genuinely the user's, offer concrete options to pick from.
-- **Close with 3–5 numbered next steps** — whenever anything is left for you to do: your actions, in order, each concrete enough to act on without reading a word of the prose above it. Omitted when nothing is waiting on you.
+- **Close with 3–5 numbered next steps** — whenever anything is left for you to do: your actions, in order. They must **stand alone**: the rule assumes you skip every word of prose above them, so anything you need is in a step and no step may say "as described above". Omitted when nothing is waiting on you.
 - **End with `TL;DR: <two sentences>`** — the line the voice speaks.
 
-That fixes the shape of every answer: prose, then the steps, then the `TL;DR:`. The last rule's "nothing after it" is what keeps the steps above it, so a long answer can be skipped entirely and still acted on.
+That fixes the shape of every answer: a few sentences of prose, then the steps, then the `TL;DR:`. The last rule's "nothing after it" is what keeps the steps above it.
+
+**Standing alone is the whole point, and it is the half that gets lost.** The first version of the rule produced correct steps under an essay that still had to be read to make sense of them — which is the failure it was written to prevent, since a wall of text is not an instruction. That is why the concise rule now caps the prose too: the two rules only work as a pair.
 
 They live together because all five are about how a single response is written, which is why they are delivered per turn rather than per session. Editing `src/hooks_user_prompt_submit.py` changes them everywhere on each env's next run; a unit test pins the wording so a rule cannot be dropped by accident.
 

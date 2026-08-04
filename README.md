@@ -14,7 +14,7 @@ Isolated Claude Code environments — like Python venvs, but for AI agents.
 - **Shared login** — one `aello login` token is shared safely across any number of concurrent envs (no credential rotation races).
 - **Role-driven** — one choice per blueprint: `maintainer` owns the repo's docs and git, `contributor` commits its own work and logs it, `standalone` works alone. aello scaffolds the matching files and generates a `/sync` skill tailored to exactly that.
 - **Spoken** — every env reads each response's `TL;DR:` line aloud, with a different voice per concurrent session and one `aello voice mute` to stop them all.
-- **Same manners everywhere** — five rules ride every prompt in every env: be concise, don't be sycophantic, never hand over a plan for approval (plan mode is blocked outright), close with 3–5 numbered next steps whenever something is left for you to do, and end with that spoken `TL;DR:` line.
+- **Same manners everywhere** — five rules ride every prompt in every env: be concise, don't be sycophantic, never hand over a plan for approval (plan mode is blocked outright), close with 3–5 numbered next steps whenever something is left for you to do — written to stand alone, so you can skip the prose entirely — and end with that spoken `TL;DR:` line.
 - **Attributable** — commits made through a blueprint are authored as `<blueprint> <blueprint@aello.local>`, so multi-agent work is traceable.
 
 Cross-platform: Linux (x86_64), macOS (Apple Silicon + Intel), Windows (x86_64).
