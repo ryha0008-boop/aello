@@ -1933,11 +1933,17 @@ mod tests {
     }
 
     #[test]
-    fn user_prompt_submit_hook_carries_the_four_response_rules() {
+    fn user_prompt_submit_hook_carries_the_five_response_rules() {
         // Injected on every prompt in every env, so the wording is the product.
         // Each rule is here because its absence was felt: padding, agreement
-        // before evaluation, plans handed over instead of questions, and a
-        // missing TL;DR that leaves the voice silent.
+        // before evaluation, plans handed over instead of questions, an answer
+        // that had to be read end to end to be acted on, and a missing TL;DR
+        // that leaves the voice silent.
+        // The instruction is a run of adjacent Python string literals, so a
+        // phrase can straddle two source lines and be absent from the file as
+        // written. Rejoin the seams first — otherwise reflowing a paragraph
+        // fails the test with "no longer says", which reads as a dropped rule.
+        let script = USER_PROMPT_SUBMIT_SCRIPT.replace("\r\n", "\n").replace("\"\n    \"", "");
         for needle in [
             "Be concise",
             "no preamble",
@@ -1948,11 +1954,13 @@ mod tests {
             "plan for approval",
             "never use plan mode",
             "concrete options",
+            "3–5 numbered steps",
+            "Their actions, not yours",
             "TL;DR: <two sentences>",
             "read aloud",
         ] {
             assert!(
-                USER_PROMPT_SUBMIT_SCRIPT.contains(needle),
+                script.contains(needle),
                 "user-prompt-submit.py no longer says {needle:?}"
             );
         }

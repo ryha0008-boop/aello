@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Added
+- **Every response now ends with 3–5 numbered next steps**, before the `TL;DR:`
+  line. A fifth rule joins the per-turn `UserPromptSubmit` hook: when anything
+  is left for you to do, the answer closes with the actions you take next, in
+  order, each concrete enough to act on without reading a word of the prose
+  above it. The shape of an answer is fixed as prose → steps → `TL;DR:`, so a
+  long reply can be skipped entirely and still acted on — which is the point,
+  since a wall of findings is not an instruction. The list is omitted when
+  nothing is waiting on you. ~250 tokens a turn, up from ~190.
+
+  The no-plans rule needed rewording to sit beside it: it used to ban "numbered
+  proposals", which is exactly what the new rule asks for. It now bans laying
+  out what the agent intends to do and waiting for sign-off. The distinction is
+  whose hands the actions are in — a plan is the agent's next moves held for
+  approval, the steps are yours.
+
 ### Fixed
 - **The ducking fix at 10 was incomplete, and 10 is still damaging.** The
   vendored voice hooks move to `HOOK_VERSION` 11. Upstream keyed its record of

@@ -58,7 +58,7 @@ That shared state is what makes concurrent envs behave: each session leases a **
 
 ## Something has to ask for the TL;DR line
 
-The hook speaks that line and nothing else, so something must instruct the agent to write one. Placement registers a `UserPromptSubmit` hook running `user-prompt-submit.py`, which injects the instruction on **every prompt** — along with the three other response rules every env carries (see below). It is healed into an existing env the same way the voice hooks are, so an env placed before it existed picks it up on its next run.
+The hook speaks that line and nothing else, so something must instruct the agent to write one. Placement registers a `UserPromptSubmit` hook running `user-prompt-submit.py`, which injects the instruction on **every prompt** — along with the four other response rules every env carries (see below). It is healed into an existing env the same way the voice hooks are, so an env placed before it existed picks it up on its next run.
 
 Enforcement does not depend on that instruction: a response with no `TL;DR:` line is blocked once with a request to add one, then allowed through, so it cannot loop. The injected text only saves the round trip.
 
@@ -66,18 +66,23 @@ Enforcement does not depend on that instruction: a response with no `TL;DR:` lin
 
 If you unregister the hook by hand, `place` falls back to appending the TL;DR section to the persona, so the voice never goes silent for want of an instruction.
 
-## The four response rules
+## The five response rules
 
-The same hook carries four rules, injected together on every prompt in every env (~190 tokens per turn):
+The same hook carries five rules, injected together on every prompt in every env (~250 tokens per turn):
 
 - **Be concise** — no preamble, no filler, no hedging, no restating the question.
 - **No sycophancy** — don't open with praise or agreement, don't validate an unchecked premise, don't soften a finding to be agreeable; say plainly when the user is wrong, and say "I don't know" when that's the answer.
 - **No plans** — never hand over a plan for approval and never use plan mode; ask a short question or do the work, and where the choice is genuinely the user's, offer concrete options to pick from.
+- **Close with 3–5 numbered next steps** — whenever anything is left for you to do: your actions, in order, each concrete enough to act on without reading a word of the prose above it. Omitted when nothing is waiting on you.
 - **End with `TL;DR: <two sentences>`** — the line the voice speaks.
 
-They live together because all four are about how a single response is written, which is why they are delivered per turn rather than per session. Editing `src/hooks_user_prompt_submit.py` changes them everywhere on each env's next run; a unit test pins the wording so a rule cannot be dropped by accident.
+That fixes the shape of every answer: prose, then the steps, then the `TL;DR:`. The last rule's "nothing after it" is what keeps the steps above it, so a long answer can be skipped entirely and still acted on.
 
-**The no-plans rule has a second half.** Placement also registers a `PreToolUse` hook (`pre-tool-use.py`) matching `EnterPlanMode|ExitPlanMode`, which denies both outright — so plan mode is unavailable rather than merely discouraged. Both halves are needed and neither is redundant: the hook stops the tool, and only the injected text stops a numbered proposal written as ordinary prose, which is what a plan usually looks like. The matcher is not decoration — an unmatched `PreToolUse` group runs on *every* tool call, which is a Python spawn per `Read` in every env.
+They live together because all five are about how a single response is written, which is why they are delivered per turn rather than per session. Editing `src/hooks_user_prompt_submit.py` changes them everywhere on each env's next run; a unit test pins the wording so a rule cannot be dropped by accident.
+
+⚠️ **The steps rule and the no-plans rule are one careless sentence apart.** Both are about numbered lists, and they point opposite ways. The line is whose hands the actions are in: a plan is what the *agent* is about to do, held for approval; the steps are what the *user* does next. That is why the no-plans rule no longer forbids "numbered proposals" (it forbids laying out what you intend to do and waiting for sign-off) and the steps rule says "their actions, not yours" outright. Reword either one and check it still reads as the opposite of the other.
+
+**The no-plans rule has a second half.** Placement also registers a `PreToolUse` hook (`pre-tool-use.py`) matching `EnterPlanMode|ExitPlanMode`, which denies both outright — so plan mode is unavailable rather than merely discouraged. Both halves are needed and neither is redundant: the hook stops the tool, and only the injected text stops a proposal written as ordinary prose, which is what a plan usually looks like. The matcher is not decoration — an unmatched `PreToolUse` group runs on *every* tool call, which is a Python spawn per `Read` in every env.
 
 ⚠️ **Verified halfway, deliberately on the record.** A `PreToolUse` deny provably blocks a tool and hands its reason back to the model — measured against `Read`, which returned the reason string instead of the file — and the matcher provably scopes it, since a `Glob` in the same run never reached the hook. What is *not* verified is that the two plan tools emit a `PreToolUse` event at all: `claude -p` never calls `ExitPlanMode` under `--permission-mode plan`, so print mode cannot answer it. That is why a denial appends a line to `plan-blocked.log` beside the script. Nothing reads that file and deleting it costs nothing; it exists so the first real denial settles the question. If it stays empty across envs that have obviously wanted to plan, the block is not firing and the injected text is doing all the work.
 
