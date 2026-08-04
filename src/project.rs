@@ -1933,12 +1933,14 @@ mod tests {
     }
 
     #[test]
-    fn user_prompt_submit_hook_carries_the_five_response_rules() {
+    fn user_prompt_submit_hook_carries_the_response_rules() {
         // Injected on every prompt in every env, so the wording is the product.
         // Each rule is here because its absence was felt: padding, agreement
         // before evaluation, plans handed over instead of questions, an answer
         // that had to be read end to end to be acted on, and a missing TL;DR
-        // that leaves the voice silent.
+        // that leaves the voice silent. Named without a count on purpose —
+        // the rules have been four, then five, then four again in two days,
+        // and the test renaming each time told nobody anything.
         // The instruction is a run of adjacent Python string literals, so a
         // phrase can straddle two source lines and be absent from the file as
         // written. Rejoin the seams first — otherwise reflowing a paragraph
@@ -1955,10 +1957,11 @@ mod tests {
             "never use plan mode",
             "concrete options",
             "prose to a few sentences",
-            "3–5 numbered steps",
+            "3–4 numbered steps",
             "must stand alone",
             "Their actions, not yours",
-            "TL;DR: <two sentences>",
+            "TL;DR: <two to four sentences>",
+            "on one line",
             "read aloud",
         ] {
             assert!(

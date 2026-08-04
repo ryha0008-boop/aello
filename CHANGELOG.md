@@ -3,14 +3,23 @@
 ## [Unreleased]
 
 ### Added
-- **Every response now ends with 3–5 numbered next steps**, before the `TL;DR:`
-  line. A fifth rule joins the per-turn `UserPromptSubmit` hook: when anything
-  is left for you to do, the answer closes with the actions you take next, in
-  order, each concrete enough to act on without reading a word of the prose
-  above it. The shape of an answer is fixed as prose → steps → `TL;DR:`, so a
-  long reply can be skipped entirely and still acted on — which is the point,
-  since a wall of findings is not an instruction. The list is omitted when
-  nothing is waiting on you. ~300 tokens a turn, up from ~190.
+- **Every response now ends with one block: the `TL;DR:` line, with 3–4
+  numbered next steps beneath it.** The per-turn `UserPromptSubmit` hook's last
+  rule now fixes the whole shape of an answer: a few sentences of prose, then
+  one closing block — a summary of two to four sentences with the actions you
+  take next directly under it, and nothing after those. A long reply can be
+  skipped entirely and still acted on, which is the point, since a wall of
+  findings is not an instruction. The steps are dropped when nothing is waiting
+  on you; the `TL;DR:` line never is. ~300 tokens a turn, up from ~190.
+
+  Summary and steps shipped as two separate rules and lasted about an hour:
+  the summary said a thing, the steps repeated it, and you had to reconcile two
+  closing sections. Merged, the spoken line introduces the list it sits on top
+  of, and it grew from two sentences to two-to-four to absorb what the steps
+  used to duplicate. The ordering is not taste — `speak.py` matches the last
+  `TL;DR:` line and reads to end of line, so the summary must stay on one line
+  (a wrapped one is spoken with its tail silently cut off) while numbered steps
+  beneath it match nothing. Verified against the real `extract_tldr`.
 
   The steps have to **stand alone**, and saying so is load-bearing: the first
   wording produced correct steps underneath an essay that still had to be read

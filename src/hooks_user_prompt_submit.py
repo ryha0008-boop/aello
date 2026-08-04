@@ -1,9 +1,16 @@
-"""UserPromptSubmit hook — the five response rules, injected on every prompt.
+"""UserPromptSubmit hook — the four response rules, injected on every prompt.
 
 Style decays. An instruction delivered once at session start is thoroughly
 buried by turn eighty, which is exactly when padding and reflexive agreement
-creep back in. These five rules are about how each individual response is
+creep back in. These four rules are about how each individual response is
 written, so they are delivered per turn rather than per session.
+
+The last of them fixes the whole shape of a response: a few sentences of
+prose, then one closing block that is the TL;DR line with the next steps
+directly beneath it. Steps and TL;DR were separate rules for about an hour and
+that was one section too many — the summary said one thing, the steps repeated
+it, and the reader had to reconcile them. Merged, the spoken line introduces
+the list it sits on top of.
 
 The no-plans rule has a second half in `pre-tool-use.py`, which denies the
 plan-mode tools outright. Both are needed: the hook stops the tool, and only
@@ -26,6 +33,12 @@ for its one input until this hook existed.
 The TL;DR line is not optional here. `speak.py` speaks that line and nothing
 else, and exits 2 asking for one when it is missing — so an env that got this
 hook without it would be nagged every turn.
+
+It also has to stay on ONE line, and the steps have to stay below it rather
+than above. `extract_tldr` matches `^…TL;DR:\s*(.+?)$` and takes the *last*
+match, so a summary wrapped onto a second line is spoken with its tail cut off,
+silently. Numbered steps underneath are safe — they match nothing — which is
+what makes this ordering possible at all.
 
 Keep the text short. It is prepended to every single prompt, so its cost is
 paid continuously; this is the one place where a paragraph of good advice is
@@ -54,16 +67,15 @@ INSTRUCTION = (
     "shall I proceed?\". Ask a short question or do the work. When the choice "
     "is genuinely the user's, offer concrete options to pick from rather than "
     "a plan to read.\n\n"
-    "When anything is left for the user to do, close with "
-    "3–5 numbered steps: what they do next, in order. The steps must stand "
-    "alone — assume the user skips every word above them, so anything they "
-    "need is in a step and no step says \"as described above\". "
-    "Their actions, not yours — steps you are about to take yourself are a "
-    "plan. Leave the list out when nothing is waiting on them.\n\n"
-    "End with a final line of exactly the form `TL;DR: <two sentences>` — "
-    "what happened and what it means or what's next, the outcome rather than "
-    "the steps. No bullets, no bold, nothing after it. That line is the only "
-    "part read aloud, so it carries the answer alone."
+    "Close every response with one block and nothing after it: a single line "
+    "of exactly the form `TL;DR: <two to four sentences>` giving the outcome "
+    "and what it means, then — when anything is left for the user to do — "
+    "3–4 numbered steps, in order. Keep the TL;DR on one line with no bullets "
+    "or bold; it is the only part read aloud, so it carries the answer alone. "
+    "The steps must stand alone too: assume the user reads nothing above the "
+    "block, so anything they need is in a step and no step says \"as described "
+    "above\". Their actions, not yours — steps you are about to take yourself "
+    "are a plan. Drop the steps when nothing is waiting on them."
 )
 
 print(json.dumps({

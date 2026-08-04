@@ -58,7 +58,7 @@ That shared state is what makes concurrent envs behave: each session leases a **
 
 ## Something has to ask for the TL;DR line
 
-The hook speaks that line and nothing else, so something must instruct the agent to write one. Placement registers a `UserPromptSubmit` hook running `user-prompt-submit.py`, which injects the instruction on **every prompt** — along with the four other response rules every env carries (see below). It is healed into an existing env the same way the voice hooks are, so an env placed before it existed picks it up on its next run.
+The hook speaks that line and nothing else, so something must instruct the agent to write one. Placement registers a `UserPromptSubmit` hook running `user-prompt-submit.py`, which injects the instruction on **every prompt** — along with the three other response rules every env carries (see below). It is healed into an existing env the same way the voice hooks are, so an env placed before it existed picks it up on its next run.
 
 Enforcement does not depend on that instruction: a response with no `TL;DR:` line is blocked once with a request to add one, then allowed through, so it cannot loop. The injected text only saves the round trip.
 
@@ -66,19 +66,20 @@ Enforcement does not depend on that instruction: a response with no `TL;DR:` lin
 
 If you unregister the hook by hand, `place` falls back to appending the TL;DR section to the persona, so the voice never goes silent for want of an instruction.
 
-## The five response rules
+## The four response rules
 
-The same hook carries five rules, injected together on every prompt in every env (~300 tokens per turn):
+The same hook carries four rules, injected together on every prompt in every env (~300 tokens per turn):
 
 - **Be concise** — no preamble, no filler, no hedging, no restating the question; the prose stays at a few sentences, and anything that matters goes in a step rather than a paragraph.
 - **No sycophancy** — don't open with praise or agreement, don't validate an unchecked premise, don't soften a finding to be agreeable; say plainly when the user is wrong, and say "I don't know" when that's the answer.
 - **No plans** — never hand over a plan for approval and never use plan mode; ask a short question or do the work, and where the choice is genuinely the user's, offer concrete options to pick from.
-- **Close with 3–5 numbered next steps** — whenever anything is left for you to do: your actions, in order. They must **stand alone**: the rule assumes you skip every word of prose above them, so anything you need is in a step and no step may say "as described above". Omitted when nothing is waiting on you.
-- **End with `TL;DR: <two sentences>`** — the line the voice speaks.
+- **Close with one block and nothing after it** — a single `TL;DR: <two to four sentences>` line giving the outcome, then 3–4 numbered next steps beneath it whenever anything is left for you to do. The steps must **stand alone**: the rule assumes you read nothing above the block, so anything you need is in a step and no step may say "as described above". The steps are dropped when nothing is waiting on you; the TL;DR line never is.
 
-That fixes the shape of every answer: a few sentences of prose, then the steps, then the `TL;DR:`. The last rule's "nothing after it" is what keeps the steps above it.
+That fixes the shape of every answer: a few sentences of prose, then the closing block. Summary and steps were two separate rules for about an hour, and that was one section too many — the summary said a thing, the steps repeated it, and you had to reconcile them. Merged, the spoken line introduces the list it sits on top of.
 
-**Standing alone is the whole point, and it is the half that gets lost.** The first version of the rule produced correct steps under an essay that still had to be read to make sense of them — which is the failure it was written to prevent, since a wall of text is not an instruction. That is why the concise rule now caps the prose too: the two rules only work as a pair.
+**Standing alone is the whole point, and it is the half that gets lost.** The first version produced correct steps under an essay that still had to be read to make sense of them — the failure it was written to prevent, since a wall of text is not an instruction. That is why the concise rule caps the prose too: the two only work as a pair.
+
+⚠️ **The TL;DR stays on one line and the steps stay below it.** `extract_tldr` in `speak.py` matches `^…TL;DR:\s*(.+?)$` and takes the last match, so a summary wrapped onto a second line is spoken with its tail silently cut off. Numbered steps underneath match nothing, which is what makes this ordering safe — verified by running a sample response through the real `extract_tldr`, not by reading the regex.
 
 They live together because all five are about how a single response is written, which is why they are delivered per turn rather than per session. Editing `src/hooks_user_prompt_submit.py` changes them everywhere on each env's next run; a unit test pins the wording so a rule cannot be dropped by accident.
 
