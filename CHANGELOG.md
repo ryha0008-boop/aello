@@ -34,7 +34,38 @@
   from. The four response rules instead ship as a Cline rules file, which is
   the one channel measured working.
 
+- **A Cline blueprint is now creatable from the TUI, and gets a persona, the
+  four commands and a memory.** `a` opens an agent picker first — Claude Code or
+  Cline — because everything after it differs: a Cline blueprint takes a
+  free-text provider model id where a Claude one takes a curated alias. Editing
+  never offers the picker, since the agents share nothing on disk and switching
+  one would strand its env.
+
+  A Cline env now gets the **same persona templates** (`--claude-md coder`
+  works), written to its rules dir rather than a `CLAUDE.md` Cline ignores —
+  and switching to `none` *removes* it, which matters because rules apply on
+  every request. It gets **`/sync`, `/handoff`, `/note` and `/twosentences`**,
+  and a **memory directory**, seeded once and never overwritten.
+
+  Two things about how those work, because both are weaker than the Claude
+  equivalent and saying so is the point. **Cline has no user-defined slash
+  commands** — measured, with a workflow and a skill in every candidate
+  location; `/canary` came back as prose, and the only slash commands the binary
+  has are connector built-ins. So the commands are *routed* from the rules file,
+  which names each one against its `SKILL.md` path. And **Cline has no memory
+  system at all**, so aello supplies one the same way: a rule, re-sent every
+  request, telling the agent to read the index and write what it learns. Both
+  are instructions the agent follows rather than hooks aello enforces.
+
+  `/sync` for Cline has **no git step**: it reconciles the memory and the
+  project's `AGENTS.md` (Cline's project-`CLAUDE.md` equivalent) and stops.
+
 ### Fixed
+- **`aello run <cline-blueprint> -p "hi"` now explains itself.** Cline rejects
+  any one-word prompt as a possible subcommand — *"Unknown command or unquoted
+  prompt"* — which reads like a quoting mistake and is not one. Every test
+  before this used a sentence, which is why it went unnoticed.
+
 - **The Cline credential is installed with `cline auth`, not by writing
   `providers.json`.** Hand-writing that file half-worked, which is worse than
   failing: the env placed, the run launched, the provider was reached, and the

@@ -21,7 +21,7 @@ use ratatui::{backend::CrosstermBackend, Frame, Terminal};
 use std::io::{self, Stdout};
 use std::path::{Path, PathBuf};
 
-use crate::models::{Blueprint, Role};
+use crate::models::{Agent, Blueprint, Role};
 use crate::{config, docs, project, sessions};
 
 type Term = Terminal<CrosstermBackend<Stdout>>;
@@ -104,7 +104,17 @@ fn resolved_edit<T: Clone>(edit: bool, touched: bool, orig: &T, picked: T) -> T 
 
 enum Mode {
     Normal,
+    /// First step of the add flow: which CLI this blueprint drives. It comes
+    /// before the name because everything after it differs — a Cline blueprint
+    /// takes a free-text provider model id where a Claude one takes a curated
+    /// alias. Not offered on edit: the two agents share nothing on disk, so
+    /// switching one would strand its env rather than convert it.
+    AddAgent { sel: usize },
     AddName { buf: String },
+    /// Free-text model id for a Cline blueprint. Cline's models are
+    /// provider-scoped (`openai/gpt-5.6-luna-pro`, `qwen/qwen3.8-max`) with no
+    /// list to pick from, so this is typed rather than chosen.
+    AddClineModel { name: String, buf: String, edit: bool },
     /// `edit` true means we're editing an existing blueprint, not adding one:
     /// the name step is skipped and each step is pre-seeded from the original,
     /// and the final step updates in place instead of pushing a new blueprint.
@@ -214,6 +224,10 @@ struct App {
     show_all: bool,
     selected: usize,
     mode: Mode,
+    /// Which agent the in-progress add flow chose. Carried on `App`
+    /// rather than threaded through five Mode variants, which would be a
+    /// field on each for one value that never changes mid-flow.
+    add_agent: Agent,
     status: String,
     /// Launch directory as "PARENT / CURRENT", uppercased — shown top-right.
     dir: String,
@@ -240,6 +254,7 @@ impl App {
             show_all: false,
             selected: 0,
             mode: Mode::Normal,
+            add_agent: Agent::Claude,
             status: String::new(),
             dir: launch_dir_label(),
             voice_muted: crate::voice::is_globally_muted(),
@@ -506,7 +521,7 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                 }
                 KeyCode::Char('a') => {
                     app.status.clear();
-                    app.mode = Mode::AddName { buf: String::new() };
+                    app.mode = Mode::AddAgent { sel: 0 };
                 }
                 KeyCode::Char('e') => {
                     if let Some(&i) = app.view.get(app.selected) {
@@ -514,8 +529,16 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                         let name = b.name.clone();
                         let sel = model_index(&b.model);
                         let orig_model = b.model.clone();
+                        // An agent is fixed at creation, so edit never offers the
+                        // picker — it just follows the blueprint's own agent to
+                        // the model step that suits it.
+                        app.add_agent = b.agent;
                         app.status.clear();
-                        app.mode = Mode::AddModel { name, sel, edit: true, orig_model };
+                        app.mode = if b.agent == Agent::Cline {
+                            Mode::AddClineModel { name, buf: orig_model, edit: true }
+                        } else {
+                            Mode::AddModel { name, sel, edit: true, orig_model }
+                        };
                     } else {
                         app.status = "NO BLUEPRINTS TO EDIT".into();
                     }
@@ -525,6 +548,54 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                         app.status = "NO BLUEPRINTS TO DELETE".into();
                     } else {
                         app.mode = Mode::ConfirmDelete;
+                    }
+                }
+                _ => {}
+            },
+            Mode::AddAgent { sel } => match key.code {
+                KeyCode::Esc => {
+                    app.mode = Mode::Normal;
+                    app.status = "CANCELLED".into();
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    *sel = (*sel + 1).min(Agent::ALL.len() - 1);
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    *sel = sel.saturating_sub(1);
+                }
+                KeyCode::Enter => {
+                    app.add_agent = Agent::ALL[*sel];
+                    app.mode = Mode::AddName { buf: String::new() };
+                }
+                _ => {}
+            },
+            Mode::AddClineModel { name, buf, edit } => match key.code {
+                KeyCode::Esc => {
+                    app.mode = Mode::Normal;
+                    app.status = "CANCELLED".into();
+                }
+                KeyCode::Backspace => {
+                    buf.pop();
+                }
+                KeyCode::Char(c) if !chord => buf.push(c),
+                KeyCode::Enter => {
+                    let model = buf.trim().to_string();
+                    if model.is_empty() {
+                        app.status = "MODEL ID REQUIRED".into();
+                    } else {
+                        let edit = *edit;
+                        let name = name.clone();
+                        let (sel, orig_persona) = if edit {
+                            let cfg = config::load()?;
+                            let b = cfg.find(&name);
+                            (
+                                b.map_or(0, |b| persona_index(b.claude_md.as_deref())),
+                                b.and_then(|b| b.claude_md.clone()),
+                            )
+                        } else {
+                            (0, None)
+                        };
+                        app.mode = Mode::AddPersona { name, model, sel, edit, orig_persona };
                     }
                 }
                 _ => {}
@@ -543,6 +614,10 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                     match crate::validate_name(&name) {
                         Ok(()) if config::load()?.find_name_conflict(&name).is_some() => {
                             app.status = format!("'{name}' ALREADY EXISTS");
+                        }
+                        Ok(()) if app.add_agent == Agent::Cline => {
+                            app.mode =
+                                Mode::AddClineModel { name, buf: String::new(), edit: false }
                         }
                         Ok(()) => {
                             app.mode = Mode::AddModel {
@@ -657,9 +732,7 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                         cfg.blueprints.push(Blueprint {
                             name: name.clone(),
                             model: model.clone(),
-                            // The guided add flow is Claude-only for now; a Cline
-                            // blueprint is `aello add --agent cline`.
-                            agent: crate::models::Agent::Claude,
+                            agent: app.add_agent,
                             claude_md: persona.clone(),
                             role,
                             legacy_caps: None,
@@ -853,6 +926,8 @@ fn draw(f: &mut Frame, app: &App) {
 
     match &app.mode {
         Mode::Normal => {}
+        Mode::AddAgent { sel } => draw_add_agent(f, *sel),
+        Mode::AddClineModel { name, buf, edit } => draw_add_cline_model(f, name, buf, *edit),
         Mode::AddName { buf } => draw_add_name(f, buf),
         Mode::AddModel { name, sel, edit, orig_model } => {
             // If editing and the stored model can't be shown in the curated
@@ -1043,6 +1118,56 @@ fn modal(f: &mut Frame, title: &str, w: u16, h: u16) -> Rect {
     let inner = block.inner(area);
     f.render_widget(block, area);
     inner
+}
+
+/// First step of the add flow. Everything after it differs by agent, which is
+/// why it comes first rather than after the name.
+fn draw_add_agent(f: &mut Frame, sel: usize) {
+    let inner = modal(f, "NEW_BLUEPRINT // AGENT", 64, Agent::ALL.len() as u16 + 6);
+    let mut lines = vec![Line::from("")];
+    for (i, a) in Agent::ALL.iter().enumerate() {
+        let on = i == sel;
+        let mark = if on { "▸" } else { " " };
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("  {mark} {:<8}", a.as_str().to_uppercase()),
+                Style::default()
+                    .fg(if on { ORANGE_HOT } else { TEXT })
+                    .add_modifier(if on { Modifier::BOLD } else { Modifier::empty() }),
+            ),
+            Span::styled(a.describe().to_string(), Style::default().fg(MUTED)),
+        ]));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  [↑↓] MOVE · [ENTER] NEXT · [ESC] CANCEL",
+        Style::default().fg(DIM),
+    )));
+    f.render_widget(Paragraph::new(lines).style(Style::default().bg(SURFACE_HI)), inner);
+}
+
+/// Cline models are provider-scoped ids with no list to pick from, so this is
+/// typed. The curated picker would only ever be wrong here.
+fn draw_add_cline_model(f: &mut Frame, name: &str, buf: &str, edit: bool) {
+    let title =
+        if edit { "EDIT_BLUEPRINT // CLINE_MODEL" } else { "NEW_BLUEPRINT // CLINE_MODEL" };
+    let inner = modal(f, title, 64, 9);
+    let body = vec![
+        Line::from(Span::styled(format!("  NAME = {name}"), Style::default().fg(MUTED))),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  MODEL ▸ ", Style::default().fg(ORANGE).add_modifier(Modifier::BOLD)),
+            Span::styled(buf.to_string(), Style::default().fg(TEXT)),
+            Span::styled("█", Style::default().fg(ORANGE_HOT)),
+        ]),
+        Line::from(Span::styled(
+            "  e.g. openai/gpt-5.6-luna-pro — your provider's own id",
+            Style::default().fg(DIM),
+        )),
+        Line::from(""),
+        Line::from(Span::styled("  [ENTER] NEXT · [ESC] CANCEL", Style::default().fg(DIM))),
+    ];
+    f.render_widget(Paragraph::new(body).style(Style::default().bg(SURFACE_HI)), inner);
 }
 
 fn draw_add_name(f: &mut Frame, buf: &str) {

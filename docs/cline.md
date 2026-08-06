@@ -20,7 +20,8 @@ The choice is fixed. The two agents share nothing on disk, so switching one woul
 | voice | yes | no |
 | per-turn rules | `UserPromptSubmit` hook | a rules file |
 | contextdb | three hooks | none |
-| `/sync`, `/handoff`, `/note` | yes | no |
+| memory | automatic (hook) | a directory + a rule the agent follows |
+| the four commands | real slash commands | routed from the rules file |
 
 Everything Cline-specific lives in `cline.rs`, and nothing Cline-specific lives anywhere else. `project.rs` and `launch.rs` stay Claude-only. The two CLIs agree on almost nothing, so a shared code path would carry an `if agent == …` at every branch — and the branch that got forgotten would be the one that silently wrote a Claude file into a Cline env, where nothing would ever read it.
 
@@ -47,6 +48,36 @@ aello wrote `providers.json` itself for about an afternoon. The file is small an
 What had actually happened: **Cline rewrote `providers.json` on its next run and dropped the `apiKey` field entirely**, leaving `provider`, `model` and `tokenSource` behind. The request went out with no credential at all. Measured by diffing the file either side of a run; a key installed by `cline auth` survives that same run untouched. The difference is the writer, not the value.
 
 So placement needs `cline` on `PATH`. That is not a real cost — nothing can run a Cline env without it.
+
+## What a Cline env contains
+
+```
+.cline-env-<name>/
+  config/rules/     response-rules.md, persona.md, aello.md, memory.md   ← re-sent every request
+  skills/           sync/ handoff/ note/ twosentences/ SKILL.md
+  memory/           MEMORY.md + one file per thing learned
+  data/             providers.json (the key), sessions, logs   ← Cline's own
+```
+
+Everything in `config/rules/` is re-sent in the system prompt on **every** request, which is the property that makes it a workable substitute for Claude Code's per-turn hook: it cannot decay by turn eighty.
+
+**The persona is a rules file.** `--claude-md coder` works on a Cline blueprint — the bundled templates are just text, and aello writes the chosen one to `config/rules/persona.md` rather than to a `CLAUDE.md` Cline would ignore. Choosing `none` **removes** an existing one, which matters more here than for Claude: rules apply on every request, so a persona left behind after you switched would keep applying with nothing to take it away.
+
+## The four commands, and why they are routed rather than registered
+
+**Cline has no user-defined slash commands.** Measured: `/canary`, with a workflow *and* a skill installed in every candidate location (`<workspace>/.cline/workflows/`, `<workspace>/.cline/skills/`, `<config>/workflows/`, `<config>/skills/`), came back as ordinary prose. The only slash commands the binary advertises are connector built-ins — `/abort`, `/clear`, `/exit`, `/start`, `/whereami`. Cline's own skills and workflows resolve under `<workspace>/.cline/<plugin>/` as plugin artifacts, not as something a user types.
+
+So `config/rules/aello.md` routes them instead: it lists each command against the absolute path of its `SKILL.md`, and the agent opens the file with an ordinary tool call. `/sync`, `/handoff`, `/note <name>` and `/twosentences` all work this way, and each skill carries the same "only the user runs this" banner a Claude env's does.
+
+⚠️ `/sync` **has no git step** for a Cline env. It reconciles two things — the memory directory, then the project's `AGENTS.md` (Cline's equivalent of a project `CLAUDE.md`; it does not read `CLAUDE.md`) — and stops. Committing stays yours. If you want Cline blueprints committing too, that is a git section added to the `sync` body in `cline.rs`.
+
+## Memory is aello's, because Cline has none
+
+Confirmed against the binary: `memory-bank`, `memoryBank`, `cline_docs`, `MEMORY.md` and `rememberThis` are all absent, and the one `auto-memory` hit belongs to the Claude Code settings schema Cline embeds as a dependency.
+
+So aello builds it: a `memory/` directory with a `MEMORY.md` index, seeded once and never rewritten, plus a rule telling the agent to read the index when it starts and to write durable findings as files. There is no hook that could load it automatically — `TaskStart` fires but cannot inject — so the instruction has to live in the rules, where it is re-sent every request. The agent does the reading and writing with ordinary tool calls.
+
+The trade against Claude Code's memory is honest: Claude's is maintained by a hook whether or not the agent cooperates, and this one is an instruction the agent follows. It will not be as reliable.
 
 ## Why a Cline env is quieter
 
@@ -77,5 +108,6 @@ Session state lives in `<env>/data/sessions/` and `<env>/data/db/sessions.db`.
 ## Known limits
 
 - **The `claude-code` provider cannot use tools.** Cline can authenticate against a Claude subscription and will hold a conversation, but every tool call is rejected before execution — *"The Claude Code CLI executes its own tools; AI SDK tools cannot be auto-bridged at the provider layer."* Measured against `--auto-approve true`, a `CLAUDE_CONFIG_DIR` with `permissions.defaultMode = bypassPermissions`, and a seeded `.claude.json`; none of the three helped. So a Cline env that edits files needs a metered provider. This is upstream, not configuration — re-test it after a Cline upgrade.
-- **The TUI add flow is Claude-only.** A Cline blueprint is `aello add --agent cline` for now.
+- **Cline refuses a one-word prompt.** `aello run x -p "hi"` comes back with *"Unknown command or unquoted prompt"* — Cline reads a single word as a possible subcommand. It is not a quoting problem on your side, and aello now says so before launching. Use more than one word.
+- **`/sync` and the memory rule are instructions, not enforcement.** Nothing in Cline blocks an agent that ignores them, where Claude Code's equivalents ride hooks aello controls.
 - `aello edit` does not change an agent, by design.

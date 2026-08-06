@@ -316,12 +316,9 @@ fn cmd_add(
     };
     // Catch a typo'd built-in / missing template path at add time, not first run.
     if let Some(cm) = &claude_md {
-        if agent == Agent::Cline {
-            bail!(
-                "--claude-md does not apply to a Cline blueprint: Cline ignores CLAUDE.md and \
-                 reads rules from its own config dir, which aello writes at placement"
-            );
-        }
+        // Applies to both agents. Cline ignores `CLAUDE.md` as a *file*, but the
+        // bundled persona templates are just text — a Cline env gets the same
+        // one written into its rules dir, where Cline does read it.
         templates::resolve(cm)?;
     }
     let mut cfg = config::load()?;
@@ -600,7 +597,17 @@ fn run_cline(
     extra: &[String],
 ) -> Result<i32> {
     let env = cline::env_dir(project, &bp.name);
-    cline::place(&env, bp)?;
+    // Same persona resolution as a Claude env — the bundled templates are just
+    // written somewhere Cline reads. Fail rather than warn, for the same reason:
+    // a persona file moved after the blueprint was made would otherwise launch a
+    // silently persona-less agent.
+    let persona = match &bp.claude_md {
+        Some(spec) => templates::resolve(spec).with_context(|| {
+            format!("blueprint '{}' has an unusable persona — fix it with: aello edit {} --claude-md <coder|none|custom|path>", bp.name, bp.name)
+        })?,
+        None => None,
+    };
+    cline::place(&env, bp, persona.as_deref())?;
 
     // A Cline env is billed per token, so a missing credential is a hard stop
     // rather than a warning: Cline would otherwise fall through to its own
@@ -613,6 +620,12 @@ fn run_cline(
             bp.name
         );
     };
+
+    if cline::single_word_prompt(prompt) {
+        bail!(
+            "Cline rejects a one-word prompt as a possible subcommand — use more than one word              (this is Cline's rule, not a quoting problem on your side)"
+        );
+    }
 
     // Install the credential through `cline auth`. Every run, because the key
     // can change in config.toml and a marker saying "already authenticated"
