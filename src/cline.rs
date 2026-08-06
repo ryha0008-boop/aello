@@ -119,8 +119,9 @@ These are **the user's to type, never yours to run**. Working through a skill's
 steps *is* running it, whatever route you took to its file. If you think one is
 due, say so and let them ask.
 
-When the user's message is exactly one of these, open the file named beside it
-and follow it exactly:
+When the user's message **starts with** one of these, open the file named beside
+it and follow it exactly. Ignore any words after the command — they are there
+because Cline refuses a one-word prompt, not because they change the task:
 
 - `/sync` → `SKILLS_DIR/sync/SKILL.md`
 - `/handoff` → `SKILLS_DIR/handoff/SKILL.md`
@@ -476,13 +477,23 @@ pub fn launch_args(
     args
 }
 
-/// Cline rejects a **single-word** prompt as a possible subcommand.
+/// Cline rejects a **single-word** prompt, whatever it is.
 ///
-/// `aello run x -p "hi"` comes back with "Unknown command or unquoted prompt:
-/// hi", which reads like a quoting mistake in your own shell and is not one —
-/// the argument arrives perfectly quoted and Cline still refuses it. Multi-word
-/// prompts are fine, which is why every test written before this one missed it.
-/// Caught here so the message names the real rule.
+/// `-p "hi"` comes back with "Unknown command or unquoted prompt: hi", which
+/// reads like a quoting mistake and is not one — the argument arrives perfectly
+/// quoted and Cline still refuses it.
+///
+/// **This includes `/sync` and the other three**, which is the part that matters
+/// and the part that nearly shipped wrong. An early test appeared to show
+/// `-p "/twosentences"` working; it had in fact been rewritten by Git Bash into
+/// `C:/Program Files/Git/twosentences`, which contains a space, so Cline
+/// accepted it and the model *guessed* the skill from the path. Measured
+/// directly afterwards: `hi`, `/sync` and `/twosentences` are all refused.
+///
+/// So in one-shot mode a command needs a trailing word (`-p "/sync now"`), which
+/// is why the router matches a *prefix* rather than an exact message. The
+/// interactive TUI has a real `/` menu and is not affected — unverified here,
+/// since it needs a TTY.
 pub fn single_word_prompt(prompt: Option<&str>) -> bool {
     prompt.is_some_and(|p| !p.trim().is_empty() && !p.trim().contains(char::is_whitespace))
 }
@@ -680,6 +691,14 @@ mod tests {
                 "the router points somewhere other than the seeded '{skill}'"
             );
         }
+        // The router must match a PREFIX. Cline refuses one-word prompts, so a
+        // command always arrives with a trailing word, and an exact-match rule
+        // would never fire in one-shot mode.
+        assert!(
+            router.contains("starts with"),
+            "the router demands an exact message, which no one-shot prompt can be"
+        );
+
         // Every skill says it is the user's to run, like a Claude env's do.
         for skill in ["sync", "handoff", "note", "twosentences"] {
             let body =
@@ -738,6 +757,13 @@ mod tests {
     #[test]
     fn a_one_word_prompt_is_caught_before_cline_refuses_it() {
         assert!(single_word_prompt(Some("hi")));
+        // The four commands are one-word too, and Cline refuses them just the
+        // same — measured. An early result suggesting otherwise was Git Bash
+        // rewriting the argument into a path containing a space.
+        assert!(single_word_prompt(Some("/sync")));
+        assert!(single_word_prompt(Some("/twosentences")));
+        // Which is why the documented workaround is a trailing word.
+        assert!(!single_word_prompt(Some("/sync now")));
         assert!(single_word_prompt(Some("  hi  ")));
         assert!(!single_word_prompt(Some("say hello")));
         assert!(!single_word_prompt(Some("")));

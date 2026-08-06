@@ -69,6 +69,16 @@ Everything in `config/rules/` is re-sent in the system prompt on **every** reque
 
 So `config/rules/aello.md` routes them instead: it lists each command against the absolute path of its `SKILL.md`, and the agent opens the file with an ordinary tool call. `/sync`, `/handoff`, `/note <name>` and `/twosentences` all work this way, and each skill carries the same "only the user runs this" banner a Claude env's does.
 
+**Verified end to end** against a real provider on 2026-08-06: `/sync now` opened the memory index, looked for `AGENTS.md` and correctly reported nothing to change; `/handoff please` wrote a properly name-prefixed `<name>.HANDOFF.md` at the project root.
+
+⚠️ **In one-shot mode (`-p`) a command needs a trailing word** — `-p "/sync now"`, not `-p "/sync"`. Cline refuses *any* one-word prompt with "Unknown command or unquoted prompt", the four commands included. That is why the router matches a **prefix** rather than an exact message, and aello refuses a one-word prompt itself with the real reason rather than letting Cline's message mislead you. The interactive TUI has a genuine `/` menu and is not affected.
+
+An early test appeared to show `-p "/twosentences"` working on its own. It had in fact been rewritten by Git Bash into `C:/Program Files/Git/twosentences` — which contains a space, so Cline accepted it and the model *guessed* the skill from the path. Worth knowing if you test from a POSIX shell on Windows: set `MSYS_NO_PATHCONV=1`, or a leading-slash argument is silently turned into a path.
+
+### Could they be real slash commands?
+
+Only by shipping a **JavaScript plugin**. The TUI's `/` menu is built from five built-ins plus `listRuntimeCommands()`, which comes from installed plugins — and `cline plugin install` rejects a folder of markdown with "No plugin entry files found": a plugin is an npm-style package with a JS entry point. It also installs to `<project>/.cline/plugins`, i.e. **workspace-scoped**, so one plugin would be shared by every env in a repo rather than isolated per blueprint. That is a node dependency and a hole in the isolation model, for cosmetics — hence the router.
+
 ⚠️ `/sync` **has no git step** for a Cline env. It reconciles two things — the memory directory, then the project's `AGENTS.md` (Cline's equivalent of a project `CLAUDE.md`; it does not read `CLAUDE.md`) — and stops. Committing stays yours. If you want Cline blueprints committing too, that is a git section added to the `sync` body in `cline.rs`.
 
 ## Memory is aello's, because Cline has none
@@ -108,6 +118,6 @@ Session state lives in `<env>/data/sessions/` and `<env>/data/db/sessions.db`.
 ## Known limits
 
 - **The `claude-code` provider cannot use tools.** Cline can authenticate against a Claude subscription and will hold a conversation, but every tool call is rejected before execution — *"The Claude Code CLI executes its own tools; AI SDK tools cannot be auto-bridged at the provider layer."* Measured against `--auto-approve true`, a `CLAUDE_CONFIG_DIR` with `permissions.defaultMode = bypassPermissions`, and a seeded `.claude.json`; none of the three helped. So a Cline env that edits files needs a metered provider. This is upstream, not configuration — re-test it after a Cline upgrade.
-- **Cline refuses a one-word prompt.** `aello run x -p "hi"` comes back with *"Unknown command or unquoted prompt"* — Cline reads a single word as a possible subcommand. It is not a quoting problem on your side, and aello now says so before launching. Use more than one word.
+- **Cline refuses any one-word prompt**, `/sync` included. Add a word: `-p "/sync now"`. aello says so before launching rather than letting Cline's message read like a quoting mistake.
 - **`/sync` and the memory rule are instructions, not enforcement.** Nothing in Cline blocks an agent that ignores them, where Claude Code's equivalents ride hooks aello controls.
 - `aello edit` does not change an agent, by design.

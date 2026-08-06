@@ -447,7 +447,14 @@ fn cmd_edit(args: EditArgs) -> Result<()> {
     let mut changed = false;
 
     if let Some(model) = args.model {
-        bp.model = validate_model(&model)?;
+        // Only Claude's model names are a known set, exactly as in `cmd_add`.
+        // Validating a Cline blueprint's here rejected `openai/gpt-oss-120b`
+        // with "use an alias (opus, sonnet, haiku)" — a Claude-shaped error on
+        // a blueprint that has nothing to do with Claude.
+        bp.model = match bp.agent {
+            Agent::Claude => validate_model(&model)?,
+            Agent::Cline => model,
+        };
         changed = true;
     }
     if let Some(cm) = args.claude_md {
@@ -623,7 +630,7 @@ fn run_cline(
 
     if cline::single_word_prompt(prompt) {
         bail!(
-            "Cline rejects a one-word prompt as a possible subcommand — use more than one word              (this is Cline's rule, not a quoting problem on your side)"
+            "Cline refuses any one-word prompt, including /sync and the other commands —              add a word (e.g. -p \"/sync now\"). This is Cline's rule, not a quoting problem              on your side, and it does not apply in the interactive TUI."
         );
     }
 

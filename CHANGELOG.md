@@ -61,6 +61,11 @@
   project's `AGENTS.md` (Cline's project-`CLAUDE.md` equivalent) and stops.
 
 ### Fixed
+- **`aello edit --model` no longer applies Claude's model rules to a Cline
+  blueprint.** Setting `openai/gpt-oss-120b` was rejected with "use an alias
+  (opus, sonnet, haiku)" — a Claude-shaped error on a blueprint that has nothing
+  to do with Claude. `add` already had this right; `edit` did not.
+
 - **`aello run <cline-blueprint> -p "hi"` now explains itself.** Cline rejects
   any one-word prompt as a possible subcommand — *"Unknown command or unquoted
   prompt"* — which reads like a quoting mistake and is not one. Every test
