@@ -3,6 +3,46 @@
 ## [Unreleased]
 
 ### Added
+- **aello can now drive the Cline CLI as well as Claude Code.** `aello add
+  <name> --agent cline` creates a Cline blueprint; `aello run` places and
+  launches it exactly as it does a Claude one. The two are split completely and
+  deliberately: a Claude env is `.claude-env-<name>` configured by
+  `CLAUDE_CONFIG_DIR`, a Cline env is `.cline-env-<name>` configured by
+  `--config`/`--data-dir` flags, and everything Cline-specific lives in
+  `cline.rs` so neither can acquire the other's assumptions. Existing
+  blueprints need no migration — a config with no `agent` key loads as Claude,
+  which is what it was.
+
+- **`aello login` now asks which agent you mean**, or takes `--agent
+  claude|cline`. They are separate accounts with separate billing and one is
+  never inferred from the other: Claude keeps the shared subscription token,
+  Cline stores a provider id, key and model under `[cline]` in `config.toml`,
+  shared by every Cline env the same way.
+
+  **A Cline env is metered.** Every turn costs money per token at your
+  provider, unlike a Claude env. Its env dir is therefore gitignored
+  unconditionally — not gated on the role the way the Claude line is — because
+  it holds the API key in plaintext, and an unignored one is a credential a
+  single `git add -A` away from a public repo.
+
+  A Cline env is also quieter than a Claude one, and this is not an omission:
+  Cline has **no voice, no per-turn rules injection and no transcript
+  capture**. Measured — of `TaskStart`, `TaskComplete`, `SessionShutdown`,
+  `UserPromptSubmit` and `PostToolUse`, only `TaskStart` fires, only from
+  `<config>/hooks/` (a `--hooks-dir` copy fired nothing at all), and its payload
+  carries identifiers with no prompt and no response. There is nothing to speak
+  from. The four response rules instead ship as a Cline rules file, which is
+  the one channel measured working.
+
+### Fixed
+- **The Cline credential is installed with `cline auth`, not by writing
+  `providers.json`.** Hand-writing that file half-worked, which is worse than
+  failing: the env placed, the run launched, the provider was reached, and the
+  error came back looking like a bad key — while what had actually happened is
+  that **Cline rewrote the file on its next run and dropped the `apiKey`
+  outright**, so the request carried no credential at all. A key written by
+  `cline auth` survives that same run untouched.
+
 - **`HOOK_VERSION` 18: the voice hook now puts back application volumes its
   own restore could never reach.** The restore works from the live audio
   session list, so an application that goes quiet and then *exits* is dropped

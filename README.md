@@ -6,12 +6,12 @@
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 [![docs](https://img.shields.io/badge/docs-ryha0008--boop.github.io%2Faello-8dd6ff.svg)](https://ryha0008-boop.github.io/aello/docs/)
 
-Isolated Claude Code environments — like Python venvs, but for AI agents.
+Isolated agent environments — like Python venvs, but for AI agents.
 
-`aello` lets you define reusable agent **blueprints** (a name, a model, a persona, and a role) and drop them into any project as an isolated Claude Code environment. Each blueprint runs Claude with its own `CLAUDE_CONFIG_DIR`, so multiple agents can work in the same repo without stepping on each other's config — and `git blame` can tell you which one made each change.
+`aello` lets you define reusable agent **blueprints** (a name, a model, a persona, and a role) and drop them into any project as an isolated environment. Each blueprint runs its own CLI with its own config directory, so multiple agents can work in the same repo without stepping on each other's config — and `git blame` can tell you which one made each change. **Claude Code** is the default and what everything here is built around; the **Cline CLI** is also supported, with its own key — see [Two agents](#two-agents).
 
 - **Isolated** — every blueprint gets its own `.claude-env-<name>/` (settings, persona, hooks, skills), kept out of your repo automatically.
-- **Shared login** — one `aello login` token is shared safely across any number of concurrent envs (no credential rotation races).
+- **Shared login** — one `aello login` token is shared safely across any number of concurrent envs (no credential rotation races). Cline keeps a separate login of its own.
 - **Role-driven** — one choice per blueprint: `maintainer` owns the repo's docs and git, `contributor` commits its own work and logs it, `standalone` works alone. aello scaffolds the matching files and generates a `/sync` skill tailored to exactly that.
 - **Spoken** — every env reads each response's `TL;DR:` line aloud, with a different voice per concurrent session and one `aello voice mute` to stop them all.
 - **Same manners everywhere** — four rules ride every prompt in every env: be concise, don't be sycophantic, never hand over a plan for approval (plan mode is blocked outright), and close with one block — the spoken `TL;DR:` line, with 3–4 next steps beneath it, written to stand alone so you can skip the prose entirely.
@@ -125,15 +125,15 @@ Those pages are generated from [`docs/`](docs/) in this repo, and the same files
 aello                                          # interactive TUI (no args)
 aello --version
 aello init                                     # first-run: login + first blueprint
-aello add <name> --model <m> [--claude-md <coder|none|custom|path>]
+aello add <name> --model <m> [--agent claude|cline] [--claude-md <coder|none|custom|path>]
         [--role maintainer|contributor|standalone]
 aello list [--json]
 aello remove <name> [--yes] [--purge]         # --purge also deletes the placed env dir + mirror
 aello edit <name> [--rename <new>] [--model <m>] [--claude-md <coder|none|custom|path>]
         [--role maintainer|contributor|standalone]
 aello persona <name> --from <file> [--project <dir>]     # install a written persona into a placed env
-aello run [name] [--resume [id]] [-p <prompt>] [-- <extra args for claude>]
-aello login                                    # store the shared Claude token
+aello run [name] [--resume [id]] [-p <prompt>] [-- <extra args for the agent>]
+aello login [--agent claude|cline]             # store a shared login (asks which, if unsaid)
 aello github-setup [--name <repo>] [--public] [--yes]   # create + push the repo via gh
 aello docs [name]                              # print bundled reference docs (no name lists them)
 aello voice <mute|unmute|stop|status> [--project]       # off switch for the voice
@@ -180,6 +180,21 @@ Pick one per blueprint. **One maintainer per repo, any number of contributors** 
 The persona is separate from the role: `--claude-md <name\|path>` writes the env's global `CLAUDE.md` once, and no role rewrites it.
 
 Upgrading from a pre-0.2 config? The five capability flags are gone and existing blueprints migrate themselves — see [`docs/roles.md`](docs/roles.md).
+
+## Two agents
+
+Every blueprint drives one CLI, chosen at `add` time and fixed:
+
+```sh
+aello add Researcher --model opus                                    # Claude Code (default)
+aello add Runner --model openai/gpt-5.6-luna-pro --agent cline       # the Cline CLI
+```
+
+They share nothing but the project directory — separate env dirs (`.claude-env-<name>` vs `.cline-env-<name>`), separate logins, separate everything. `aello login` asks which account you mean.
+
+⚠️ **A Cline env is metered.** It uses your own provider key and every turn costs money per token, where a Claude env costs nothing beyond the subscription. Its env dir is gitignored unconditionally, because that key sits in plaintext inside it.
+
+A Cline env is also quieter, and that is a limitation of Cline rather than a choice: it gets **no voice, no transcript capture and no seeded skills**, because Cline fires no end-of-response hook and its one working hook carries no content. The four response rules do survive, as a rules file. Full detail, including why the Claude subscription can't drive a Cline env that edits files: [`docs/cline.md`](docs/cline.md).
 
 ## Voice — every env speaks
 

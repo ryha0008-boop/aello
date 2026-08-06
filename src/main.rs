@@ -3,6 +3,7 @@ use clap::{CommandFactory, Parser, Subcommand};
 use std::path::PathBuf;
 
 mod auth;
+mod cline;
 mod config;
 mod docs;
 mod github;
@@ -15,7 +16,7 @@ mod tui;
 mod update;
 mod voice;
 
-use models::{Blueprint, Instance, Role};
+use models::{Agent, Blueprint, Instance, Role};
 
 /// Isolated Claude Code environments — like venvs, but for AI agents.
 #[derive(Parser)]
@@ -30,9 +31,14 @@ enum Commands {
     /// Add a blueprint (a named AI identity).
     Add {
         name: String,
-        /// Claude model, e.g. sonnet, opus, haiku.
+        /// Model. For claude: sonnet, opus, haiku. For cline: whatever the
+        /// provider calls it, e.g. openai/gpt-5.6-luna-pro.
         #[arg(long)]
         model: String,
+        /// Which CLI this blueprint drives: claude (default) or cline. Fixed at
+        /// add time — the two share nothing on disk.
+        #[arg(long, value_enum, default_value = "claude")]
+        agent: Agent,
         /// Global persona: coder (a coding project), none (anything else) or a
         /// path to a CLAUDE.md file. Becomes `custom` once a persona has been
         /// generated for the env. Placed into the env dir on first run.
@@ -78,8 +84,12 @@ enum Commands {
     },
     /// First-run setup: log in (if needed) and create your first blueprint.
     Init,
-    /// Generate + store a shared Claude login token (runs `claude setup-token`).
-    Login,
+    /// Store a shared login. Asks which agent unless `--agent` says.
+    Login {
+        /// claude (runs `claude setup-token`) or cline (a provider key).
+        #[arg(long, value_enum)]
+        agent: Option<Agent>,
+    },
     /// Create a GitHub repo for the current project and push (needs `gh`).
     GithubSetup {
         /// Repo name (default: current directory name).
@@ -198,15 +208,15 @@ fn main() {
     let cli = Cli::parse();
     let result = match cli.command {
         None => tui::run(),
-        Some(Commands::Add { name, model, claude_md, role }) => {
-            cmd_add(name, model, claude_md, role)
+        Some(Commands::Add { name, model, agent, claude_md, role }) => {
+            cmd_add(name, model, agent, claude_md, role)
         }
         Some(Commands::List { json }) => cmd_list(json),
         Some(Commands::Remove { name, yes, purge }) => cmd_remove(name, yes, purge),
         Some(Commands::Edit(args)) => cmd_edit(args),
         Some(Commands::Run { name, resume, prompt, extra }) => cmd_run(name, resume, prompt, extra),
         Some(Commands::Init) => cmd_init(),
-        Some(Commands::Login) => cmd_login(),
+        Some(Commands::Login { agent }) => cmd_login(agent),
         Some(Commands::GithubSetup { name, public, yes }) => github::run(name, public, yes),
         Some(Commands::Update { force }) => update::run(force),
         Some(Commands::Completions { shell }) => cmd_completions(shell),
@@ -291,13 +301,27 @@ pub(crate) fn validate_model(model: &str) -> Result<String> {
 fn cmd_add(
     name: String,
     model: String,
+    agent: Agent,
     claude_md: Option<String>,
     role: Role,
 ) -> Result<()> {
     validate_name(&name)?;
-    let model = validate_model(&model)?;
+    // Only Claude's model names are a known set. Cline's are provider-scoped
+    // (`openai/gpt-5.6-luna-pro`, `qwen/qwen3.8-max`), there is no list to check
+    // against, and rejecting an unfamiliar one would block every provider aello
+    // has not heard of.
+    let model = match agent {
+        Agent::Claude => validate_model(&model)?,
+        Agent::Cline => model,
+    };
     // Catch a typo'd built-in / missing template path at add time, not first run.
     if let Some(cm) = &claude_md {
+        if agent == Agent::Cline {
+            bail!(
+                "--claude-md does not apply to a Cline blueprint: Cline ignores CLAUDE.md and \
+                 reads rules from its own config dir, which aello writes at placement"
+            );
+        }
         templates::resolve(cm)?;
     }
     let mut cfg = config::load()?;
@@ -310,15 +334,20 @@ fn cmd_add(
              case-insensitive on Windows/macOS filesystems and would share one env dir"
         );
     }
+    let needs_login = agent == Agent::Cline && cfg.cline.is_none();
     cfg.blueprints.push(Blueprint {
         name: name.clone(),
         model,
+        agent,
         claude_md,
         role,
         legacy_caps: None,
     });
     config::save(&cfg)?;
-    println!("Added blueprint '{name}' ({}).", role.as_str());
+    println!("Added blueprint '{name}' ({}, {}).", agent.as_str(), role.as_str());
+    if needs_login {
+        println!("No Cline login yet — run `aello login --agent cline` before running it.");
+    }
     Ok(())
 }
 
@@ -508,6 +537,14 @@ pub(crate) fn run_blueprint(
         .with_context(|| format!("blueprint name in config.toml is invalid: '{}'", bp.name))?;
 
     let project = std::env::current_dir().context("could not determine current directory")?;
+
+    // The two agents diverge completely from here — different env dir, different
+    // placement, different launch mechanism. Everything Cline is in `cline.rs`;
+    // the rest of this function is Claude's and stays that way.
+    if bp.agent == Agent::Cline {
+        return run_cline(&cfg, bp, &project, resume, prompt, extra);
+    }
+
     let env = project::env_dir(&project, &bp.name);
     let inst = Instance { name: bp.name.clone(), model: bp.model.clone() };
 
@@ -549,7 +586,73 @@ pub(crate) fn run_blueprint(
     launch::launch(&env, &bp.name, resume.as_ref(), prompt, extra, &contextdb, cfg.oauth_token.as_deref())
 }
 
-fn cmd_login() -> Result<()> {
+/// Place and launch a Cline blueprint.
+///
+/// Much shorter than the Claude path because a Cline env is much smaller: no
+/// persona to resolve (Cline ignores `CLAUDE.md`), no hooks worth registering,
+/// no voice, no contextdb. Isolation, a credential, and the response rules.
+fn run_cline(
+    cfg: &models::Config,
+    bp: &Blueprint,
+    project: &std::path::Path,
+    resume: Option<Option<String>>,
+    prompt: Option<&str>,
+    extra: &[String],
+) -> Result<i32> {
+    let env = cline::env_dir(project, &bp.name);
+    cline::place(&env, bp)?;
+
+    // A Cline env is billed per token, so a missing credential is a hard stop
+    // rather than a warning: Cline would otherwise fall through to its own
+    // interactive login and the user would be authenticating a tool they thought
+    // aello had already configured.
+    let Some(auth) = cfg.cline.as_ref() else {
+        bail!(
+            "blueprint '{}' is a Cline blueprint but there is no Cline login — \
+             run `aello login --agent cline` first",
+            bp.name
+        );
+    };
+
+    // Install the credential through `cline auth`. Every run, because the key
+    // can change in config.toml and a marker saying "already authenticated"
+    // would go stale exactly then.
+    cline::ensure_credential(&env, auth)?;
+
+    // Cline resumes by session id only; there is no `--continue`. Say so rather
+    // than dropping the flag, which would silently start a fresh session.
+    if matches!(resume, Some(Some(ref s)) if s.is_empty()) || matches!(resume, Some(None)) {
+        bail!("Cline has no 'continue most recent' — pass a session id: aello run {} --resume <id>", bp.name);
+    }
+
+    cline::launch(&env, &bp.name, Some(auth), &bp.model, resume.as_ref(), prompt, extra)
+}
+
+/// `aello login` covers two different accounts, so it asks which one rather
+/// than assuming. The user's rule: the two must stay separate — a Claude
+/// subscription and a Cline provider key are different logins with different
+/// billing, and setting one must never look like setting the other.
+fn cmd_login(agent: Option<Agent>) -> Result<()> {
+    let agent = match agent {
+        Some(a) => a,
+        None => {
+            println!("Which agent are you logging in?");
+            for (i, a) in Agent::ALL.iter().enumerate() {
+                println!("  {}. {} — {}", i + 1, a.as_str(), a.describe());
+            }
+            match prompt("Choice", "1")?.trim() {
+                "2" | "cline" => Agent::Cline,
+                _ => Agent::Claude,
+            }
+        }
+    };
+    match agent {
+        Agent::Claude => cmd_login_claude(),
+        Agent::Cline => cmd_login_cline(),
+    }
+}
+
+fn cmd_login_claude() -> Result<()> {
     match auth::capture_setup_token()? {
         Some(token) => {
             let mut cfg = config::load()?;
@@ -562,6 +665,35 @@ fn cmd_login() -> Result<()> {
     Ok(())
 }
 
+/// Store a Cline provider credential, shared by every Cline env the way the
+/// OAuth token is shared by every Claude env.
+///
+/// Prompted rather than captured from a subprocess: `cline auth` takes the same
+/// three values as flags (`-p`, `-k`, `-m`), so there is no browser flow to tee
+/// the way `claude setup-token` needs. aello writes `providers.json` itself at
+/// placement, which is also what makes an env placeable with no `cline` on PATH.
+fn cmd_login_cline() -> Result<()> {
+    let mut cfg = config::load()?;
+    let current = cfg.cline.as_ref();
+    println!("Cline is billed per token by your provider — this is not the Claude subscription.");
+    let provider = prompt(
+        "Provider id (openrouter, cline, anthropic, …)",
+        current.map_or("openrouter", |c| c.provider.as_str()),
+    )?;
+    let model = prompt(
+        "Model id for that provider",
+        current.map_or("openai/gpt-5.6-luna-pro", |c| c.model.as_str()),
+    )?;
+    let key = prompt_optional("API key (blank to keep any existing / use no key)")?;
+    let base_url = prompt_optional("Base URL override (blank for the provider default)")?;
+
+    let api_key = key.or_else(|| current.and_then(|c| c.api_key.clone()));
+    cfg.cline = Some(models::ClineAuth { provider, api_key, model, base_url });
+    config::save(&cfg)?;
+    println!("Saved the Cline login. Every Cline env will use it.");
+    Ok(())
+}
+
 /// First-run wizard: ensure a shared login token exists, then walk the user
 /// through creating their first blueprint. Idempotent — re-running it with a
 /// token and blueprints already present just reports and exits.
@@ -570,7 +702,7 @@ fn cmd_init() -> Result<()> {
 
     if cfg.oauth_token.is_none() {
         println!("No shared login token yet — let's create one.");
-        cmd_login()?;
+        cmd_login(Some(Agent::Claude))?;
         cfg = config::load()?; // reload to pick up the saved token
         if cfg.oauth_token.is_none() {
             println!("\nSkipped login — re-run `aello init` or `aello login` when ready.");
@@ -616,6 +748,10 @@ fn cmd_init() -> Result<()> {
     cfg.blueprints.push(Blueprint {
         name: name.clone(),
         model,
+        // The first-run wizard makes Claude blueprints only. A Cline env needs a
+        // metered provider key, which is not a thing to ask for before someone
+        // has run aello once.
+        agent: Agent::Claude,
         claude_md: persona,
         role,
         legacy_caps: None,

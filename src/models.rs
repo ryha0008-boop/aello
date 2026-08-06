@@ -114,12 +114,100 @@ impl Role {
     }
 }
 
+/// Which CLI a blueprint drives. Chosen at `add` time and fixed thereafter —
+/// the two agents share nothing on disk, so switching one would strand its env.
+///
+/// The split is deliberate and total: a Claude blueprint lives in
+/// `.claude-env-<name>` and is configured by an environment variable; a Cline
+/// blueprint lives in `.cline-env-<name>` and is configured by command-line
+/// flags. Nothing is shared but the project directory itself. Everything that
+/// differs between them is behind this enum or in `cline.rs`, so neither can
+/// quietly acquire the other's assumptions.
+///
+/// `#[serde(default)]` on the field is the whole migration: every blueprint
+/// written before this loads as `Claude`, which is what it was.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+#[clap(rename_all = "lowercase")]
+pub enum Agent {
+    /// Claude Code. Subscription auth via the shared OAuth token.
+    #[default]
+    Claude,
+    /// The Cline CLI. Needs its own provider credential — see [`ClineAuth`].
+    Cline,
+}
+
+impl Agent {
+    pub const ALL: &'static [Agent] = &[Agent::Claude, Agent::Cline];
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Agent::Claude => "claude",
+            Agent::Cline => "cline",
+        }
+    }
+
+    /// The env dir prefix. Claude's is unchanged from before this enum existed:
+    /// 39 envs are on disk under `.claude-env-*` and a rename would strand all
+    /// of them, so the new agent gets the new prefix and the old one keeps its.
+    pub fn env_prefix(&self) -> &'static str {
+        match self {
+            Agent::Claude => ".claude-env-",
+            Agent::Cline => ".cline-env-",
+        }
+    }
+
+    /// The gitignore line that covers this agent's env dirs.
+    pub fn gitignore_pattern(&self) -> &'static str {
+        match self {
+            Agent::Claude => ".claude-env-*",
+            Agent::Cline => ".cline-env-*",
+        }
+    }
+
+    pub fn describe(&self) -> &'static str {
+        match self {
+            Agent::Claude => "Claude Code — shared subscription login",
+            Agent::Cline => "Cline CLI — its own provider key, metered",
+        }
+    }
+}
+
+/// Credentials for the Cline CLI, stored once and shared by every Cline env
+/// exactly as `oauth_token` is shared by every Claude env.
+///
+/// Separate from `oauth_token` on purpose: the two are different accounts with
+/// different billing, and `aello login` asks which one you mean rather than
+/// overloading a single field. Cline reads this from
+/// `<data-dir>/settings/providers.json`, which aello writes at placement.
+///
+/// **Metered.** Unlike the Claude token, every turn spent through this costs
+/// money per token. That is a change in what aello is, not just a new field.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClineAuth {
+    /// Cline provider id, e.g. `openrouter`, `cline`, `anthropic`.
+    pub provider: String,
+    /// The provider's API key. Absent for a provider that authenticates some
+    /// other way — `cline auth` records `tokenSource` for those and stores no
+    /// key in `providers.json`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    /// Model id for that provider, e.g. `openai/gpt-5.6-luna-pro`.
+    pub model: String,
+    /// Optional base URL override (self-hosted, proxy, Azure).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+}
+
 /// A global AI identity stored in aello's config. Placing a blueprint into a
 /// project produces an Instance (see Phase 2).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Blueprint {
     pub name: String,
     pub model: String,
+    /// Which CLI this blueprint drives. Absent means `claude` — see [`Agent`].
+    #[serde(default)]
+    pub agent: Agent,
     /// Global persona: `coder`, `none`, `custom`, or a path to a CLAUDE.md
     /// file. `custom` means the env's own CLAUDE.md is authoritative and aello
     /// writes nothing — that is the steady state once a persona is generated.
@@ -163,6 +251,11 @@ pub struct Config {
     /// share it safely. Set via `aello login`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oauth_token: Option<String>,
+    /// Shared Cline provider credential. Set via `aello login --agent cline`.
+    /// Deliberately not merged with `oauth_token`: different account, different
+    /// billing, and one being set says nothing about the other.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cline: Option<ClineAuth>,
 }
 
 impl Config {
@@ -228,10 +321,65 @@ mod tests {
         Blueprint {
             name: name.into(),
             model: "opus".into(),
+            agent: Agent::Claude,
             claude_md: None,
             role: Role::Standalone,
             legacy_caps: None,
         }
+    }
+
+    /// The entire migration for 39 existing blueprints is this default. A config
+    /// written before the agent field existed must load as Claude and, once
+    /// saved, must not start claiming to be something else.
+    #[test]
+    fn a_blueprint_without_an_agent_is_a_claude_one() {
+        let text = "[[blueprints]]\nname = \"Old\"\nmodel = \"opus\"\nrole = \"maintainer\"\n";
+        let cfg: Config = toml::from_str(text).unwrap();
+        assert_eq!(cfg.blueprints[0].agent, Agent::Claude);
+
+        let out = toml::to_string_pretty(&cfg).unwrap();
+        let back: Config = toml::from_str(&out).unwrap();
+        assert_eq!(back.blueprints[0].agent, Agent::Claude);
+    }
+
+    /// The two agents must never resolve to the same directory: one env dir
+    /// holding both a Claude config and a Cline config is exactly the mixing
+    /// this split exists to prevent, and it would be silent — each CLI would
+    /// simply ignore the other's files.
+    #[test]
+    fn the_two_agents_never_share_an_env_dir_or_an_ignore_line() {
+        assert_ne!(Agent::Claude.env_prefix(), Agent::Cline.env_prefix());
+        assert_ne!(Agent::Claude.gitignore_pattern(), Agent::Cline.gitignore_pattern());
+        // Claude's prefix is load-bearing: 39 env dirs on this machine are named
+        // with it, and changing it strands every one of them.
+        assert_eq!(Agent::Claude.env_prefix(), ".claude-env-");
+        // And neither prefix may be a prefix of the other, or one agent's glob
+        // would match the other's dirs.
+        assert!(!Agent::Cline.env_prefix().starts_with(Agent::Claude.env_prefix()));
+        assert!(!Agent::Claude.env_prefix().starts_with(Agent::Cline.env_prefix()));
+    }
+
+    /// A Cline credential must survive a round trip with its key intact, and a
+    /// config with no Cline block must not grow one.
+    #[test]
+    fn the_cline_credential_is_separate_from_the_claude_token() {
+        let mut cfg = Config { blueprints: vec![bp("a")], ..Default::default() };
+        cfg.oauth_token = Some("sk-ant-oat01-xxx".into());
+        let out = toml::to_string_pretty(&cfg).unwrap();
+        assert!(!out.contains("[cline]"), "an unset Cline login was written anyway: {out}");
+
+        cfg.cline = Some(ClineAuth {
+            provider: "openrouter".into(),
+            api_key: Some("sk-or-v1-xxx".into()),
+            model: "openai/gpt-5.6-luna-pro".into(),
+            base_url: None,
+        });
+        let back: Config = toml::from_str(&toml::to_string_pretty(&cfg).unwrap()).unwrap();
+        let c = back.cline.unwrap();
+        assert_eq!(c.provider, "openrouter");
+        assert_eq!(c.api_key.as_deref(), Some("sk-or-v1-xxx"));
+        // Setting one login must never disturb the other.
+        assert_eq!(back.oauth_token.as_deref(), Some("sk-ant-oat01-xxx"));
     }
 
     #[test]

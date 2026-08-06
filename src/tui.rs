@@ -657,6 +657,9 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                         cfg.blueprints.push(Blueprint {
                             name: name.clone(),
                             model: model.clone(),
+                            // The guided add flow is Claude-only for now; a Cline
+                            // blueprint is `aello add --agent cline`.
+                            agent: crate::models::Agent::Claude,
                             claude_md: persona.clone(),
                             role,
                             legacy_caps: None,

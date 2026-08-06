@@ -89,7 +89,7 @@ jobs:
 
 /// Env dir for a blueprint inside a project — `project/.claude-env-<name>`.
 pub fn env_dir(project: &Path, name: &str) -> PathBuf {
-    project.join(format!(".claude-env-{name}"))
+    project.join(format!("{}{name}", crate::models::Agent::Claude.env_prefix()))
 }
 
 /// Move a placed blueprint's on-disk artifacts when it's renamed: the env dir
@@ -440,7 +440,7 @@ fn scaffold_project(
     }
     if caps.github {
         // Keep env dirs (and the credentials inside them) out of the repo.
-        ensure_gitignore_entry(project, ".claude-env-*")?;
+        ensure_gitignore_entry(project, crate::models::Agent::Claude.gitignore_pattern())?;
         // Normalize line endings so multi-OS blueprints sharing a repo don't
         // churn CRLF/LF on every commit.
         let ga = project.join(".gitattributes");
@@ -572,7 +572,7 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
 /// Ensure `entry` exists as its own line in the project's `.gitignore`, creating
 /// the file or appending as needed. Idempotent — a matching line (ignoring
 /// surrounding whitespace) is never duplicated. Preserves existing content.
-fn ensure_gitignore_entry(project: &Path, entry: &str) -> Result<()> {
+pub fn ensure_gitignore_entry(project: &Path, entry: &str) -> Result<()> {
     let path = project.join(".gitignore");
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
     // Treat a trailing-slash variant (`.claude-env-*/`) as already present so we
