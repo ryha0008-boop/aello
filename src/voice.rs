@@ -57,10 +57,22 @@ fn read_state(dir: &Path) -> Result<serde_json::Value> {
 /// that unrecoverable was the read side, which is why `read_state` now refuses
 /// a corrupt file rather than writing empty defaults over it.
 fn write_state(dir: &Path, v: &serde_json::Value) -> Result<()> {
+    use std::io::Write;
     std::fs::create_dir_all(dir).context("could not create the voice state dir")?;
     let tmp = dir.join(format!("state.{}.tmp", std::process::id()));
-    std::fs::write(&tmp, serde_json::to_string_pretty(v)?)
-        .context("could not write the voice state")?;
+    {
+        // fsync before the rename, as `speak.py` does: `rename` is atomic with
+        // respect to the *name*, not to bytes still sitting in the OS cache, so
+        // a power loss here published a state.json that was present, current by
+        // its timestamp, and truncated. That is the one shape neither writer
+        // recovers from on its own — the Python side reads it as `intact=False`
+        // and silently drops every write afterwards, while `read_state` above
+        // refuses, which between them means the mute can never be repaired.
+        let mut f = std::fs::File::create(&tmp).context("could not write the voice state")?;
+        f.write_all(serde_json::to_string_pretty(v)?.as_bytes())
+            .context("could not write the voice state")?;
+        f.sync_all().context("could not flush the voice state")?;
+    }
     std::fs::rename(&tmp, dir.join("state.json")).context("could not replace the voice state")
 }
 

@@ -32,7 +32,14 @@ REASON = (
 )
 
 try:
-    payload = json.load(sys.stdin)
+    # Read bytes and decode UTF-8 ourselves. `json.load(sys.stdin)` decodes with
+    # the console code page on Windows. Measured here (cp1252, Python 3.14): a
+    # CJK character in a path arrived as three mojibake characters rather than
+    # raising - and a code page that leaves the byte undefined raises instead,
+    # which this `except` turns into "allow". Either way the payload this hook
+    # decides on is not the payload that was sent, and failing open here is plan
+    # mode quietly coming back.
+    payload = json.loads(sys.stdin.buffer.read().decode("utf-8-sig", "replace") or "{}")
 except Exception:
     # Malformed or absent payload: allow, rather than blocking every tool call
     # in the env on a parse error.

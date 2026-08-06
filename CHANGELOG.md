@@ -73,6 +73,28 @@
   fails it with no version to explain the mismatch.
 
 ### Fixed
+- **The five bundled hooks decode their own stdin as UTF-8.** `json.load(sys.stdin)`
+  decodes with the console code page on Windows. Measured (cp1252, Python 3.14):
+  a CJK character in a path arrived as three mojibake characters, so `cwd` and
+  `transcript_path` no longer named real files — and a code page that leaves the
+  byte undefined raises instead, which each hook's blanket `except` swallows.
+  The costs of that were: the plan-mode block **failing open**, a session never
+  archived, the SessionStart standing block never delivered, and all four
+  response rules dropped for the turn. `speak.py` has read bytes for this reason
+  for a long time; the other five now do the same.
+
+- **`aello voice mute` flushes the shared state file before renaming it.**
+  `rename` is atomic with respect to the name, not to bytes still in the OS
+  cache, so a power loss published a `state.json` that was present, current, and
+  truncated — which the Python side then reads as corrupt and silently drops
+  every write to, permanently.
+
+- **`install.sh` verifies the download against `SHA256SUMS`.** The release has
+  published the manifest all along and `aello update` has always checked it, so
+  the `curl | sh` line the README leads with was the least verified way to
+  install aello. It catches a corrupted or truncated download; the manifest
+  travels the same channel as the binary, so it is not tamper protection.
+
 - **`aello login` redacts any line containing a token, not just a bare one.**
   Redaction shared its predicate with the parser, which requires a
   whitespace-delimited word starting with `sk-ant-` — so `{"token":"sk-ant-…"}`

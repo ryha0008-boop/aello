@@ -17,7 +17,12 @@ import os
 from datetime import datetime, timezone
 
 try:
-    data = json.load(sys.stdin)
+    # Read bytes and decode UTF-8 ourselves - `json.load(sys.stdin)` decodes
+    # with the console code page on Windows. Measured (cp1252): a CJK path came
+    # through as mojibake, so `cwd` and `transcript_path` no longer name real
+    # files; a code page that leaves the byte undefined raises instead and the
+    # `except` below swallows it, so the session is never archived - transcript and handoff note both. Same form speak.py uses.
+    data = json.loads(sys.stdin.buffer.read().decode("utf-8-sig", "replace") or "{}")
 except Exception:
     sys.exit(0)
 

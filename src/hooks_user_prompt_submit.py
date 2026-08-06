@@ -52,7 +52,11 @@ import sys
 import json
 
 try:
-    json.load(sys.stdin)
+    # Read bytes and decode UTF-8 ourselves - `json.load(sys.stdin)` decodes
+    # with the console code page on Windows, and a code page that leaves the
+    # byte undefined raises, which the `except` below turns into dropping all
+    # four rules for that turn. Same form speak.py uses.
+    json.loads(sys.stdin.buffer.read().decode("utf-8-sig", "replace") or "{}")
 except Exception:
     # Malformed or absent payload: say nothing rather than injecting noise.
     sys.exit(0)

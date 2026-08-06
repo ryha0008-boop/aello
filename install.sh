@@ -61,8 +61,37 @@ fi
 size="$(wc -c < "$tmp")"
 [ "$size" -ge 1048576 ] || die "download was only $size bytes — not a valid binary (network error or missing release asset)"
 
+# Integrity: the release publishes SHA256SUMS beside the binaries, and `aello
+# update` has always checked it — this path did not, so the `curl | sh` line the
+# README leads with was the *least* verified way to install. It catches a
+# corrupted or truncated download, not a tampered release: the manifest travels
+# the same channel as the binary. Skipped only when no checksum tool exists.
+sha_tool=""
+if command -v sha256sum >/dev/null 2>&1; then sha_tool="sha256sum"
+elif command -v shasum >/dev/null 2>&1; then sha_tool="shasum -a 256"; fi
+if [ -n "$sha_tool" ]; then
+  sums="$(mktemp)"
+  trap 'rm -f "$tmp" "$sums"' EXIT
+  if command -v curl >/dev/null 2>&1; then
+    curl -fSL "$BASE/SHA256SUMS" -o "$sums" 2>/dev/null || : > "$sums"
+  else
+    wget -qO "$sums" "$BASE/SHA256SUMS" 2>/dev/null || : > "$sums"
+  fi
+  want="$(awk -v a="$asset" '$2 == a || $2 == "*"a {print $1}' "$sums" | head -n 1)"
+  if [ -n "$want" ]; then
+    got="$(eval "$sha_tool \"\$tmp\"" | awk '{print $1}')"
+    [ "$want" = "$got" ] || die "checksum mismatch for $asset (expected $want, got $got) — not installing"
+    printf 'Checksum verified.\n'
+  else
+    printf 'Note: no SHA256SUMS entry for %s — installing unverified.\n' "$asset"
+  fi
+else
+  printf 'Note: no sha256sum/shasum found — installing unverified.\n'
+fi
+
 chmod +x "$tmp"
 mv "$tmp" "$dest"
+rm -f "${sums:-}" 2>/dev/null || true
 trap - EXIT
 
 # The binaries are unsigned. On macOS a downloaded file carries a quarantine

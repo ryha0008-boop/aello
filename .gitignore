@@ -16,3 +16,8 @@ AUDIT-*.md
 # itself via Cargo.toml + release.yml, not VERSION/version.yml
 /VERSION
 /.github/workflows/version.yml
+# Running a bundled hook (or a test that imports one) writes bytecode beside the
+# source. A .pyc was tracked once and then re-dirtied the tree as a binary diff
+# every time a hook ran.
+__pycache__/
+*.pyc
