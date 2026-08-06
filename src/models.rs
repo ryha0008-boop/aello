@@ -157,6 +157,19 @@ impl Agent {
         }
     }
 
+    /// Where this agent's env dir for `name` lives inside `project`.
+    ///
+    /// Every path that names an env dir goes through here. `project::env_dir` is
+    /// hardcoded to Claude's prefix, and the sites that reached for it without
+    /// asking the blueprint which agent it was — `remove --purge`, `edit
+    /// --rename`, the TUI's local filter, its session list and its delete
+    /// warning — all silently did nothing at all to a Cline env. Nothing to
+    /// delete, nothing to move, nothing said: a `.cline-env-<name>` holding a
+    /// plaintext API key stayed on disk after its blueprint was purged.
+    pub fn env_dir(&self, project: &std::path::Path, name: &str) -> std::path::PathBuf {
+        project.join(format!("{}{name}", self.env_prefix()))
+    }
+
     /// The gitignore line that covers this agent's env dirs.
     pub fn gitignore_pattern(&self) -> &'static str {
         match self {

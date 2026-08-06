@@ -374,7 +374,15 @@ pub fn place(env_dir: &Path, bp: &Blueprint, persona: Option<&str>) -> Result<()
         // Absent means "aello writes none" — but a stale one from a previous
         // persona choice must not linger, since these rules are re-sent on
         // every request and nothing else would ever remove it.
-        None if persona_path.exists() => {
+        //
+        // `custom` is the exception, and the comment above claimed it while the
+        // code did the opposite: `resolve` returns None for both `none` and
+        // `custom`, so a Cline blueprint set to `custom` had the persona the
+        // user wrote deleted on every single run. `custom` means "the env's copy
+        // is authoritative", which is the one case where absence is not a clear.
+        None if persona_path.exists()
+            && bp.claude_md.as_deref() != Some(crate::templates::CUSTOM) =>
+        {
             std::fs::remove_file(&persona_path).context("could not clear the Cline persona")?
         }
         None => {}
@@ -523,6 +531,9 @@ pub fn launch(
     // `claude-code` provider reads `CLAUDE_CONFIG_DIR`, so an inherited one
     // points it at a Claude env whose credentials it cannot use.
     c.env_remove("CLAUDE_CONFIG_DIR");
+    // The same reasoning one step further: that provider also reads the Claude
+    // credentials themselves, and this env is billed against its own key.
+    crate::launch::scrub_inherited_credentials(&mut c);
 
     let status = c
         .status()
@@ -749,6 +760,30 @@ mod tests {
 
         place(&env, &bp(), None).unwrap();
         assert!(!persona.exists(), "a dropped persona kept applying on every request");
+    }
+
+    /// `custom` resolves to no text for the same reason `none` does — the env's
+    /// copy is authoritative — but it means the opposite. Clearing on both left
+    /// a Cline blueprint set to `custom` with no persona at all, rewritten away
+    /// on every run.
+    #[test]
+    fn a_custom_persona_is_left_alone_rather_than_cleared() {
+        let dir = tempfile::tempdir().unwrap();
+        let env = env_dir(dir.path(), "Runner");
+        let persona = env.join("config").join("rules").join("persona.md");
+
+        place(&env, &bp(), Some("# seeded\n")).unwrap();
+        std::fs::write(&persona, "# the persona the user accepted\n").unwrap();
+
+        let mut custom = bp();
+        custom.claude_md = Some(crate::templates::CUSTOM.to_string());
+        place(&env, &custom, None).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&persona).unwrap(),
+            "# the persona the user accepted\n",
+            "a custom persona was cleared as if it were `none`"
+        );
     }
 
     /// Multi-word prompts pass, one-word prompts don't, and an empty/absent one

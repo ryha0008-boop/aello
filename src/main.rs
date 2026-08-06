@@ -349,10 +349,15 @@ fn cmd_add(
 }
 
 fn cmd_remove(name: String, yes: bool, purge: bool) -> Result<()> {
-    let mut cfg = config::load()?;
-    if cfg.find(&name).is_none() {
+    let cfg = config::load()?;
+    let Some(bp) = cfg.find(&name) else {
         bail!("no blueprint named '{name}'");
-    }
+    };
+    // Which agent decides which env dir — `.claude-env-<name>` vs
+    // `.cline-env-<name>`. Purging a Cline blueprint used to delete the Claude
+    // path, find nothing, and say nothing, leaving the env that holds the
+    // plaintext provider key behind with no config entry pointing at it.
+    let agent = bp.agent;
     // `--purge` deletes `.claude-env-<name>` and `claude-internal/<name>` derived
     // from the name; re-gate a hand-edited config name so a traversal like
     // `../../x` can't direct the delete outside the project.
@@ -363,7 +368,7 @@ fn cmd_remove(name: String, yes: bool, purge: bool) -> Result<()> {
 
     // On-disk artifacts for the CURRENT project (the only ones we can locate).
     let project = std::env::current_dir().context("could not determine current directory")?;
-    let env = project::env_dir(&project, &name);
+    let env = agent.env_dir(&project, &name);
     let mirror = project.join("claude-internal").join(&name);
 
     if !yes {
@@ -378,6 +383,7 @@ fn cmd_remove(name: String, yes: bool, purge: bool) -> Result<()> {
         }
     }
 
+    let mut cfg = cfg;
     cfg.blueprints.retain(|b| b.name != name);
     config::save(&cfg)?;
     println!("Removed blueprint '{name}'.");
@@ -471,7 +477,8 @@ fn cmd_edit(args: EditArgs) -> Result<()> {
     // Rename last: move on-disk artifacts for this project, then the config name.
     if let Some(new) = args.rename {
         let project = std::env::current_dir().context("could not determine current directory")?;
-        let moved = project::rename_placed(&project, &args.name, &new)?;
+        let agent = bp.agent;
+        let moved = project::rename_placed(&project, agent, &args.name, &new)?;
         bp.name = new.clone();
         changed = true;
         if moved {
@@ -693,7 +700,7 @@ fn cmd_login_claude() -> Result<()> {
 /// the way `claude setup-token` needs. aello writes `providers.json` itself at
 /// placement, which is also what makes an env placeable with no `cline` on PATH.
 fn cmd_login_cline() -> Result<()> {
-    let mut cfg = config::load()?;
+    let cfg = config::load()?;
     let current = cfg.cline.as_ref();
     println!("Cline is billed per token by your provider — this is not the Claude subscription.");
     let provider = prompt(
@@ -708,6 +715,7 @@ fn cmd_login_cline() -> Result<()> {
     let base_url = prompt_optional("Base URL override (blank for the provider default)")?;
 
     let api_key = key.or_else(|| current.and_then(|c| c.api_key.clone()));
+    let mut cfg = cfg;
     cfg.cline = Some(models::ClineAuth { provider, api_key, model, base_url });
     config::save(&cfg)?;
     println!("Saved the Cline login. Every Cline env will use it.");
@@ -839,6 +847,19 @@ fn cmd_persona(name: String, from: PathBuf, project: Option<PathBuf>) -> Result<
         .find(&name)
         .with_context(|| format!("no blueprint named '{name}'"))?;
     let bp_name = bp.name.clone();
+    let agent = bp.agent;
+    // The name reaches the filesystem as a bare `<prefix><name>` component, and
+    // a hand-edited config.toml is the one way an unvalidated one gets in.
+    // `cmd_remove`, `cmd_edit` and `run_blueprint` all re-gate here; this was the
+    // one sink that didn't.
+    validate_name(&bp_name)
+        .with_context(|| format!("blueprint name in config.toml is invalid: '{bp_name}'"))?;
+    if agent == Agent::Cline {
+        bail!(
+            "'{bp_name}' is a Cline blueprint — its persona is a rules file, not a CLAUDE.md. \
+             Point it at a file with `aello edit {bp_name} --claude-md <path>` instead."
+        );
+    }
 
     let content = std::fs::read_to_string(&from)
         .with_context(|| format!("could not read the persona at {}", from.display()))?;

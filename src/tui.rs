@@ -194,10 +194,16 @@ enum PostExit {
 /// exists). These are the ones the launch dir is actually "wearing".
 fn local_indices(blueprints: &[Blueprint]) -> Vec<usize> {
     let cwd = std::env::current_dir().unwrap_or_default();
+    local_indices_in(&cwd, blueprints)
+}
+
+/// The `cwd`-explicit half, so the agent dispatch is testable without moving the
+/// process into a temp directory.
+fn local_indices_in(cwd: &std::path::Path, blueprints: &[Blueprint]) -> Vec<usize> {
     blueprints
         .iter()
         .enumerate()
-        .filter(|(_, b)| project::env_dir(&cwd, &b.name).exists())
+        .filter(|(_, b)| b.agent.env_dir(cwd, &b.name).exists())
         .map(|(i, _)| i)
         .collect()
 }
@@ -468,12 +474,20 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                     if let Some(&i) = app.view.get(app.selected) {
                         let name = app.blueprints[i].name.clone();
                         let cwd = std::env::current_dir().unwrap_or_default();
-                        let env = project::env_dir(&cwd, &name);
-                        let items = sessions::list(&env, &cwd);
-                        if items.is_empty() {
-                            app.status = format!("NO SESSIONS FOR '{name}' IN THIS DIR");
+                        // Sessions are Claude Code's own transcript files. A
+                        // Cline env has none, and reporting "NO SESSIONS" for it
+                        // reads as "none yet" rather than "not a thing here".
+                        if app.blueprints[i].agent == Agent::Cline {
+                            app.status =
+                                format!("'{name}' IS A CLINE ENV — NO SESSION HISTORY TO RESUME");
                         } else {
-                            app.mode = Mode::Sessions { name, items, sel: 0 };
+                            let env = project::env_dir(&cwd, &name);
+                            let items = sessions::list(&env, &cwd);
+                            if items.is_empty() {
+                                app.status = format!("NO SESSIONS FOR '{name}' IN THIS DIR");
+                            } else {
+                                app.mode = Mode::Sessions { name, items, sel: 0 };
+                            }
                         }
                     }
                 }
@@ -758,7 +772,13 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
             },
             Mode::ConfirmDelete => match code {
                 KeyCode::Char('y') => {
-                    if let Some(target) = app.current_name() {
+                    if let Some(bp) = app.current() {
+                        let target = bp.name.clone();
+                        // Ask the blueprint which env dir is its own — a Cline
+                        // env is `.cline-env-<name>`, and checking Claude's path
+                        // for it always came back "nothing left behind" while a
+                        // directory holding a plaintext API key sat there.
+                        let agent = bp.agent;
                         let mut cfg = config::load()?;
                         cfg.blueprints.retain(|b| b.name != target);
                         config::save(&cfg)?;
@@ -767,7 +787,7 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                         // tracked mirror is named too — `aello remove --purge`
                         // clears both, and the CLI's own note omits the mirror.
                         let cwd = std::env::current_dir().unwrap_or_default();
-                        let left = project::env_dir(&cwd, &target).exists();
+                        let left = agent.env_dir(&cwd, &target).exists();
                         app.status = if left {
                             format!("REMOVED '{target}' — ENV DIR + claude-internal/{target} REMAIN (aello remove {target} --purge)")
                         } else {
@@ -1616,6 +1636,37 @@ mod tests {
 
     fn press(code: KeyCode, mods: KeyModifiers) -> KeyEvent {
         KeyEvent::new(code, mods)
+    }
+
+    /// A Cline env placed here is placed here. The filter asked whether
+    /// `.claude-env-<name>` existed regardless of agent, so every Cline
+    /// blueprint was hidden by the default view in the very directory it lives
+    /// in — and the footer counted it out ("PLACED HERE · 1 OF 2").
+    #[test]
+    fn a_placed_cline_env_counts_as_local() {
+        let dir = tempfile::tempdir().unwrap();
+        let bps = vec![
+            Blueprint {
+                name: "bot".into(),
+                model: "openai/gpt-oss-120b".into(),
+                agent: Agent::Cline,
+                claude_md: None,
+                role: crate::models::Role::Standalone,
+                legacy_caps: None,
+            },
+            Blueprint {
+                name: "coder".into(),
+                model: "sonnet".into(),
+                agent: Agent::Claude,
+                claude_md: None,
+                role: crate::models::Role::Standalone,
+                legacy_caps: None,
+            },
+        ];
+        // Only the Cline one is placed here.
+        std::fs::create_dir_all(Agent::Cline.env_dir(dir.path(), "bot")).unwrap();
+
+        assert_eq!(local_indices_in(dir.path(), &bps), vec![0]);
     }
 
     #[test]

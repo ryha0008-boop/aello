@@ -73,6 +73,25 @@
   fails it with no version to explain the mismatch.
 
 ### Fixed
+- **Commands that name an env dir now ask the blueprint which agent it is.**
+  Five of them built `.claude-env-<name>` regardless, so on a Cline blueprint
+  they operated on a path that does not exist and said nothing: `remove --purge`
+  deleted nothing (leaving `.cline-env-<name>` — which holds the provider key in
+  plaintext — on disk with its config entry gone), `edit --rename` left the env
+  behind so the next run scaffolded a fresh one, and in the TUI a placed Cline
+  env was hidden by the "placed here" filter, reported "NO SESSIONS", and its
+  delete confirmation claimed nothing was left behind. One `Agent::env_dir`
+  helper now serves all five.
+
+- **A Cline blueprint set to `custom` no longer has its persona deleted every
+  run.** `custom` and `none` both resolve to "aello writes no persona text", but
+  they mean opposite things — `custom` means the env's own copy is authoritative.
+  Placement cleared `persona.md` for both, and since Cline rules are re-sent every
+  request, nothing else would ever have put it back.
+
+- **`aello persona` re-validates the name it read from config, and refuses a
+  Cline blueprint** rather than writing a `CLAUDE.md` that Cline does not read.
+
 - **A fresh clone no longer loses everything `claude-internal/` was tracked to
   keep.** The mirror is written one way, env → tracked folder, *with prune* —
   and the env dir is the one thing a clone is guaranteed not to have. So the

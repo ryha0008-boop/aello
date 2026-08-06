@@ -101,18 +101,24 @@ pub fn env_dir(project: &Path, name: &str) -> PathBuf {
 }
 
 /// Move a placed blueprint's on-disk artifacts when it's renamed: the env dir
-/// `.claude-env-<old>` → `.claude-env-<new>`, the `name` in its `.aello.toml`,
+/// `<prefix><old>` → `<prefix><new>` (whichever agent's prefix that is), the
+/// `name` in its `.aello.toml`,
 /// and the tracked `claude-internal/<old>/` mirror → `<new>/`. Returns true when
 /// the env dir was present (i.e. the blueprint is placed in this project);
 /// false is a clean no-op for a blueprint that isn't placed here. Errors if a
 /// destination already exists, so a rename never clobbers another env. Skills
 /// and mirror content that embed the old name are refreshed on the next `run`.
-pub fn rename_placed(project: &Path, old: &str, new: &str) -> Result<bool> {
-    let old_env = env_dir(project, old);
+pub fn rename_placed(
+    project: &Path,
+    agent: crate::models::Agent,
+    old: &str,
+    new: &str,
+) -> Result<bool> {
+    let old_env = agent.env_dir(project, old);
     if !old_env.exists() {
         return Ok(false);
     }
-    let new_env = env_dir(project, new);
+    let new_env = agent.env_dir(project, new);
     let old_mirror = project.join("claude-internal").join(old);
     let new_mirror = project.join("claude-internal").join(new);
 
@@ -1916,7 +1922,7 @@ mod tests {
         let inst = Instance { name: "coder".into(), model: "opus".into() };
         place(&env, &inst, Some("# p"), &Capabilities { github: true, ..Default::default() }).unwrap();
 
-        assert!(rename_placed(proj.path(), "coder", "Coder").unwrap());
+        assert!(rename_placed(proj.path(), crate::models::Agent::Claude, "coder", "Coder").unwrap());
 
         let renamed = env_dir(proj.path(), "Coder");
         assert!(renamed.join("settings.json").exists());
@@ -1942,7 +1948,7 @@ mod tests {
         std::fs::write(proj.path().join("coder.HANDOFF.md"), "resume me\n").unwrap();
         std::fs::write(proj.path().join("coder.NOTE.md"), "inbox\n").unwrap();
 
-        rename_placed(proj.path(), "coder", "reviewer").unwrap();
+        rename_placed(proj.path(), crate::models::Agent::Claude, "coder", "reviewer").unwrap();
 
         assert!(!proj.path().join("coder.HANDOFF.md").exists());
         assert_eq!(
@@ -1964,7 +1970,7 @@ mod tests {
         std::fs::write(proj.path().join("coder.NOTE.md"), "mine\n").unwrap();
         std::fs::write(proj.path().join("reviewer.NOTE.md"), "theirs\n").unwrap();
 
-        rename_placed(proj.path(), "coder", "reviewer").unwrap();
+        rename_placed(proj.path(), crate::models::Agent::Claude, "coder", "reviewer").unwrap();
 
         // The occupied destination wins; the rename still succeeds.
         assert_eq!(
@@ -2213,7 +2219,7 @@ mod tests {
         assert!(proj.path().join("claude-internal/old").exists());
 
         // Rename moves both the env dir and the tracked mirror.
-        assert!(rename_placed(proj.path(), "old", "new").unwrap());
+        assert!(rename_placed(proj.path(), crate::models::Agent::Claude, "old", "new").unwrap());
         let new_env = env_dir(proj.path(), "new");
         assert!(!old_env.exists());
         assert!(new_env.exists());
@@ -2227,13 +2233,13 @@ mod tests {
 
         // A blueprint not placed in this project renames to a clean no-op.
         let fresh = tempfile::tempdir().unwrap();
-        assert!(!rename_placed(fresh.path(), "x", "y").unwrap());
+        assert!(!rename_placed(fresh.path(), crate::models::Agent::Claude, "x", "y").unwrap());
 
         // A destination env dir that already exists is refused, not clobbered.
         let taken = env_dir(proj.path(), "taken");
         place(&taken, &Instance { name: "taken".into(), model: "haiku".into() },
               None, &caps).unwrap();
-        assert!(rename_placed(proj.path(), "new", "taken").is_err());
+        assert!(rename_placed(proj.path(), crate::models::Agent::Claude, "new", "taken").is_err());
     }
 
     #[test]
@@ -2249,7 +2255,7 @@ mod tests {
         // A stray mirror at the destination, with no matching env dir.
         std::fs::create_dir_all(proj.path().join("claude-internal/dest")).unwrap();
 
-        assert!(rename_placed(proj.path(), "src", "dest").is_err());
+        assert!(rename_placed(proj.path(), crate::models::Agent::Claude, "src", "dest").is_err());
         // The source env dir is untouched — nothing half-moved.
         assert!(src_env.exists());
         assert!(!env_dir(proj.path(), "dest").exists());
