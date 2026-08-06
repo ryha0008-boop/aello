@@ -197,7 +197,9 @@ These work from any directory and need no setup — which is exactly where you a
 
 Run several agents at once and each gets a **different voice**, taking turns rather than talking over each other. Each spoken line also raises a desktop notification, for when you're in another window.
 
-Away from the machine? Set `REVOICED_TELEGRAM=1`, `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` and the same line, plus its audio, is sent to a Telegram chat. All three or it stays off; aello sets none of them. On Windows a user-level variable takes effect in sessions that are **already open** — no relaunch — and a blueprint setting `REVOICED_TELEGRAM=0` still opts out.
+Away from the machine? Set `REVOICED_TELEGRAM=1`, `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` and the same line, plus its audio, is sent to a Telegram chat. All three or it stays off; aello sets none of them. On Windows a user-level variable takes effect in sessions that are **already open** — no relaunch — and a blueprint setting `REVOICED_TELEGRAM=0` (or an empty value) still opts out. If messages stop arriving, `aello voice status` names the last failure.
+
+While it speaks it lowers other applications and puts them back afterwards. An application that goes quiet and then closes — or a reboot mid-sentence — is out of reach of that restore, so each turn also checks the volumes Windows has saved and repairs any left down. Set `REVOICED_SWEEP=signature` if some application is deliberately quiet, or `0` to switch the check off.
 
 **You'll need** Python 3, and `pip install edge-tts` for the good voices — without it you get your OS's built-in voice. On Linux you also need one of `mpv`, `ffplay`, `mpg123` or `cvlc` to play audio.
 
