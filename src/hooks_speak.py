@@ -99,7 +99,7 @@ NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if IS_WIN else {}
 # comparing it against the value here is how a vendored copy learns it has
 # fallen behind. Station-only changes leave it alone: a version that moves for
 # reasons the hook never executes trains everyone to ignore the warning.
-HOOK_VERSION = 13
+HOOK_VERSION = 14
 
 
 def _num(name: str, default, cast=int):
@@ -1056,7 +1056,55 @@ def run_cancellable(cmd: list, job_id: str, session: str, stop_at_start: str,
 # for the same reason the kie and ElevenLabs keys do, and one harder one:
 # anyone holding this token can type into a terminal running with permissions
 # bypassed, and state.json is a file the station serves the contents of.
-TELEGRAM = os.environ.get("REVOICED_TELEGRAM", "0") != "0"
+def tg_env(name: str, default: str = "") -> str:
+    """An environment variable, falling back to the one Windows has persisted.
+
+    Windows does not push a newly-set **User** variable into processes that are
+    already running, and Claude Code sessions run for hours. So setting
+    `REVOICED_TELEGRAM` machine-wide turned Telegram on for terminals opened
+    afterwards and left every session already on screen sending nothing - which
+    looks exactly like the feature being off, and says nothing about it.
+    Reported by TechnicalDirector on 2026-08-06 and confirmed here: this env,
+    freshly vendored at 13, could not see any of the three.
+
+    Only when the variable is **absent** from the process, never when it is
+    present and empty or `0`. A blueprint that switches Telegram off for one
+    project must stay switched off, or the machine-wide default would silently
+    override the per-project decision - which is the opt-in's whole point.
+
+    Read once, at import. The hook is a fresh process every turn, so it picks up
+    a change on the next response either way; the station is not, and a registry
+    hit on every send would be paid forty-one times a turn for an answer that
+    changes about once a month.
+    """
+    got = os.environ.get(name)
+    if got is not None:
+        return got
+    return _PERSISTED.get(name, default)
+
+
+def _user_env() -> dict:
+    """Everything at Windows User scope, or {} anywhere else."""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as k:
+            out, i = {}, 0
+            while True:
+                try:
+                    name, value, _ = winreg.EnumValue(k, i)
+                except OSError:
+                    return out
+                out[name] = str(value)
+                i += 1
+    except Exception:
+        return {}
+
+
+_PERSISTED = _user_env()
+
+# Off unless an environment opts in. See `tg_env` for why this is not a plain
+# `os.environ.get`.
+TELEGRAM = tg_env("REVOICED_TELEGRAM", "0") != "0"
 TG_API = "https://api.telegram.org/bot{}/{}"
 
 
@@ -1068,7 +1116,7 @@ def _tg_post(method: str, fields: dict, mp3: Path | None = None) -> bool:
     cannot have - this file runs in 41 vendored copies with nothing installed
     beside it.
     """
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    token = tg_env("TELEGRAM_BOT_TOKEN", "")
     boundary = "----revoiced" + uuid.uuid4().hex
     body = bytearray()
     for key, value in fields.items():
@@ -1102,9 +1150,9 @@ def telegram_send(project: str, text: str, mp3: Path | None) -> bool:
     resolves it to a profile from the text itself and needs no stored map of
     message ids - nothing to grow, nothing to lose across a restart.
     """
-    if not (TELEGRAM and os.environ.get("TELEGRAM_BOT_TOKEN")):
+    if not (TELEGRAM and tg_env("TELEGRAM_BOT_TOKEN")):
         return False
-    chat = os.environ.get("TELEGRAM_CHAT_ID", "")
+    chat = tg_env("TELEGRAM_CHAT_ID", "")
     if not chat:
         return False
     try:
@@ -1467,9 +1515,20 @@ def main() -> None:
               f"entries carry one")
         print(f"edge-tts      : {edge_cmd() or 'NOT FOUND'}")
         print(f"elevenlabs key: {'set' if eleven_key() else 'not set'}")
+        # Where each one came from, not just whether it is there. "off" and
+        # "set at User scope but this process never got it" used to print the
+        # same line, and the second is the one that looks like the feature
+        # being broken - reported by TechnicalDirector after `--status` from a
+        # shell older than the variables told them Telegram was off.
+        def source(name):
+            if name in os.environ:
+                return "set"
+            if name in _PERSISTED:
+                return "set at User scope, picked up from there"
+            return "not set"
         print(f"telegram      : {'on' if TELEGRAM else 'off (REVOICED_TELEGRAM)'}"
-              f", token {'set' if os.environ.get('TELEGRAM_BOT_TOKEN') else 'not set'}"
-              f", chat {'set' if os.environ.get('TELEGRAM_CHAT_ID') else 'not set'}")
+              f", token {source('TELEGRAM_BOT_TOKEN')}"
+              f", chat {source('TELEGRAM_CHAT_ID')}")
     else:
         print(__doc__)
 

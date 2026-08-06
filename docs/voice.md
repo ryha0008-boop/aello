@@ -54,7 +54,11 @@ From 13, `speak.py` also sends the spoken line and its mp3 to a Telegram chat, s
 | `TELEGRAM_BOT_TOKEN` | the bot's API token |
 | `TELEGRAM_CHAT_ID` | the chat to deliver to |
 
-aello does not set these. They are read from the process environment, so a user- or machine-level variable covers every env at once, and a blueprint that wants to differ can override it. `python <env>/hooks/speak.py --status` prints a `telegram` line reporting all three — which is the check that proves the variables reached the process, not just that the code is present. `--hook-version` only proves the code is there.
+aello does not set these. A blueprint that wants to differ can override any of them, and `REVOICED_TELEGRAM=0` is a real opt-out.
+
+From **14**, a name that is *absent* from the process environment falls back to the persisted `HKCU\Environment` value on Windows, so setting these machine-wide reaches sessions that are already open. That fallback exists because 13 did not: Windows only seeds a process environment at creation, so at 13 the variables worked in terminals started afterwards and were silently inert in every session already running — on, and sending nothing. The fallback fires **only on absent**, never on present, so a blueprint's `0` or an explicitly empty value still wins.
+
+`python <env>/hooks/speak.py --status` prints a `telegram` line naming the source of each value — `set`, `set at User scope, picked up from there`, or `not set`. That line is the check that proves the variables reached the process; `--hook-version` only proves the code is there. To tell 13 from 14 you must run it from a shell that never inherited the variables — a fresh shell has them either way and reports the same on both.
 
 ## Shared state, per-env scripts
 

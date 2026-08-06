@@ -3,6 +3,20 @@
 ## [Unreleased]
 
 ### Added
+- **`HOOK_VERSION` 14: turning Telegram on now reaches sessions that are
+  already open.** At 13 the three variables only worked for a terminal started
+  after they were set — Windows never pushes a new User-scope variable into a
+  running process, so every session already on screen kept sending nothing and
+  said nothing about it. 14 falls back to the persisted `HKCU\Environment`
+  value when a name is **absent** from the process environment, so no relaunch
+  is needed. It only fires on absent, never on present: `REVOICED_TELEGRAM=0`
+  in a blueprint still wins, and so does an explicitly empty value, so a
+  per-project opt-out survives a machine-wide default. `speak.py --status` now
+  names the source (`set`, `set at User scope, picked up from there`, or
+  `not set`), which is also the only way to tell 13 from 14 — and only from a
+  shell that never inherited the variables, since a fresh one cannot
+  distinguish them.
+
 - **The voice hook is re-vendored at `HOOK_VERSION` 13, which adds a Telegram
   sender.** Upstream now delivers the spoken `TL;DR:` line and its mp3 to a
   Telegram chat alongside the local playback, so a response reaches you when
