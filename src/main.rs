@@ -720,7 +720,7 @@ fn cmd_login_cline() -> Result<()> {
         "Model id for that provider",
         current.map_or("openai/gpt-5.6-luna-pro", |c| c.model.as_str()),
     )?;
-    let key = prompt_optional("API key (blank to keep any existing / use no key)")?;
+    let key = prompt_secret("API key (hidden; blank to keep any existing / use no key)")?;
     let base_url = prompt_optional("Base URL override (blank for the provider default)")?;
 
     let api_key = key.or_else(|| current.and_then(|c| c.api_key.clone()));
@@ -845,6 +845,69 @@ fn prompt_optional(label: &str) -> Result<Option<String>> {
     }
     let v = line.trim();
     Ok((!v.is_empty()).then(|| v.to_string()))
+}
+
+/// Read a secret without echoing it.
+///
+/// The Cline API key was read with `prompt_optional`, a plain `read_line`, so it
+/// was displayed as it was typed and captured by `tmux`, `script` and asciinema
+/// — while the Claude token on the sibling path is deliberately scrubbed from
+/// stdout for exactly that reason. Same credential class, opposite treatment.
+///
+/// Falls back to the echoing read when raw mode is unavailable (a pipe, CI, a
+/// terminal that refuses), and says so rather than silently echoing. Every exit
+/// path leaves raw mode, including Ctrl+C — a terminal left raw is worse than a
+/// visible key.
+fn prompt_secret(label: &str) -> Result<Option<String>> {
+    use ratatui::crossterm::event::{read, Event, KeyCode, KeyEventKind, KeyModifiers};
+    use ratatui::crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+    use std::io::Write;
+
+    // Gate on stdin being a terminal, not on whether raw mode can be entered.
+    // On Windows crossterm opens `CONIN$` directly, so `enable_raw_mode()`
+    // *succeeds* with a piped stdin and then reads the console instead — a
+    // scripted `aello login --agent cline` hung on the key prompt forever
+    // rather than falling back. Measured, after writing it the other way.
+    let interactive = std::io::IsTerminal::is_terminal(&std::io::stdin());
+
+    print!("{label}: ");
+    std::io::stdout().flush().ok();
+
+    if !interactive || enable_raw_mode().is_err() {
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line).context("could not read input")? == 0 {
+            return Ok(None);
+        }
+        let v = line.trim();
+        return Ok((!v.is_empty()).then(|| v.to_string()));
+    }
+
+    let mut secret = String::new();
+    let outcome = loop {
+        match read() {
+            Ok(Event::Key(k)) if k.kind != KeyEventKind::Release => match k.code {
+                KeyCode::Enter => break Ok(()),
+                KeyCode::Backspace => {
+                    secret.pop();
+                }
+                KeyCode::Esc => break Err("cancelled"),
+                KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                    break Err("cancelled")
+                }
+                KeyCode::Char(c) => secret.push(c),
+                _ => {}
+            },
+            Ok(_) => {}
+            Err(_) => break Err("could not read input"),
+        }
+    };
+    let _ = disable_raw_mode();
+    println!();
+    match outcome {
+        Ok(()) => Ok((!secret.trim().is_empty()).then(|| secret.trim().to_string())),
+        Err("cancelled") => Ok(None),
+        Err(e) => bail!("{e}"),
+    }
 }
 
 /// Accept a generated persona into a placed env.

@@ -73,6 +73,12 @@
   fails it with no version to explain the mismatch.
 
 ### Fixed
+- **`aello login --agent cline` no longer echoes the API key as you type it.**
+  It was read with a plain `read_line`, so the key was displayed and captured by
+  `tmux`, `script` and asciinema — while the Claude token on the sibling path is
+  deliberately scrubbed from stdout for exactly that reason. Piped input still
+  works and still reads from the pipe.
+
 - **The five bundled hooks decode their own stdin as UTF-8.** `json.load(sys.stdin)`
   decodes with the console code page on Windows. Measured (cp1252, Python 3.14):
   a CJK character in a path arrived as three mojibake characters, so `cwd` and
