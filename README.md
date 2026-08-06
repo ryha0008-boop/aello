@@ -197,6 +197,8 @@ These work from any directory and need no setup — which is exactly where you a
 
 Run several agents at once and each gets a **different voice**, taking turns rather than talking over each other. Each spoken line also raises a desktop notification, for when you're in another window.
 
+Away from the machine? Set `REVOICED_TELEGRAM=1`, `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` and the same line, plus its audio, is sent to a Telegram chat. All three or it stays off; aello sets none of them.
+
 **You'll need** Python 3, and `pip install edge-tts` for the good voices — without it you get your OS's built-in voice. On Linux you also need one of `mpv`, `ffplay`, `mpg123` or `cvlc` to play audio.
 
 Not hearing anything? Run `aello voice status` first. [`docs/voice.md`](docs/voice.md) covers the rest.
