@@ -33,12 +33,12 @@ REASON = (
 
 try:
     # Read bytes and decode UTF-8 ourselves. `json.load(sys.stdin)` decodes with
-    # the console code page on Windows. Measured here (cp1252, Python 3.14): a
-    # CJK character in a path arrived as three mojibake characters rather than
-    # raising - and a code page that leaves the byte undefined raises instead,
-    # which this `except` turns into "allow". Either way the payload this hook
-    # decides on is not the payload that was sent, and failing open here is plan
-    # mode quietly coming back.
+    # the console code page on Windows, which corrupts every non-ASCII string in
+    # the payload. Hardening, not a fix for this hook: measured (cp1252, Python
+    # 3.14), stdin's error handler is `surrogateescape`, so nothing raises, and
+    # `tool_name` is ASCII either way - the denial below is not affected. An
+    # earlier version of this comment claimed the hook failed open on a decode
+    # error. It does not; that claim was reasoned, not measured.
     payload = json.loads(sys.stdin.buffer.read().decode("utf-8-sig", "replace") or "{}")
 except Exception:
     # Malformed or absent payload: allow, rather than blocking every tool call

@@ -53,9 +53,11 @@ import json
 
 try:
     # Read bytes and decode UTF-8 ourselves - `json.load(sys.stdin)` decodes
-    # with the console code page on Windows, and a code page that leaves the
-    # byte undefined raises, which the `except` below turns into dropping all
-    # four rules for that turn. Same form speak.py uses.
+    # with the console code page on Windows. Hardening only: the payload is read
+    # and discarded (this hook injects the same text whatever arrives), and
+    # measured (cp1252, Python 3.14) the old form did not raise either, since
+    # stdin's error handler is `surrogateescape`. Consistency with the other
+    # five, not a bug fixed here.
     json.loads(sys.stdin.buffer.read().decode("utf-8-sig", "replace") or "{}")
 except Exception:
     # Malformed or absent payload: say nothing rather than injecting noise.

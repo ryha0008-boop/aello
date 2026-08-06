@@ -6,10 +6,11 @@ from datetime import datetime, timezone
 
 try:
     # Read bytes and decode UTF-8 ourselves - `json.load(sys.stdin)` decodes
-    # with the console code page on Windows. Measured (cp1252): a CJK path came
-    # through as mojibake, so `cwd` and `transcript_path` no longer name real
-    # files; a code page that leaves the byte undefined raises instead and the
-    # `except` below swallows it, so the compaction summary is lost. Same form speak.py uses.
+    # with the console code page on Windows. Measured (cp1252, Python 3.14): it
+    # does NOT raise - stdin's error handler is `surrogateescape` - so a CJK
+    # character in a path comes back as mojibake plus a lone surrogate and the
+    # `except` below never fires. The structure and the ASCII fields survive; a
+    # non-ASCII `compact_summary` is archived corrupted. Same form speak.py uses.
     data = json.loads(sys.stdin.buffer.read().decode("utf-8-sig", "replace") or "{}")
 except Exception:
     sys.exit(0)

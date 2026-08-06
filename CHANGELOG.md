@@ -80,14 +80,15 @@
   works and still reads from the pipe.
 
 - **The five bundled hooks decode their own stdin as UTF-8.** `json.load(sys.stdin)`
-  decodes with the console code page on Windows. Measured (cp1252, Python 3.14):
-  a CJK character in a path arrived as three mojibake characters, so `cwd` and
-  `transcript_path` no longer named real files — and a code page that leaves the
-  byte undefined raises instead, which each hook's blanket `except` swallows.
-  The costs of that were: the plan-mode block **failing open**, a session never
-  archived, the SessionStart standing block never delivered, and all four
-  response rules dropped for the turn. `speak.py` has read bytes for this reason
-  for a long time; the other five now do the same.
+  decodes with the console code page on Windows, so every non-ASCII string in the
+  payload is corrupted. Measured (cp1252, Python 3.14): it does **not** raise —
+  stdin's error handler is `surrogateescape` — so a CJK character in a path comes
+  back as mojibake plus a lone surrogate, and a `transcript_path` decoded that way
+  no longer opens (FileNotFoundError), which is the SessionEnd archive silently
+  degrading back to a pointer. The JSON structure and ASCII fields are unaffected,
+  so the plan-mode denial and the response-rule injection were never at risk;
+  those two are hardening. `speak.py` has read bytes for this reason for a long
+  time and the other five now match it.
 
 - **`aello voice mute` flushes the shared state file before renaming it.**
   `rename` is atomic with respect to the name, not to bytes still in the OS
