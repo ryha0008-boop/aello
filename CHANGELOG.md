@@ -60,6 +60,18 @@
   `/sync` for Cline has **no git step**: it reconciles the memory and the
   project's `AGENTS.md` (Cline's project-`CLAUDE.md` equivalent) and stops.
 
+### Changed
+- **Voice hooks re-vendored at `HOOK_VERSION` 19.** `speak.py --status` now
+  reports volume repairs over a **24-hour window** instead of the last 50
+  history entries, with a count and — when there is nothing to report — how far
+  back the file itself reaches. A window measured in entries is a window whose
+  length depends on how busy the fleet is: 39 envs append to one
+  `history.jsonl`, so "none in the last 50 turns" said nothing about time.
+  Nothing on the hook path moved; only `speak.py` changed. The version is
+  bumped anyway, because aello's digest test covers all five files byte-for-byte
+  and cannot tell a CLI-only change from a hook-path one — an unbumped change
+  fails it with no version to explain the mismatch.
+
 ### Fixed
 - **`aello edit --model` no longer applies Claude's model rules to a Cline
   blueprint.** Setting `openai/gpt-oss-120b` was rejected with "use an alias

@@ -34,12 +34,20 @@ const WIN_AUDIO_SCRIPT: &str = include_str!("hooks_win_audio.ps1");
 /// how this copy learns it has fallen behind — see the test at the bottom of
 /// this file, which fails if a re-vendor moves the scripts without moving this.
 ///
+/// **Including changes that never run on the hook path.** 19 was a `--status`
+/// fix and by the letter of upstream's rule could have stayed at 18; the digest
+/// test here covers all five files byte-for-byte and cannot tell which half of a
+/// file moved, so an unbumped change fails it with no version to explain the
+/// mismatch. Asked and settled with revoiced on 2026-08-06: bump on any change
+/// to the five, and the version means "this exact set of bytes", not "the hook
+/// path changed".
+///
 /// A version, not a commit sha: revoiced's CI commits a `VERSION` bump on every
 /// push to main, so local work rebases onto that and every unpushed sha is
 /// rewritten. A recorded sha goes stale by itself; a recorded version cannot.
 /// Surfaced by `aello voice status`, so checking a machine does not mean
 /// finding an env dir and running Python in it.
-pub const HOOK_VERSION: u32 = 18;
+pub const HOOK_VERSION: u32 = 19;
 
 /// Starter memory seeded on first placement so a fresh env boots with the
 /// user's working-style note already loaded in `/context`. The body is bundled;
@@ -1238,7 +1246,7 @@ mod tests {
     /// normalised so a Windows checkout and Linux CI agree. Update it in the
     /// same commit as a re-vendor — and only together with `HOOK_VERSION`.
     const HOOK_FILES_DIGEST: &str =
-        "1ba83457f45010f95430ab410e30d62683cc130e834be9c845e66e5b6c51ff87";
+        "8060545076453a274d2c7eca313f061b6aae57e3783dfb3c76b34c2b9d2fd16b";
 
     fn hook_files_digest() -> String {
         use sha2::{Digest, Sha256};

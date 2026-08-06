@@ -101,7 +101,7 @@ NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if IS_WIN else {}
 # comparing it against the value here is how a vendored copy learns it has
 # fallen behind. Station-only changes leave it alone: a version that moves for
 # reasons the hook never executes trains everyone to ignore the warning.
-HOOK_VERSION = 18
+HOOK_VERSION = 19
 
 
 def _num(name: str, default, cast=int):
@@ -989,6 +989,39 @@ def read_history() -> list:
     return out
 
 
+def entry_age(entry: dict) -> float:
+    """Hours since this entry was queued, or -1 when it cannot be told.
+
+    `queued` is written as local time with no zone, so it is read back the
+    same way.
+    """
+    try:
+        return (time.time() - time.mktime(time.strptime(
+            entry.get("queued", ""), "%Y-%m-%dT%H:%M:%S"))) / 3600.0
+    except (ValueError, TypeError):
+        return -1.0
+
+
+def recent_repairs(hist: list, hours: float = 24.0) -> list:
+    """Volume repairs within `hours`, oldest first, as (age, description).
+
+    A window in *entries* was the wrong shape on a fleet: 39 environments
+    append to one `history.jsonl`, so the last 50 entries are a few minutes of
+    everyone's activity and a repair from an hour ago had already fallen off
+    the end - "none" then reads as a clean machine when it only means the
+    window was short. Found by TechnicalDirector. Still bounded by KEEP, which
+    is why `--status` prints how far back the file itself reaches: a count off
+    a trimmed file cannot see past the trim, and saying so is the difference
+    between a measurement and a ceiling.
+    """
+    out = []
+    for e in hist:
+        age = entry_age(e)
+        if e.get("swept") and 0 <= age <= hours:
+            out.append((age, f"{e.get('project','?')}: {', '.join(e['swept'])}"))
+    return out
+
+
 # --- cancellation ----------------------------------------------------------
 # No cross-process killing, so no risk of signalling a recycled pid. A worker
 # watches three tokens and stands down if any changes: its session's current
@@ -1623,13 +1656,21 @@ def main() -> None:
         print(f"prompts kept  : {'yes' if PROMPTS else 'no (REVOICED_PROMPTS=0)'}"
               f", {sum(1 for e in hist if e.get('prompt'))} of {len(hist)} "
               f"entries carry one")
-        # What the last few turns had to put back. Nothing here is the healthy
-        # reading, and it is only trustworthy as a *count over turns*: a single
-        # quiet turn says the last one restored cleanly, not that the machine is
-        # clean. `--sweep` is the question "is it clean right now".
-        swept = [f"{e.get('project','?')}: {', '.join(e['swept'])}"
-                 for e in read_history()[-50:] if e.get("swept")]
-        print(f"volume repairs: {swept[-3:] if swept else 'none in the last 50 turns'}"
+        # What had to be put back lately - a window in time, because this file
+        # is shared by every environment on the machine and 50 entries of it is
+        # minutes, not turns. Nothing here is still not the healthy reading:
+        # it says the last day's restores landed, not that the machine is clean.
+        # `--sweep` is the question "is it clean right now".
+        repairs = recent_repairs(hist)
+        reach = entry_age(hist[0]) if hist else -1.0
+        if repairs:
+            line = (f"{len(repairs)} in the last 24h, newest: "
+                    + "; ".join(t for _, t in repairs[-3:]))
+        else:
+            line = "none in the last 24h"
+            if reach >= 0:
+                line += f" (this file only reaches back {reach:.0f}h)"
+        print(f"volume repairs: {line}"
               + ("" if SWEEP else "  (REVOICED_SWEEP=0, sweep is off)"))
         print(f"edge-tts      : {edge_cmd() or 'NOT FOUND'}")
         print(f"elevenlabs key: {'set' if eleven_key() else 'not set'}")
