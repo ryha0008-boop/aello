@@ -32,7 +32,7 @@ Everything Cline-specific lives in `cline.rs`, and nothing Cline-specific lives 
 ```sh
 aello login                  # asks
 aello login --agent claude   # runs `claude setup-token`
-aello login --agent cline    # prompts for provider, model, key, base URL
+aello login --agent cline    # prompts for provider, model, key (not echoed), base URL
 ```
 
 They are stored separately (`oauth_token` and `[cline]` in `config.toml`) and one is never inferred from the other. Setting a Cline login does not touch the Claude token and vice versa.
@@ -101,9 +101,11 @@ So there is no end-of-response event to speak from, and no per-turn event to inj
 
 ## The env dir is always gitignored
 
-`.cline-env-*` is added to the project's `.gitignore` at placement, **unconditionally** — not gated on the blueprint's role the way the `.claude-env-*` line is.
+`.cline-env-*` is added to the project's `.gitignore` at placement, **unconditionally**. So is `.claude-env-*` now — the asymmetry this section used to describe is gone.
 
-That asymmetry is deliberate. A Claude env holds no secret: auth arrives as an environment variable at launch. A Cline env holds the API key in plaintext at `data/settings/providers.json`, so an unignored one is a credential a single `git add -A` away from a public repo. A standalone blueprint's key leaks exactly as well as a maintainer's.
+It was justified here on the grounds that "a Claude env holds no secret: auth arrives as an environment variable at launch". That premise is false whenever no shared token is configured: Claude Code then writes its own `.credentials.json` inside the env dir, and `standalone` — the default role — was the one role that never got the ignore line. Both lines are unconditional as of 2026-08-06.
+
+The reason for Cline's line was never wrong, only narrower than it looked: a Cline env holds the API key in plaintext at `data/settings/providers.json`, so an unignored one is a credential a single `git add -A` away from a public repo. A standalone blueprint's key leaks exactly as well as a maintainer's — and `aello github-setup` now refuses to commit anything staged from inside either env dir, rather than trusting the ignore line alone.
 
 ## Resuming
 

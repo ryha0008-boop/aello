@@ -69,3 +69,26 @@ aello's `voice` capability (added 2026-08-01) vendors its TTS hook from **revoic
     **17 — an empty `REVOICED_TELEGRAM` is now off**, which is the bug from #18 returned as a fix. **18 — a failed send is no longer swallowed**: it lands in `state.json` as **`telegram_error`** (`at`/`reason`/`project`), cleared by the next success, so it reads "right now". Not on the history entry, because `record()` has already appended by then. That is a **new key revoiced owns and aello reads** — `voice.rs::telegram_error_line` prints it in `aello voice status`, and the round-trip test asserts a mute does not erase it. Reporting it on aello's side matters because `aello voice status` is otherwise the thing that says nothing is wrong.
 
     **Rollout done the same way as always and verified by execution:** `cargo install --path . --force` first (the exe is locked while a TUI/session runs — move it aside as `aello.exe.old.$$`), then copy all five files into each `<env>/hooks/`, then ask every copy `--hook-version` **and** digest its five files against the repo's. 39/39 answer 18 with an identical digest.
+
+**19 (2026-08-06)** — `speak.py --status` reports volume repairs over a 24-hour
+window instead of the last 50 history entries, and says how far back
+`history.jsonl` itself reaches when there is nothing to report. Fleet-shaped
+problem: 39 envs append to one file, so a window in *entries* is a window whose
+length depends on how busy the fleet is. Only `speak.py` moved. **The bump rule
+now explicitly covers CLI-only changes** — aello's digest test is byte-for-byte
+over all five files and cannot tell which half of a file changed, so an unbumped
+change fails it with no version to explain the mismatch. Vendored + backfilled to
+all **39** envs the same day; every one reports 19 and digests identically to the
+repo.
+
+**Five audit findings in this vendored code belong upstream, not in aello's
+copy** (2026-08-06, see [[aello-audit-2026-08-06]]): the hand-rolled lock is not
+mutually exclusive — `os.replace` is atomic but the *verification read* races the
+next replace, so two processes can both conclude they hold it; `record()`
+rewrites `history.jsonl` unlocked (the `with lock(...)` result is discarded and
+`lock()` returns False on timeout) and non-atomically; `write_state`'s ownership
+guard tests a thread-local name set that is never revoked when the lock is
+stolen; `tg_env` falls back to `HKCU\Environment` for the *enable* flag, so
+setting it once turns Telegram egress on for every env on the machine; and
+`REVOICED_EDGE_TTS` executes any path that exists, including a relative one.
+Fixing them here would be reverted by the next re-vendor.

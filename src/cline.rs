@@ -336,12 +336,19 @@ pub fn ensure_credential(env_dir: &Path, auth: &ClineAuth) -> Result<()> {
 /// shells out to `cline auth` because that is the only writer whose key
 /// survives Cline's next run.
 pub fn place(env_dir: &Path, bp: &Blueprint, persona: Option<&str>) -> Result<()> {
-    // Unconditional, and NOT role-gated the way the Claude env's ignore line is.
-    // That line is a tidiness measure — a Claude env holds no secret, since auth
-    // arrives as an environment variable at launch. This one holds an API key in
-    // plaintext at `data/settings/providers.json`, so an unignored Cline env is a
-    // credential one `git add -A` away from a public repo. A blueprint with no
-    // git duties still gets the line.
+    // Unconditional. This env holds an API key in plaintext at
+    // `data/settings/providers.json`, so an unignored one is a credential a
+    // single `git add -A` away from a public repo, and a blueprint with no git
+    // duties leaks it exactly as well as a maintainer would.
+    //
+    // This comment used to add "and NOT role-gated the way the Claude line is,
+    // because a Claude env holds no secret — auth arrives as an environment
+    // variable at launch". That reasoning was quoted back at us by an audit
+    // along with the line that disproves it: with no shared token configured,
+    // Claude Code writes its own `.credentials.json` into the env dir, and
+    // `main.rs` probes for exactly that file. Both lines are unconditional now.
+    // Left on the record because a stated rationale that has quietly become
+    // false is worse than none — everyone after it inherits it as settled.
     if let Some(project) = env_dir.parent() {
         crate::project::ensure_gitignore_entry(project, Agent::Cline.gitignore_pattern())?;
     }
