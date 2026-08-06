@@ -115,6 +115,12 @@ The voice has its own troubleshooting section, including the partial-copy trap w
 
 Quick first checks: `aello voice status` (mute state and `HOOK_VERSION`), and whether the response actually ended with a `TL;DR:` line — that line is the only thing the hook speaks.
 
+## Telegram sends nothing
+
+Run `python <env>/hooks/speak.py --status` and read the `telegram` line — it names where each of the three values came from. **Run it from a terminal you already had open**, not a fresh one: a fresh shell inherits the variables either way, so it cannot tell a working setup from a broken one.
+
+Two things it will not tell you. `REVOICED_TELEGRAM` set to an **empty** value reads as *on*, not off — use `0` to opt a project out. And a send that **fails** — timeout, revoked token, wrong chat id, an API `ok:false` — is swallowed whole: no history entry, no stderr, no retry, and the line still gets spoken locally, so nothing about the session looks wrong. If messages stop arriving, the only way to see it is to send one by hand with the same token and chat id.
+
 ## Applications got quiet and stayed quiet
 
 The hook lowers other applications while it speaks and puts them back afterwards. Before `HOOK_VERSION` 11 it could lose its record of what "back" was and lower them again on the next line, compounding — 0.15, then 0.0225, down to the floor. Windows keeps per-application volume in the registry against the executable's path, so this survives the process and the reboot; it does not clear itself.
