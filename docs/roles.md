@@ -18,7 +18,7 @@ Each role scaffolds the files it maintains, on placement, **only if missing** �
 
 | File / artifact | maintainer | contributor | standalone |
 |---|:--:|:--:|:--:|
-| `.gitignore` line `.claude-env-*` | ✅ | ✅ | — |
+| `.gitignore` line `.claude-env-*` | ✅ | ✅ | ✅ |
 | `.gitattributes` (CRLF normalize) | ✅ | ✅ | — |
 | `VERSION` + `.github/workflows/version.yml` (patch-bump CI) | ✅ | ✅ | — |
 | tracked `claude-internal/<name>/` mirror | ✅ | ✅ | — |
@@ -26,6 +26,13 @@ Each role scaffolds the files it maintains, on placement, **only if missing** �
 | project-root `CLAUDE.md` | ✅ | — | — |
 | `docs/` directory | ✅ | — | — |
 | `README.md` | ✅ | — | — |
+
+The ignore line is the one row every role gets, including `standalone`. It used
+to be `github`-only, as tidiness — until it was pointed out that a Claude env
+with no shared token configured holds Claude Code's own `.credentials.json`, and
+`standalone` is the default role. The line costs nothing in a project with no
+git, and a blueprint with no git duties still shares the working tree with one
+that has them.
 
 The global persona (`--claude-md`) is separate from the role — it writes the env-level `CLAUDE.md` once, and no role rewrites it. The single exception is `aello persona`, which exists to replace one deliberately and then sets the blueprint to `custom` so nothing writes over it again. So is the voice, below: it is not a role setting and there is nothing to enable.
 
@@ -73,7 +80,7 @@ claude-internal/
     └── persona.CLAUDE.md  # snapshot of <env>/CLAUDE.md, renamed so it never auto-loads
 ```
 
-The live env dir stays the **single source of truth** — `claude-internal/<name>/` is only ever written *from* it, never read back into it. It is **namespaced per blueprint** so multiple blueprints sharing one repo don't clobber each other's mirror. The persona snapshot is deliberately **not** named `CLAUDE.md` (which Claude Code would auto-load as a second persona). The folder is seeded at placement and refreshed by every `/sync`; it is **not** covered by the `.claude-env-*` gitignore line, so it commits normally.
+The live env dir stays the **single source of truth** — `claude-internal/<name>/` is only ever written *from* it, with **one exception: a clone**. When `aello run` finds the mirror present and no env dir beside it, it restores the env from the mirror before seeding anything, then carries on mirroring one-way as usual. Without that step the first run on a second machine seeded a bare env and the prune pass deleted every tracked memory note and hand-kept skill the bare env did not have — silently, since the mirror is written from code that had no reason to look. It is **namespaced per blueprint** so multiple blueprints sharing one repo don't clobber each other's mirror. The persona snapshot is deliberately **not** named `CLAUDE.md` (which Claude Code would auto-load as a second persona). The folder is seeded at placement and refreshed by every `/sync`; it is **not** covered by the `.claude-env-*` gitignore line, so it commits normally.
 
 The skill is re-generated on every `aello run`, so changing a blueprint's role updates its `/sync` on the next placement. A `standalone` blueprint gets no `/sync` skill at all.
 

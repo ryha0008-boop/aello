@@ -32,6 +32,8 @@ my-project/
 
 The env dir is gitignored, so the skills, memory, and persona that define a blueprint would never reach git. With the `github` cap, `claude-internal/` (a tracked folder at the repo root) is a **one-way mirror** of that internal config — written *from* the env dir, never back into it, so the live env stays the single source of truth. Each blueprint mirrors into its own `claude-internal/<name>/` namespace, so multiple blueprints sharing one repo don't clobber each other. It's seeded at placement and refreshed by `/sync`. The persona snapshot is renamed (`persona.CLAUDE.md`) so Claude Code never auto-loads it as a second persona.
 
+One-way has a single exception, and it is the reason the folder is tracked at all: **on a clone**, where the mirror exists and the gitignored env dir does not, `aello run` restores the env from the mirror before it seeds anything. Everything after that is one-way again.
+
 **A project-level `<project>/.claude/settings.json` is silently ignored under aello.** Claude Code reads its settings from `CLAUDE_CONFIG_DIR`, which aello points at the env dir — so the per-project `.claude/` directory you'd use with a normal Claude Code install has no effect here, with no warning. Put hooks, permissions, and env vars in `<project>/.claude-env-<name>/settings.json` instead. This is per blueprint by design: two blueprints in one repo are meant to be able to disagree about their settings.
 
 ## Tracked source of truth vs derived artifacts
@@ -77,6 +79,8 @@ Memory is a third, separate channel — nothing to do with the role. On first pl
 ## Authentication
 
 `aello login` runs `claude setup-token` (a browser/OAuth flow), captures the long-lived `sk-ant-oat…` token, and stores it in `config.toml`. Every `aello run` exports it as `CLAUDE_CODE_OAUTH_TOKEN`. Because this token does **not** rotate, any number of blueprints can run concurrently against it — unlike copying `.credentials.json`, whose rotating refresh tokens invalidate each other across parallel envs.
+
+**An env's auth is aello's to choose, and only aello's.** Every launch strips `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` from the child's environment before setting whatever the config says. Agents run `aello` from inside an aello env, so inheriting one of those was the normal case rather than an exotic one — and with no token configured, aello printed "Claude will prompt login" while the env quietly authenticated as whoever owned the ambient variable. If you *want* an env on an API key, put it in that env's `settings.json`, not in the shell you launch from.
 
 On a fresh env, aello also marks onboarding complete (`hasCompletedOnboarding` in `.claude.json`) so Claude skips its first-run wizard and goes straight in.
 

@@ -191,8 +191,11 @@ impl Agent {
 ///
 /// Separate from `oauth_token` on purpose: the two are different accounts with
 /// different billing, and `aello login` asks which one you mean rather than
-/// overloading a single field. Cline reads this from
-/// `<data-dir>/settings/providers.json`, which aello writes at placement.
+/// overloading a single field. Cline reads it from
+/// `<data-dir>/settings/providers.json`, which is installed by shelling out to
+/// `cline auth` on every run — never by writing that file directly. Cline
+/// rewrites it on its next run and drops a hand-written `apiKey` outright, so
+/// the env then reaches the provider carrying no credential at all.
 ///
 /// **Metered.** Unlike the Claude token, every turn spent through this costs
 /// money per token. That is a change in what aello is, not just a new field.

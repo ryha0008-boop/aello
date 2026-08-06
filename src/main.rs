@@ -705,8 +705,9 @@ fn cmd_login_claude() -> Result<()> {
 ///
 /// Prompted rather than captured from a subprocess: `cline auth` takes the same
 /// three values as flags (`-p`, `-k`, `-m`), so there is no browser flow to tee
-/// the way `claude setup-token` needs. aello writes `providers.json` itself at
-/// placement, which is also what makes an env placeable with no `cline` on PATH.
+/// the way `claude setup-token` needs. What is stored here is installed into an
+/// env by running `cline auth` on every launch — see `cline::ensure_credential`,
+/// and never write `providers.json` by hand.
 fn cmd_login_cline() -> Result<()> {
     let cfg = config::load()?;
     let current = cfg.cline.as_ref();

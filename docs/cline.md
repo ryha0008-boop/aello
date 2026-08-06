@@ -61,7 +61,7 @@ So placement needs `cline` on `PATH`. That is not a real cost — nothing can ru
 
 Everything in `config/rules/` is re-sent in the system prompt on **every** request, which is the property that makes it a workable substitute for Claude Code's per-turn hook: it cannot decay by turn eighty.
 
-**The persona is a rules file.** `--claude-md coder` works on a Cline blueprint — the bundled templates are just text, and aello writes the chosen one to `config/rules/persona.md` rather than to a `CLAUDE.md` Cline would ignore. Choosing `none` **removes** an existing one, which matters more here than for Claude: rules apply on every request, so a persona left behind after you switched would keep applying with nothing to take it away.
+**The persona is a rules file.** `--claude-md coder` works on a Cline blueprint — the bundled templates are just text, and aello writes the chosen one to `config/rules/persona.md` rather than to a `CLAUDE.md` Cline would ignore. Choosing `none` **removes** an existing one, which matters more here than for Claude: rules apply on every request, so a persona left behind after you switched would keep applying with nothing to take it away. `custom` is the opposite and is left strictly alone — it means the env's own `persona.md` is authoritative. (Both resolve to "aello writes no text", and placement treated them the same until it was pointed out that this deleted a `custom` persona on every run.)
 
 ## The four commands, and why they are routed rather than registered
 

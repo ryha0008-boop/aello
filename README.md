@@ -27,7 +27,7 @@ Cross-platform: Linux (x86_64), macOS (Apple Silicon + Intel), Windows (x86_64).
 curl -fsSL https://raw.githubusercontent.com/ryha0008-boop/aello/main/install.sh | sh
 ```
 
-Downloads the latest release into `~/.local/bin` (override with `AELLO_BIN_DIR`), makes it executable, clears the macOS quarantine flag, and prints a PATH hint if that dir isn't on your `$PATH`. Platforms without a prebuilt binary (e.g. arm64 Linux) exit with a build-from-source pointer.
+Downloads the latest release into `~/.local/bin` (override with `AELLO_BIN_DIR`), **verifies it against the release's `SHA256SUMS`**, makes it executable, clears the macOS quarantine flag, and prints a PATH hint if that dir isn't on your `$PATH`. It refuses to install on a checksum mismatch, and says so out loud if no `sha256sum`/`shasum` is available to check with. (That catches a corrupted or truncated download — the manifest travels the same channel as the binary, so it is not tamper protection.) Platforms without a prebuilt binary (e.g. arm64 Linux) exit with a build-from-source pointer.
 
 Every release also publishes an immutable `vX.Y.Z` tag if you'd rather pin a version — swap `latest` for the tag you want in any download URL below. `aello update` always moves you to the newest release.
 
@@ -93,7 +93,7 @@ cd ~/my-project
 aello run coder                               # places an isolated env + launches Claude
 ```
 
-Inside that project, `aello run coder` creates `.claude-env-coder/`, scaffolds `CHANGELOG.md` / `README.md` / `docs/` / a project `CLAUDE.md` (only the ones its role owns, only if missing), adds `.claude-env-*` to `.gitignore`, seeds a `/sync` skill tailored to its role, and (on first placement) seeds a starter working-style memory so the env boots with it in `/context`. Type `/sync` inside Claude to reconcile those docs and commit + push.
+Inside that project, `aello run coder` creates `.claude-env-coder/`, scaffolds `CHANGELOG.md` / `README.md` / `docs/` / a project `CLAUDE.md` (only the ones its role owns, only if missing), adds `.claude-env-*` to `.gitignore` (every role does this), seeds a `/sync` skill tailored to its role, and (on first placement) seeds a starter working-style memory so the env boots with it in `/context`. Type `/sync` inside Claude to reconcile those docs and commit + push.
 
 Run `aello` with no arguments for the full-screen TUI (browse, add via a guided checklist, resume sessions, manage the token, self-update).
 
@@ -174,9 +174,11 @@ Pick one per blueprint. **One maintainer per repo, any number of contributors** 
 
 | Role | Scaffolds (if missing) | `/sync` |
 |---|---|---|
-| `maintainer` | project `CLAUDE.md`, `CHANGELOG.md`, `docs/`, `README.md`, `.gitignore` entry, `.gitattributes`, `VERSION` + bump CI, `claude-internal/<name>/` | full — repo health, reconcile memory + all four docs, mirror the env, commit & push with an `Env:` trailer |
-| `contributor` | `CHANGELOG.md`, `.gitignore` entry, `.gitattributes`, `VERSION` + bump CI, `claude-internal/<name>/` | git only — repo health, `CHANGELOG.md`, mirror the env, commit & push with an `Env:` trailer |
+| `maintainer` | project `CLAUDE.md`, `CHANGELOG.md`, `docs/`, `README.md`, `.gitattributes`, `VERSION` + bump CI, `claude-internal/<name>/` | full — repo health, reconcile memory + all four docs, mirror the env, commit & push with an `Env:` trailer |
+| `contributor` | `CHANGELOG.md`, `.gitattributes`, `VERSION` + bump CI, `claude-internal/<name>/` | git only — repo health, `CHANGELOG.md`, mirror the env, commit & push with an `Env:` trailer |
 | `standalone` | nothing | none — no `/sync` skill is seeded |
+
+Every role, `standalone` included, adds the `.claude-env-*` line to `.gitignore` — an env dir can hold Claude Code's own `.credentials.json` when no shared token is configured, so that one is not a git duty.
 
 The persona is separate from the role: `--claude-md <name\|path>` writes the env's global `CLAUDE.md` once, and no role rewrites it.
 
