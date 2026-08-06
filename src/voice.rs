@@ -192,7 +192,27 @@ pub fn status() -> Result<()> {
     if presets == 0 {
         println!("                (empty pool — the hook uses its built-in default voice)");
     }
+    // From hook version 18 the hook records a failed Telegram send here rather
+    // than on the history entry, because `record()` has already appended by the
+    // time the send is attempted. Absent is the healthy reading, and the next
+    // send that works clears it — so this says "right now", not "ever". Printed
+    // here because `aello voice status` reads the same file as
+    // `speak.py --status` and would otherwise be the one that says nothing is
+    // wrong, which is the failure shape this whole path keeps hitting.
+    if let Some(line) = telegram_error_line(&state) {
+        println!("telegram      : {line}");
+    }
     Ok(())
+}
+
+/// Render the hook's `telegram_error` record, or `None` when there isn't one.
+/// Split out from `status` so the shape aello reads is pinned by a test — this
+/// key belongs to `speak.py`, and aello only ever reads it.
+fn telegram_error_line(state: &serde_json::Value) -> Option<String> {
+    let err = state.get("telegram_error")?;
+    let reason = err.get("reason").and_then(|r| r.as_str()).unwrap_or("unknown");
+    let project = err.get("project").and_then(|p| p.as_str()).unwrap_or("?");
+    Some(format!("last send FAILED — {reason} ({project})"))
 }
 
 /// Claim the toast identity for this machine.
@@ -245,7 +265,11 @@ mod tests {
                 "global": false,
                 "presets": [{"id": "a"}],
                 "leases": {"s1": {"preset": "a"}},
-                "duck": 15
+                "duck": 15,
+                // Hook version 18's failed-send record. aello never writes it,
+                // and a mute here must not be what erases the only evidence
+                // that Telegram stopped delivering.
+                "telegram_error": {"at": 1.0, "reason": "timeout", "project": "p"}
             }),
         )
         .unwrap();
@@ -259,6 +283,23 @@ mod tests {
         assert_eq!(back["duck"], serde_json::json!(15));
         assert_eq!(back["presets"].as_array().unwrap().len(), 1);
         assert!(back["leases"].get("s1").is_some());
+        assert_eq!(back["telegram_error"]["reason"], serde_json::json!("timeout"));
+    }
+
+    /// A send that fails is invisible everywhere else — no history entry, no
+    /// stderr, and the line is still spoken locally — so `status` reporting
+    /// nothing is exactly what a broken Telegram looks like. Absent stays
+    /// silent; the hook clears the key on the next success.
+    #[test]
+    fn a_failed_telegram_send_shows_up_in_status() {
+        assert_eq!(telegram_error_line(&serde_json::json!({"global": false})), None);
+
+        let line = telegram_error_line(&serde_json::json!({
+            "telegram_error": {"at": 1.0, "reason": "the API returned ok:false", "project": "aello"}
+        }))
+        .expect("a recorded failure must be reported");
+        assert!(line.contains("the API returned ok:false"), "{line}");
+        assert!(line.contains("aello"), "{line}");
     }
 
     #[test]

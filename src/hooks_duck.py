@@ -13,6 +13,7 @@ import contextlib
 import ctypes
 import json
 import os
+import struct
 import time
 from pathlib import Path
 
@@ -285,6 +286,193 @@ def _restore(store: Path) -> None:
                          encoding="utf-8")
     except OSError:
         store.unlink(missing_ok=True)
+
+
+# --- the sweep -------------------------------------------------------------
+#
+# Everything above this line works from `duck.json` and the live session
+# enumeration, and both are blind in the same place. `_restore` can only reach
+# an application that currently holds a session, and it forgets any leftover
+# whose process has exited - so an application that goes quiet while ducked and
+# is then closed stays lowered with nothing on disk that knows what it was.
+# Reproduced 2026-08-06 with stubbed sessions: 1.0 to 0.15, restore, still 0.15,
+# record GONE. A reboot is the same failure for every application at once, which
+# is what left Wispr Flow and Telegram at 15% this morning: the duck wrote at
+# 11:15:39 and the machine went down at 11:16:05.
+#
+# It also compounds, because `InstanceIdentifier` embeds the pid. An application
+# that comes back is a *new* key whose stored volume is still the lowered one,
+# so the next duck records 0.15 as its normal: 1.0, 0.15, 0.0225, and a restore
+# that puts it back to 0.15. That is the `firefox.exe` at 0.0225 on this machine.
+#
+# The registry is the only view that sees any of it. Windows persists a volume
+# per executable *per endpoint*, so it survives the session going quiet, the
+# process exiting and the reboot - which is exactly why the damage is permanent,
+# and exactly what makes it findable afterwards.
+
+FLOOR = 0.01          # the clamp in `_duck`; a duck can land here and no lower
+STORE = (r"Software\Microsoft\Internet Explorer\LowRegistry"
+         r"\Audio\PolicyConfig\PropertyStore")
+_VOLUME = "3"         # the PROPVARIANT holding the level, float32 at offset 8
+
+
+def _stored():
+    """Every persisted per-application volume, across every endpoint.
+
+    Yields `(subkey, name, value)`. The live enumeration cannot answer this:
+    measured by TechnicalDirector, `firefox.exe` read a healthy 1.0 on the
+    active device while sitting at 0.0225 on another.
+    """
+    import winreg
+    try:
+        root = winreg.OpenKey(winreg.HKEY_CURRENT_USER, STORE)
+    except OSError:
+        return
+    with root:
+        i = 0
+        while True:
+            try:
+                app = winreg.EnumKey(root, i)
+            except OSError:
+                return
+            i += 1
+            try:
+                with winreg.OpenKey(root, app) as k:
+                    try:
+                        name = str(winreg.QueryValueEx(k, None)[0])
+                    except OSError:
+                        name = ""
+                    j = 0
+                    while True:
+                        try:
+                            end = winreg.EnumKey(k, j)
+                        except OSError:
+                            break
+                        j += 1
+                        try:
+                            with winreg.OpenKey(k, end) as e:
+                                raw = winreg.QueryValueEx(e, _VOLUME)[0]
+                                yield (app + "\\" + end, name,
+                                       struct.unpack_from("<f", raw, 8)[0])
+                        except (OSError, struct.error):
+                            continue
+            except OSError:
+                continue
+
+
+def is_duck(value: float, level: float) -> bool:
+    """Could this value have been produced by ducking, and nothing else?
+
+    A duck multiplies by `level` and clamps at FLOOR, so what it can leave
+    behind is level, level squared, and so on down to the clamp. Anything else
+    is a volume somebody chose.
+
+    **Exactly 0 is never a duck** and must never be touched. `_duck` skips a
+    session already at zero and the target is floored, so 0.15 to the fourth is
+    still not zero - a zero is the user's own mute, and raising it is the one
+    mistake here that is louder than the bug. Measured on this machine: one
+    endpoint sits at 0.0 and has since 07-31.
+    """
+    if not 0.0 < value < 0.999 or not 0.0 < level < 1.0:
+        return False
+    if abs(value - FLOOR) < 1e-6:
+        return True
+    step = level
+    for _ in range(6):                 # 0.15**6 is far below the clamp already
+        if abs(value - step) < 1e-4:
+            return True
+        step *= level
+    return False
+
+
+def sweep(level: float, signature_only: bool = False) -> list:
+    """Put back anything left quiet. Returns what it did.
+
+    By default this claims **every** stored volume between 0 and full, because
+    the user's answer to "do you ever set an application's volume yourself" was
+    no, it should always be at maximum (2026-08-06). That is not a shortcut: the
+    signature rule reads `level` as it is *now*, so changing the duck in the
+    station from 15% to 25% would orphan every 0.15 already on disk - nothing
+    would ever claim them again and nothing would say so.
+
+    `signature_only` restores the narrow rule, for a machine where some
+    application is deliberately quiet. It is the safer half and the less useful
+    one, and `is_duck` is what it means.
+
+    **Neither mode touches an exact 0**, which is the one value Windows itself
+    writes here: with communications ducking set to mute, starting a microphone
+    capture takes other applications to 0.0 and puts them back within seconds -
+    measured here, four of them. If that setting is ever "reduce by 80%" instead,
+    those transients arrive as 0.2 and the wide mode *will* fight them, at which
+    point this wants `signature_only`.
+
+    The caller must know that nothing is speaking: a duck in progress looks
+    exactly like a duck that failed, and undoing a live one raises the volume
+    the duck is there to lower. Measured while writing this - a scan taken
+    mid-line reported three applications as damaged and all three were correct.
+
+    Repair through the live session where there is one, because setting a
+    session's volume writes through to every stored entry for that executable:
+    restoring five sessions here took all 40 registry entries back to 1.0. Only
+    where there is no session at all does this write the value itself, which is
+    the whole point of the sweep and also the half that cannot be verified from
+    here - the audio engine may hold a cached copy for an application that is
+    running but silent.
+    """
+    if os.name != "nt":
+        return []
+    claims = ((lambda v: is_duck(v, level)) if signature_only
+              else (lambda v: 0.0 < v < 0.999))
+    try:
+        stored = [(k, n, v) for k, n, v in _stored() if claims(v)]
+    except Exception:
+        return []
+    if not stored:
+        return []
+
+    live = {}
+    try:
+        for s in _sessions():
+            try:
+                live[_ident(s)] = _volume(s)
+            except Exception:
+                continue
+    except Exception:
+        pass                           # pycaw missing: the registry path still works
+
+    fixed = []
+    for key, name, value in stored:
+        vol = next((v for ident, v in live.items() if name and name in ident), None)
+        if vol is not None:
+            try:
+                vol.SetMasterVolume(1.0, None)
+                fixed.append((name, value, "session"))
+                continue
+            except Exception:
+                pass
+        if _write_stored(key, 1.0):
+            fixed.append((name, value, "registry"))
+    return fixed
+
+
+def _write_stored(key: str, value: float) -> bool:
+    """Set one persisted volume in place, keeping the rest of the PROPVARIANT.
+
+    The blob carries its own type tag and padding; only the float at offset 8 is
+    ours to change. Rewriting the whole value would be guessing at a structure
+    Windows owns.
+    """
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, STORE + "\\" + key, 0,
+                            winreg.KEY_READ | winreg.KEY_WRITE) as k:
+            raw, typ = winreg.QueryValueEx(k, _VOLUME)
+            blob = bytearray(raw)
+            struct.pack_into("<f", blob, 8, value)
+            winreg.SetValueEx(k, _VOLUME, 0, typ, bytes(blob))
+        return True
+    except (OSError, struct.error):
+        return False
 
 
 def recover(store: Path) -> None:

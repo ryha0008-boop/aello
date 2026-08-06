@@ -42,7 +42,36 @@ The call is deliberately **not** cached behind a marker file. The handler comman
 - `aello voice status` prints the version **aello vendored**.
 - `python <env>/hooks/speak.py --hook-version` prints the version **that env runs**, and prints before any optional import, so even a partial copy answers.
 
-If they disagree, that env is behind and its next `run` refreshes it. Being behind is not always harmless: a copy below 11 lowers other applications' volumes and can fail to put them back, permanently — see [troubleshooting.md](troubleshooting.md). Two unit tests keep the vendored copy honest: one compares the recorded constant against the vendored `speak.py`, and one digests **all five** files — the constant lives in `speak.py` alone, so a re-vendor touching only `duck.py` or `win_audio.ps1` would otherwise slip past. The digest test prints the new value when it fails.
+If they disagree, that env is behind and its next `run` refreshes it. Being behind is not always harmless: a copy below 11 lowers other applications' volumes and can fail to put them back, permanently, and a copy below 15 does not run the sweep that repairs what a restore could not reach — see [troubleshooting.md](troubleshooting.md). Two unit tests keep the vendored copy honest: one compares the recorded constant against the vendored `speak.py`, and one digests **all five** files — the constant lives in `speak.py` alone, so a re-vendor touching only `duck.py` or `win_audio.ps1` would otherwise slip past. The digest test prints the new value when it fails.
+
+## Putting back what the duck could not (`HOOK_VERSION` 15, widened at 16)
+
+The hook lowers other applications while it speaks and restores them afterwards, but both the restore and the station's recovery work from the **live audio session enumeration** — so neither can reach an application that has gone quiet or exited. Two holes follow, and no guard on that path closes either:
+
+- An application that goes quiet and then **exits** is dropped by the restore's liveness filter and stays lowered, with no record left that it ever was.
+- When it comes back it carries a new process id, so it is a *fresh* key whose stored 0.15 is read as its normal. The next duck lands on 0.0225.
+
+A reboot is the first case for everything at once. Measured upstream on this machine: the duck wrote at 11:15:39, the machine went down at 11:16:05, and three applications came back at 15% with the duck's own record gone.
+
+From 15 the hook reads the volumes **Windows has persisted** instead — the only view that outlives the session, the process and the reboot — and puts back what is still down. `REVOICED_SWEEP` takes three values:
+
+| Value | Claims |
+|---|---|
+| `0` | nothing; the sweep never runs |
+| `signature` | only values the current duck level could have produced (`level`, `level²`, … down to the 0.01 clamp) |
+| anything else (**default**) | every stored volume between 0 and full |
+
+The wide default is deliberate and answers a hole the narrow rule has: the signature is computed from the duck level *as it is now*, so raising it in the station from 15% to 25% orphans every 0.15 already on disk — claimed by nothing, reported by nothing. aello does not set `REVOICED_SWEEP` — set it yourself, machine-wide or per blueprint, and use `signature` where some application is meant to be quiet.
+
+**An exact `0` is never touched in either mode.** A duck is clamped at 0.01 and never reaches zero, so a zero is somebody's own mute — and on this machine that somebody is often Wispr Flow, which drops everything to 0 while you dictate and puts it back within seconds.
+
+⚠️ **revoiced is not the only ducker here, and that is not fixable from this side.** Dictating *while* an env is speaking has both of them sampling each other: revoiced records 1.0 and lowers to 0.15, the other ducker then samples **0.15** as normal and zeroes, and whichever restores last wins — when it is the other one, the machine lands back at 0.15. That is why the damage kept returning between reboots. Nothing in the hook can prevent it; the sweep is what closes it, one turn later, and it is the strongest argument for the wide default: the other ducker restores whatever it happened to sample, and any level but 0.15 would be orphaned by the narrow rule.
+
+**Timing is load-bearing.** The sweep runs at the *start* of a turn, before this turn's duck, not after the previous restore — the registry lags the live session by several seconds (a stored value still read 0.15 five seconds after the duck record was gone), so a sweep taken straight afterwards finds its own duck and "repairs" it. It also refuses while the speaker lock is fresh or a duck record exists, for the same reason: a duck in progress is indistinguishable from one that failed. A scan taken mid-line upstream reported three applications as damaged and all three were correct.
+
+Ask a placed copy directly with `python <env>/hooks/speak.py --sweep`: it prints the duck level, the mode, every stored volume below full marked `CLAIM` or `kept `, and what it repaired. `speak.py --status` prints a `volume repairs` line summarising the last 50 turns — `none` is the healthy reading, and a count over turns is the only trustworthy form of it.
+
+Repairs go through the live session where there is one, because setting a session's volume writes through to every stored entry for that executable. Only where no session exists does the hook patch the persisted float itself, and **that half is unverified**: the value provably persists (measured 0.15 → 1.0, still 1.0 afterwards), but whether the audio engine honours it at that application's next launch, rather than overwriting it from a cached copy, is not known. If it does not, the registry fallback is decoration and only the session path is real.
 
 ## Telegram (opt-in, `HOOK_VERSION` 13 and up)
 
@@ -50,7 +79,7 @@ From 13, `speak.py` also sends the spoken line and its mp3 to a Telegram chat, s
 
 | Variable | Meaning |
 |---|---|
-| `REVOICED_TELEGRAM` | `1` to enable; anything else, or unset, is off |
+| `REVOICED_TELEGRAM` | `1` to enable; `0`, empty, or unset is off |
 | `TELEGRAM_BOT_TOKEN` | the bot's API token |
 | `TELEGRAM_CHAT_ID` | the chat to deliver to |
 
@@ -59,6 +88,10 @@ aello does not set these. A blueprint that wants to differ can override any of t
 From **14**, a name that is *absent* from the process environment falls back to the persisted `HKCU\Environment` value on Windows, so setting these machine-wide reaches sessions that are already open. That fallback exists because 13 did not: Windows only seeds a process environment at creation, so at 13 the variables worked in terminals started afterwards and were silently inert in every session already running — on, and sending nothing. The fallback fires **only on absent**, never on present, so a blueprint's `0` or an explicitly empty value still wins.
 
 `python <env>/hooks/speak.py --status` prints a `telegram` line naming the source of each value — `set`, `set at User scope, picked up from there`, or `not set`. That line is the check that proves the variables reached the process; `--hook-version` only proves the code is there. To tell 13 from 14 you must run it from a shell that never inherited the variables — a fresh shell has them either way and reports the same on both.
+
+**An empty value was on until 17.** `REVOICED_TELEGRAM=` set to nothing opted *in*, while the docstring one line above promised the opposite — the fallback correctly returned `""` for a present-but-empty name and `"" != "0"` is true. It is off from 17. Worth knowing how that hid: PowerShell's `$env:X = ''` **deletes** the variable rather than emptying it, so testing it that way measures the *absent* case and reports a pass. It takes a subprocess with an explicit empty value.
+
+**A send that fails says so from 18.** Before that, a timeout, a revoked token, a wrong chat id and an API `ok:false` all produced exactly nothing — no history entry, no stderr, no retry, and the line still spoken locally, so nothing about the session looked wrong. 18 records it in the shared `state.json` as `telegram_error`, cleared by the next send that works, so it reads "right now" rather than "ever". Both `speak.py --status` and **`aello voice status`** print it; absent is the healthy reading. It is on the state file rather than the history entry because `record()` has already appended by the time the send is attempted — deliberately, so a 30-second upload cannot sit between a finished turn and the station showing it — and putting it on the entry would mean rewriting the whole history on the hook path, once per turn, in every env. That is a key **revoiced owns**: aello only reads it, and the round-trip test in `voice.rs` pins that a mute does not erase it.
 
 ## Shared state, per-env scripts
 

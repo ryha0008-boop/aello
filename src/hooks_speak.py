@@ -23,6 +23,7 @@ sessions finishing at once queue instead of talking over each other.
     speak.py --pin PATH [PRESET]     pin a project's voice; no preset unpins
     speak.py --leases                who currently holds which voice
     speak.py --release [SESSION]     hand a voice back (SessionEnd hook)
+    speak.py --sweep                 is any app still left quiet by a duck?
 """
 
 import html
@@ -67,7 +68,8 @@ except ImportError:
     MISSING.append("duck")
     ducking = SimpleNamespace(duck=lambda *a, **k: False,
                               restore=lambda *a, **k: None,
-                              recover=lambda *a, **k: None)
+                              recover=lambda *a, **k: None,
+                              sweep=lambda *a, **k: [])
 try:
     import focus as focusing
 except ImportError:
@@ -99,7 +101,7 @@ NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if IS_WIN else {}
 # comparing it against the value here is how a vendored copy learns it has
 # fallen behind. Station-only changes leave it alone: a version that moves for
 # reasons the hook never executes trains everyone to ignore the warning.
-HOOK_VERSION = 14
+HOOK_VERSION = 18
 
 
 def _num(name: str, default, cast=int):
@@ -141,6 +143,22 @@ LEASE_GRACE = _num("REVOICED_LEASE_GRACE", 300, float)  # 5min
 # never exits silences every env on the box and nothing else ever gives up.
 # 0 turns the cap off. A full-length line is well under a minute of speech.
 PLAY_MAX = _num("REVOICED_PLAY_MAX", 300, float)  # 5min
+# The duck puts itself back in a finally, and the station puts back what a dead
+# worker left - but neither can reach an application that has gone quiet or
+# closed, because both work from the live session enumeration. `duck.sweep`
+# reads the volumes Windows has persisted instead, which is the only view that
+# outlives the session, the process and the reboot.
+#
+# Three settings, because what is safe depends on a fact about the person:
+# `0` off; `signature` claims only what this duck level could have produced;
+# and the default, which claims everything below full. The default is the
+# user's own answer - they never set an application's volume, it should always
+# be at maximum - and it also closes a hole the narrow rule has, because the
+# signature is computed from the duck level *as it is now*: change it in the
+# station and every value the old one left is orphaned, claimed by nothing and
+# reported by nothing.
+SWEEP = os.environ.get("REVOICED_SWEEP", "1") != "0"
+SWEEP_SIGNATURE = os.environ.get("REVOICED_SWEEP", "1") == "signature"
 
 # Used when the pool is empty, so a fresh install still speaks.
 DEFAULT_PRESET = {
@@ -1071,6 +1089,9 @@ def tg_env(name: str, default: str = "") -> str:
     present and empty or `0`. A blueprint that switches Telegram off for one
     project must stay switched off, or the machine-wide default would silently
     override the per-project decision - which is the opt-in's whole point.
+    Present-and-empty is returned as `""` here; whether that reads as off is the
+    *caller's* to decide, and for a while `TELEGRAM` decided it read as on while
+    this docstring said otherwise.
 
     Read once, at import. The hook is a fresh process every turn, so it picks up
     a change on the next response either way; the station is not, and a registry
@@ -1104,7 +1125,16 @@ _PERSISTED = _user_env()
 
 # Off unless an environment opts in. See `tg_env` for why this is not a plain
 # `os.environ.get`.
-TELEGRAM = tg_env("REVOICED_TELEGRAM", "0") != "0"
+#
+# Empty is off, and it was on until TechnicalDirector measured it. `tg_env` is
+# correct - it returns "" for a present-but-empty name and does not fall back to
+# the User scope - but `"" != "0"` is True, so a blueprint that set the variable
+# to nothing opted *in* while the docstring one line up promised the opposite.
+# `not in ("", "0")` is the whole fix. Worth saying how they caught it, because
+# the obvious test agrees with the bug: PowerShell's `$env:X = ''` **deletes**
+# the variable rather than emptying it, so testing that way measures the absent
+# case and reports a pass. It takes a subprocess with an explicit empty value.
+TELEGRAM = tg_env("REVOICED_TELEGRAM", "0").strip() not in ("", "0")
 TG_API = "https://api.telegram.org/bot{}/{}"
 
 
@@ -1160,15 +1190,82 @@ def telegram_send(project: str, text: str, mp3: Path | None) -> bool:
             "chat_id": chat, "parse_mode": "HTML",
             "text": f"<b>{html.escape(project)}</b>\n\n{html.escape(text)}",
         })
+        if not ok:
+            # The API answered, and answered no. A revoked token, a chat that
+            # blocked the bot, a message the parser rejected - all arrive here.
+            return _tg_failed("the API returned ok:false", project)
         if mp3 and mp3.exists():
             # sendAudio, never sendVoice: a voice note must be ogg/opus and
             # Telegram refuses an mp3 posted there outright.
-            ok = _tg_post("sendAudio", {
+            if not _tg_post("sendAudio", {
                 "chat_id": chat, "title": project, "performer": "revoiced",
-            }, mp3) and ok
-        return ok
-    except Exception:
-        return False
+            }, mp3):
+                # The text landed and the audio did not, which is a real state
+                # and not the same as nothing arriving. Named as such.
+                return _tg_failed("audio refused; the text was delivered", project)
+        return _tg_ok()
+    except Exception as e:
+        return _tg_failed(f"{type(e).__name__}: {e}", project)
+
+
+# Nothing looked at what telegram_send returned, and it ends in a bare
+# `except: return False` - so a 30s timeout, a revoked token, a wrong chat id
+# and an ok:false from the API all produced exactly nothing. No history field,
+# no stderr, no retry, and the user believing a message had been delivered.
+# TechnicalDirector's, 2026-08-06.
+#
+# It lands in state.json rather than on the history entry, and that is a
+# concession rather than a preference: `record()` has already appended by the
+# time the send is attempted - deliberately, because a 30s upload must not sit
+# between a finished turn and the station showing it - so putting it on the
+# entry would mean rewriting the whole file on the hook path, once per turn,
+# across 39 environments. `mutate_state` publishes only on a change, so a
+# machine where Telegram works never writes this at all.
+def _tg_failed(reason: str, project: str) -> bool:
+    with mutate_state() as st:
+        st["telegram_error"] = {"at": time.time(), "reason": reason[:200],
+                                "project": project}
+    return False
+
+
+def _tg_ok() -> bool:
+    # Clearing on the next success is what makes the record mean "right now"
+    # rather than "at some point". Nothing to clear is not a change, so this
+    # writes nothing on the ordinary path.
+    with mutate_state() as st:
+        st.pop("telegram_error", None)
+    return True
+
+
+def sweep_ducks() -> list:
+    """Put back any volume still carrying a duck's signature, and say what.
+
+    Refuses while anything is speaking, because a duck in progress is
+    indistinguishable from one that failed - a scan taken mid-line while this
+    was being written reported three applications as damaged and every one of
+    them was correct. Two independent signs, and both have to be quiet: a fresh
+    speaker lock, which is heartbeated every 200ms across all 41 environments,
+    and the duck record itself. Whichever env speaks next does the sweep, so a
+    turn skipped here costs nothing.
+    """
+    if not SWEEP or not IS_WIN:
+        return []
+    try:
+        if time.time() - (RUN / "speaker.lock").stat().st_mtime <= 3.0:
+            return []
+    except OSError:
+        pass                          # no lock at all, so nobody is speaking
+    if (RUN / "duck.json").exists():
+        return []
+    level = float(read_state().get("duck", 15)) / 100.0
+    # A duck of 100% is ducking switched off; there is no signature to look for
+    # and every quiet application would match nothing anyway.
+    if not 0.0 < level < 1.0:
+        return []
+    # The registry names an application by its full device path. Keep the
+    # executable, drop the volume prefix and the session suffix.
+    return [f"{n.split(chr(92))[-1].split('%b')[0] or '?'} {v:.4f} ({how})"
+            for n, v, how in ducking.sweep(level, SWEEP_SIGNATURE)]
 
 
 # --- worker ----------------------------------------------------------------
@@ -1195,6 +1292,14 @@ def worker(job_file: Path) -> None:
     # Synthesise before queueing, so waiting responses render in parallel.
     have_audio = synthesize(preset, spoken, mp3)
 
+    # Check the last turn's restore actually landed, before this one ducks on
+    # top of whatever it left. It runs here rather than after our own restore
+    # because the registry lags the session by several seconds - measured, the
+    # stored value still read 0.15 five seconds after `duck.json` was gone - so
+    # a sweep taken straight after speaking would find its own duck and "repair"
+    # it. One turn later there is no such doubt.
+    swept = sweep_ducks()
+
     record({
         "id": job["id"], "queued": job["queued"], "project": job["project"],
         "cwd": job["cwd"], "session": job["session"], "text": job["text"],
@@ -1213,6 +1318,11 @@ def worker(job_file: Path) -> None:
         # silently is not doing - no toast without notify, no window titles
         # without focus.
         **({"missing": list(MISSING)} if MISSING else {}),
+        # Only when it actually put something back. A repair that says nothing
+        # is a fallback firing in silence, which is how a total edge-tts
+        # breakage stayed hidden for hours - and here it is also the only
+        # evidence of how often the restore misses.
+        **({"swept": swept} if swept else {}),
     })
 
     if session_token(job["session"]) not in ("", job["id"]):
@@ -1513,6 +1623,14 @@ def main() -> None:
         print(f"prompts kept  : {'yes' if PROMPTS else 'no (REVOICED_PROMPTS=0)'}"
               f", {sum(1 for e in hist if e.get('prompt'))} of {len(hist)} "
               f"entries carry one")
+        # What the last few turns had to put back. Nothing here is the healthy
+        # reading, and it is only trustworthy as a *count over turns*: a single
+        # quiet turn says the last one restored cleanly, not that the machine is
+        # clean. `--sweep` is the question "is it clean right now".
+        swept = [f"{e.get('project','?')}: {', '.join(e['swept'])}"
+                 for e in read_history()[-50:] if e.get("swept")]
+        print(f"volume repairs: {swept[-3:] if swept else 'none in the last 50 turns'}"
+              + ("" if SWEEP else "  (REVOICED_SWEEP=0, sweep is off)"))
         print(f"edge-tts      : {edge_cmd() or 'NOT FOUND'}")
         print(f"elevenlabs key: {'set' if eleven_key() else 'not set'}")
         # Where each one came from, not just whether it is there. "off" and
@@ -1529,6 +1647,30 @@ def main() -> None:
         print(f"telegram      : {'on' if TELEGRAM else 'off (REVOICED_TELEGRAM)'}"
               f", token {source('TELEGRAM_BOT_TOKEN')}"
               f", chat {source('TELEGRAM_CHAT_ID')}")
+        # Cleared by the next send that works, so this is "right now", not
+        # "ever". Absent is the healthy reading.
+        err = state.get("telegram_error")
+        if err:
+            mins = (time.time() - float(err.get("at", 0))) / 60
+            print(f"  last failure: {err.get('reason')} "
+                  f"({err.get('project', '?')}, {mins:.0f}m ago)")
+    elif cmd == "--sweep":
+        # "Is this machine clean, right now." The hook does this once a turn and
+        # says nothing when there is nothing to do, so this is the only way to
+        # ask directly - and the only way to watch the guard catch the case it
+        # was written for rather than read that it would.
+        level = float(state.get("duck", 15)) / 100.0
+        mode = ("off" if not SWEEP else
+                "signature only" if SWEEP_SIGNATURE else "everything below full")
+        print(f"duck level    : {level:.2f}")
+        print(f"sweep claims  : {mode}")
+        for key, name, value in ducking._stored():
+            if 0.0 < value < 0.999:
+                claimed = ducking.is_duck(value, level) if SWEEP_SIGNATURE else True
+                print(f"  {value:.4f}  {'CLAIM' if claimed else 'kept '}"
+                      f"  {name.split(chr(92))[-1][:52]}")
+        fixed = sweep_ducks()
+        print(f"repaired      : {fixed or 'nothing'}")
     else:
         print(__doc__)
 

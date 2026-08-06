@@ -119,7 +119,11 @@ Quick first checks: `aello voice status` (mute state and `HOOK_VERSION`), and wh
 
 Run `python <env>/hooks/speak.py --status` and read the `telegram` line — it names where each of the three values came from. **Run it from a terminal you already had open**, not a fresh one: a fresh shell inherits the variables either way, so it cannot tell a working setup from a broken one.
 
-Two things it will not tell you. `REVOICED_TELEGRAM` set to an **empty** value reads as *on*, not off — use `0` to opt a project out. And a send that **fails** — timeout, revoked token, wrong chat id, an API `ok:false` — is swallowed whole: no history entry, no stderr, no retry, and the line still gets spoken locally, so nothing about the session looks wrong. If messages stop arriving, the only way to see it is to send one by hand with the same token and chat id.
+If the variables did reach the process and messages still don't arrive, run `aello voice status`: from `HOOK_VERSION` 18 a failed send is recorded in the shared state file and printed there as `telegram   : last send FAILED — <reason>`. It names the actual fault (timeout, revoked token, wrong chat id, an API `ok:false`) and the project it happened in, and it is cleared by the next send that works — so it means "right now", and absent means healthy right now, not ever.
+
+Below 18 there is nothing to read: a failed send was swallowed whole — no history entry, no stderr, no retry, and the line still spoken locally, so nothing about the session looked wrong. The only way to see it was to send one by hand with the same token and chat id.
+
+Below 17, `REVOICED_TELEGRAM` set to an **empty** value reads as *on*, not off. Use `0` to opt a project out; it works on every version.
 
 ## Applications got quiet and stayed quiet
 
@@ -127,9 +131,11 @@ The hook lowers other applications while it speaks and puts them back afterwards
 
 It lost the record two different ways. At 8 it deleted the record whenever it could not enumerate audio sessions. At 10 it kept the record but keyed it on the process id — and **one process owns several audio sessions**, so a browser's media and notification streams shared one slot, the second overwrote the first while both were lowered, and the restore raised one and left the other down with nothing left to restore it from. 10 is therefore still damaging, not merely stale.
 
-Run `aello voice status` and check the version. Below 11, `aello run` the env once to refresh its copy — the fix is upstream and arrives with the hook files.
+Compounding is not the only way it happens, and 11 does not close the rest. The restore works from the live audio session list, so an application that goes **quiet and then exits** is dropped from it and stays lowered with no record left — and a reboot mid-turn does that to everything at once. From `HOOK_VERSION` **15** the hook reads the persisted volumes at the start of each turn and puts back what is still down; see [voice.md](voice.md) for the three `REVOICED_SWEEP` modes and why the default is the wide one.
 
-Then repair what was already done, and **do not trust a live-session check for this**. Enumerating audio sessions reads only the endpoint currently in use, while the stored volume is per endpoint: an application can read a healthy 1.0 on your speakers and still be at 0.0225 on your headphones. The values live under `HKCU\Software\Microsoft\Internet Explorer\LowRegistry\Audio\PolicyConfig\PropertyStore\<id>\{GUID}`, value `3` — a `VT_R4` PROPVARIANT with the float at byte offset 8. Setting the ducked ones back to `1.0` is safe. A value of exactly `0` is **not** duck damage — the clamp floor is 0.01 and repeated ducking never reaches zero — so that one is your own mute and should be left alone.
+Run `aello voice status` and check the version. Below 15, `aello run` the env once to refresh its copy — the fix is upstream and arrives with the hook files. On 15 and up, ask a placed copy what it can still see: `python <env>/hooks/speak.py --sweep` lists every stored volume below full and repairs the ones its mode claims. **Run it when nothing is speaking** — a scan taken mid-line reports the live duck as damage, and all three applications it named upstream were in fact correct.
+
+To repair by hand instead, **do not trust a live-session check for this**. Enumerating audio sessions reads only the endpoint currently in use, while the stored volume is per endpoint: an application can read a healthy 1.0 on your speakers and still be at 0.0225 on your headphones. The values live under `HKCU\Software\Microsoft\Internet Explorer\LowRegistry\Audio\PolicyConfig\PropertyStore\<id>\{GUID}`, value `3` — a `VT_R4` PROPVARIANT with the float at byte offset 8. Setting the ducked ones back to `1.0` is safe. A value of exactly `0` is **not** duck damage — the clamp floor is 0.01 and repeated ducking never reaches zero — so that one is your own mute and should be left alone.
 
 ## Plan mode is refused
 

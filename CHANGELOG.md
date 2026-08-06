@@ -3,6 +3,42 @@
 ## [Unreleased]
 
 ### Added
+- **`HOOK_VERSION` 18: the voice hook now puts back application volumes its
+  own restore could never reach.** The restore works from the live audio
+  session list, so an application that goes quiet and then *exits* is dropped
+  from it and stays lowered with no record that it ever was — and a reboot
+  mid-turn does that to everything at once (measured upstream: the duck wrote
+  at 11:15:39, the machine went down at 11:16:05, three applications came back
+  at 15%). Worse, one that returns carries a new process id, so its stored 0.15
+  is read as its normal and the next duck lands on 0.0225. From 15 the hook
+  reads the volumes **Windows has persisted** — the only view that outlives the
+  session, the process and the reboot — at the start of each turn, and repairs
+  what is still down. `REVOICED_SWEEP` is `0` (off), `signature` (only what the
+  current duck level could have produced), or anything else for the default,
+  which claims every stored volume between 0 and full. The wide default closes
+  a hole the narrow rule has: the signature is computed from the duck level *as
+  it is now*, so changing it orphans every value the old one left. An exact `0`
+  is never touched in either mode. `speak.py --sweep` shows what a copy can see
+  and repairs it; `speak.py --status` summarises the last 50 turns.
+
+- **`aello voice status` now reports a failed Telegram send.** 18 records one
+  in the shared `state.json` as `telegram_error` — a key revoiced owns and
+  aello only reads, cleared by the next send that works. Before it, a timeout,
+  a revoked token, a wrong chat id and an API `ok:false` all produced exactly
+  nothing: no history entry, no stderr, no retry, and the line still spoken
+  locally, so nothing about the session looked wrong. It lives on the state
+  file rather than the history entry because the entry is already written by
+  the time the send is attempted, and rewriting the history on the hook path
+  once per turn in every env is not worth it.
+
+### Fixed
+- **`REVOICED_TELEGRAM` set to an empty value now switches Telegram off**
+  (upstream 17), as its documentation always said. `""` was compared against
+  `"0"` and read as *on*, so a blueprint that set the variable to nothing opted
+  in. Use `0` to opt out on any version; the obvious test agrees with the bug,
+  since PowerShell's `$env:X = ''` deletes the variable rather than emptying it
+  and so measures the absent case.
+
 - **`HOOK_VERSION` 14: turning Telegram on now reaches sessions that are
   already open.** At 13 the three variables only worked for a terminal started
   after they were set — Windows never pushes a new User-scope variable into a
