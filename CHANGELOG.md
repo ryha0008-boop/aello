@@ -3,6 +3,23 @@
 ## [Unreleased]
 
 ### Added
+- **The voice hook is re-vendored at `HOOK_VERSION` 13, which adds a Telegram
+  sender.** Upstream now delivers the spoken `TL;DR:` line and its mp3 to a
+  Telegram chat alongside the local playback, so a response reaches you when
+  you are away from the machine. It is opt-in and off unless three environment
+  variables are set: `REVOICED_TELEGRAM=1`, `TELEGRAM_BOT_TOKEN` and
+  `TELEGRAM_CHAT_ID`. Nothing changes for an env that sets none of them.
+
+  Only `speak.py` moved between 11 and 13 — `duck.py`, `focus.py`, `notify.py`
+  and `win_audio.ps1` are byte-identical — but all five are re-vendored as a
+  unit anyway, because the guard that makes a partial copy survive is also what
+  makes it silent. Unlike the 8 → 10 → 11 sequence, a copy left on 11 is not
+  damaging, just deaf to Telegram: the audio-session bug was fixed at 11 and
+  nothing here touches `duck.py`. `aello voice status` reports the vendored
+  version, and a placed copy answers `python <env>/hooks/speak.py
+  --hook-version` before any optional import, so a partial copy still tells you
+  the truth.
+
 - **Every response now ends with one block: the `TL;DR:` line, with 3–4
   numbered next steps beneath it.** The per-turn `UserPromptSubmit` hook's last
   rule now fixes the whole shape of an answer: a few sentences of prose, then

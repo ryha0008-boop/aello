@@ -25,6 +25,7 @@ sessions finishing at once queue instead of talking over each other.
     speak.py --release [SESSION]     hand a voice back (SessionEnd hook)
 """
 
+import html
 import json
 import os
 import re
@@ -98,7 +99,7 @@ NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if IS_WIN else {}
 # comparing it against the value here is how a vendored copy learns it has
 # fallen behind. Station-only changes leave it alone: a version that moves for
 # reasons the hook never executes trains everyone to ignore the warning.
-HOOK_VERSION = 11
+HOOK_VERSION = 13
 
 
 def _num(name: str, default, cast=int):
@@ -333,6 +334,46 @@ def write_state(state: dict) -> None:
             pass
 
 
+@contextmanager
+def mutate_state(stale: float = 5.0, timeout: float = 15.0):
+    """The only safe way to change state.json: read, modify, write, under one lock.
+
+    Twenty-one call sites spelled this out by hand, all with these same two
+    numbers, and the shape is load-bearing rather than decorative - the file has
+    two writers (aello owns `global`, `projects` and the stop token; revoiced
+    owns everything else), so a read taken earlier and written later silently
+    reverts whatever the other one did in between. Getting that wrong loses an
+    aello-set mute, which is the one bug users do not forgive.
+
+    Writes only when the block actually changed something. That is not an
+    optimisation, it is the contract `/api/state` already depended on: it calls
+    `reap_leases` on every poll, every two seconds, for as long as a tab is open,
+    and a context manager that published unconditionally would rewrite the file
+    forever against forty-one hooks contending for the same lock. It also
+    removes the older footgun in the other direction - a block that mutated the
+    dict and forgot `write_state` lost the change with nothing to show for it.
+
+    An exception inside the block skips the write, which is what you want:
+    half-applied is worse than not applied.
+    """
+    with lock("state", stale=stale, timeout=timeout):
+        st = read_state()
+        before = _fingerprint(st)
+        yield st
+        if before is None or _fingerprint(st) != before:
+            write_state(st)
+
+
+def _fingerprint(state: dict):
+    """A cheap "has this changed" signature, or None when it cannot be taken -
+    which is read as *assume it changed*, because dropping a real write is worse
+    than making a redundant one."""
+    try:
+        return json.dumps(state, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        return None
+
+
 def is_muted(cwd: str, key: str = "") -> bool:
     s = read_state()
     if s["global"] or s["projects"].get(str(cwd)):
@@ -473,21 +514,18 @@ def dead_leases(leases: dict) -> list:
 def reap_leases() -> int:
     """Drop every finished lease. Writes only when there is something to drop,
     so the station can call this on each poll without churning state.json."""
-    with lock("state", stale=5.0, timeout=15.0):
-        st = read_state()
+    with mutate_state() as st:
         dead = dead_leases(st["leases"])
         if not dead:
             return 0
         for sid in dead:
             st["leases"].pop(sid, None)
-        write_state(st)
         return len(dead)
 
 
 def lease_preset(session: str, key: str, project: str, cwd: str = "",
                  window: dict = None) -> dict:
-    with lock("state", stale=5.0, timeout=15.0):
-        st = read_state()
+    with mutate_state() as st:
         presets = st.get("presets") or []
         if not presets:
             return DEFAULT_PRESET
@@ -521,7 +559,6 @@ def lease_preset(session: str, key: str, project: str, cwd: str = "",
                            # nothing else to check once the pid is shared.
                            "title": (window or {}).get("title") or "",
                            "acquired": prev.get("acquired", now), "last_used": now}
-        write_state(st)
         return {p["id"]: p for p in presets}[chosen]
 
 
@@ -543,22 +580,18 @@ def mark_cleared(session: str) -> bool:
     it survives until the session that replaced it speaks - and if none ever
     does, dead_leases sees a lease with no window on screen and drops it.
     """
-    with lock("state", stale=5.0, timeout=15.0):
-        st = read_state()
+    with mutate_state() as st:
         l = st["leases"].get(session)
         if not l:
             return False
         l["cleared"] = time.time()
-        write_state(st)
         return True
 
 
 def release_lease(session: str) -> bool:
-    with lock("state", stale=5.0, timeout=15.0):
-        st = read_state()
+    with mutate_state() as st:
         if st["leases"].pop(session, None) is None:
             return False
-        write_state(st)
         return True
 
 
@@ -892,11 +925,9 @@ def count_spoken(seed: int) -> None:
     Taken inside lock("history"), which is a new order - nothing anywhere takes
     the history lock while holding state, so it cannot cycle.
     """
-    with lock("state", stale=5.0, timeout=15.0):
-        st = read_state()
+    with mutate_state() as st:
         counted = int(st.get("spoken") or 0)
         st["spoken"] = counted + 1 if counted else seed
-        write_state(st)
 
 
 def record(entry: dict) -> None:
@@ -1016,6 +1047,82 @@ def run_cancellable(cmd: list, job_id: str, session: str, stop_at_start: str,
             return
 
 
+# --- telegram --------------------------------------------------------------
+
+# Off unless an environment opts in, which aello's blueprint does by setting
+# this in its env block - so turning an agent's phone messages on and off is an
+# edit to the blueprint and needs nothing here. Absent, every path below stops
+# before the first socket. The token and the chat id come from the environment
+# for the same reason the kie and ElevenLabs keys do, and one harder one:
+# anyone holding this token can type into a terminal running with permissions
+# bypassed, and state.json is a file the station serves the contents of.
+TELEGRAM = os.environ.get("REVOICED_TELEGRAM", "0") != "0"
+TG_API = "https://api.telegram.org/bot{}/{}"
+
+
+def _tg_post(method: str, fields: dict, mp3: Path | None = None) -> bool:
+    """One multipart POST to the Bot API, by hand.
+
+    Multipart rather than JSON because sendAudio has to carry the file, and
+    building the body here is a dozen lines against a dependency the hook
+    cannot have - this file runs in 41 vendored copies with nothing installed
+    beside it.
+    """
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    boundary = "----revoiced" + uuid.uuid4().hex
+    body = bytearray()
+    for key, value in fields.items():
+        body += (f"--{boundary}\r\nContent-Disposition: form-data; "
+                 f'name="{key}"\r\n\r\n{value}\r\n').encode("utf-8")
+    if mp3:
+        body += (f"--{boundary}\r\nContent-Disposition: form-data; "
+                 f'name="audio"; filename="{mp3.name}"\r\n'
+                 "Content-Type: audio/mpeg\r\n\r\n").encode("utf-8")
+        body += mp3.read_bytes() + b"\r\n"
+    body += f"--{boundary}--\r\n".encode("utf-8")
+    req = urllib.request.Request(
+        TG_API.format(token, method), data=bytes(body),
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return bool(json.loads(resp.read().decode("utf-8")).get("ok"))
+
+
+def telegram_send(project: str, text: str, mp3: Path | None) -> bool:
+    """The TL;DR to your phone, then the audio behind it.
+
+    Sent from the hook rather than the station, so it goes out on a machine
+    where the station is closed - receiving is the station's half, because a
+    long poll needs a process that outlives a turn.
+
+    Called *before* the speaker lock is taken. Inside it, a 30s upload would
+    hold a machine-wide lock, and all 41 environments queue behind that one.
+
+    The project's name is the first line, and that is load-bearing rather than
+    decoration: a reply carries the whole quoted message back, so the station
+    resolves it to a profile from the text itself and needs no stored map of
+    message ids - nothing to grow, nothing to lose across a restart.
+    """
+    if not (TELEGRAM and os.environ.get("TELEGRAM_BOT_TOKEN")):
+        return False
+    chat = os.environ.get("TELEGRAM_CHAT_ID", "")
+    if not chat:
+        return False
+    try:
+        ok = _tg_post("sendMessage", {
+            "chat_id": chat, "parse_mode": "HTML",
+            "text": f"<b>{html.escape(project)}</b>\n\n{html.escape(text)}",
+        })
+        if mp3 and mp3.exists():
+            # sendAudio, never sendVoice: a voice note must be ogg/opus and
+            # Telegram refuses an mp3 posted there outright.
+            ok = _tg_post("sendAudio", {
+                "chat_id": chat, "title": project, "performer": "revoiced",
+            }, mp3) and ok
+        return ok
+    except Exception:
+        return False
+
+
 # --- worker ----------------------------------------------------------------
 
 def worker(job_file: Path) -> None:
@@ -1064,6 +1171,10 @@ def worker(job_file: Path) -> None:
         return
     if stop_token() != stop_at_start:
         return                      # stopped while this was being synthesised
+
+    # To your phone, out here rather than beside the desktop notification: that
+    # one is drawn from inside the speaker lock, and this is a network upload.
+    telegram_send(job["project"], job["text"], mp3 if have_audio else None)
 
     duck_file = RUN / "duck.json"
     ducking.recover(duck_file)      # a previous worker may have died mid-duck
@@ -1290,22 +1401,18 @@ def main() -> None:
         # Re-read under the lock, like every other writer. aello writes `global`
         # and `projects` to this same file, so a mute of its own set between the
         # read above and this write would be silently thrown away.
-        with lock("state", stale=5.0, timeout=15.0):
-            state = read_state()
+        with mutate_state() as state:
             state["global"] = cmd == "--mute"
-            write_state(state)
         if cmd == "--mute":
             (RUN / "stop").write_text(uuid.uuid4().hex, encoding="utf-8")
         print("muted" if state["global"] else "unmuted")
     elif cmd in ("--mute-project", "--unmute-project"):
         target = str(Path(args[1]).resolve()) if len(args) > 1 else os.getcwd()
-        with lock("state", stale=5.0, timeout=15.0):
-            state = read_state()
+        with mutate_state() as state:
             if cmd == "--mute-project":
                 state["projects"][target] = True
             else:
                 state["projects"].pop(target, None)
-            write_state(state)
         print(f"{'muted' if cmd == '--mute-project' else 'unmuted'}: {target}")
     elif cmd == "--presets":
         if not state["presets"]:
@@ -1325,8 +1432,7 @@ def main() -> None:
     elif cmd == "--pin":
         target = str(Path(args[1]).resolve()) if len(args) > 1 else os.getcwd()
         pid = args[2] if len(args) > 2 else ""
-        with lock("state", stale=5.0, timeout=15.0):
-            state = read_state()
+        with mutate_state() as state:
             if pid in {p["id"] for p in state["presets"]}:
                 state["voices"][target] = pid
                 for l in state["leases"].values():
@@ -1335,7 +1441,6 @@ def main() -> None:
             else:
                 state["voices"].pop(target, None)
                 pid = ""
-            write_state(state)
         print(f"{'pinned ' + pid if pid else 'unpinned'}: {target}")
     elif cmd == "--leases":
         if not state["leases"]:
@@ -1362,6 +1467,9 @@ def main() -> None:
               f"entries carry one")
         print(f"edge-tts      : {edge_cmd() or 'NOT FOUND'}")
         print(f"elevenlabs key: {'set' if eleven_key() else 'not set'}")
+        print(f"telegram      : {'on' if TELEGRAM else 'off (REVOICED_TELEGRAM)'}"
+              f", token {'set' if os.environ.get('TELEGRAM_BOT_TOKEN') else 'not set'}"
+              f", chat {'set' if os.environ.get('TELEGRAM_CHAT_ID') else 'not set'}")
     else:
         print(__doc__)
 

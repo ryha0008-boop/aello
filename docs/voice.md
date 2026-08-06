@@ -44,6 +44,18 @@ The call is deliberately **not** cached behind a marker file. The handler comman
 
 If they disagree, that env is behind and its next `run` refreshes it. Being behind is not always harmless: a copy below 11 lowers other applications' volumes and can fail to put them back, permanently — see [troubleshooting.md](troubleshooting.md). Two unit tests keep the vendored copy honest: one compares the recorded constant against the vendored `speak.py`, and one digests **all five** files — the constant lives in `speak.py` alone, so a re-vendor touching only `duck.py` or `win_audio.ps1` would otherwise slip past. The digest test prints the new value when it fails.
 
+## Telegram (opt-in, `HOOK_VERSION` 13 and up)
+
+From 13, `speak.py` also sends the spoken line and its mp3 to a Telegram chat, so a response reaches you away from the machine. It is off unless **all three** variables are set:
+
+| Variable | Meaning |
+|---|---|
+| `REVOICED_TELEGRAM` | `1` to enable; anything else, or unset, is off |
+| `TELEGRAM_BOT_TOKEN` | the bot's API token |
+| `TELEGRAM_CHAT_ID` | the chat to deliver to |
+
+aello does not set these. They are read from the process environment, so a user- or machine-level variable covers every env at once, and a blueprint that wants to differ can override it. `python <env>/hooks/speak.py --status` prints a `telegram` line reporting all three — which is the check that proves the variables reached the process, not just that the code is present. `--hook-version` only proves the code is there.
+
 ## Shared state, per-env scripts
 
 The scripts are per-env; their state is not. The voice pool, per-session leases and mute flags live in one machine-wide folder:
