@@ -383,7 +383,15 @@ fn cmd_remove(name: String, yes: bool, purge: bool) -> Result<()> {
         }
     }
 
-    let mut cfg = cfg;
+    // Re-read immediately before mutating. The `cfg` above was loaded before a
+    // confirm that blocks on stdin with no time bound, and saving that stale
+    // snapshot would discard anything written meanwhile — most plausibly an
+    // `aello login` in another terminal, whose token is expensive to lose.
+    // `cmd_init` documents this and does it; these were the outliers.
+    let mut cfg = config::load()?;
+    if cfg.find(&name).is_none() {
+        bail!("blueprint '{name}' is already gone — nothing written");
+    }
     cfg.blueprints.retain(|b| b.name != name);
     config::save(&cfg)?;
     println!("Removed blueprint '{name}'.");
@@ -715,7 +723,11 @@ fn cmd_login_cline() -> Result<()> {
     let base_url = prompt_optional("Base URL override (blank for the provider default)")?;
 
     let api_key = key.or_else(|| current.and_then(|c| c.api_key.clone()));
-    let mut cfg = cfg;
+
+    // Re-read immediately before mutating — four prompts is an unbounded amount
+    // of wall-clock time, and saving the snapshot taken before them would drop
+    // an `aello login` (or an `aello add`) made in another terminal meanwhile.
+    let mut cfg = config::load()?;
     cfg.cline = Some(models::ClineAuth { provider, api_key, model, base_url });
     config::save(&cfg)?;
     println!("Saved the Cline login. Every Cline env will use it.");

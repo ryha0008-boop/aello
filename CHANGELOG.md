@@ -73,6 +73,13 @@
   fails it with no version to explain the mismatch.
 
 ### Fixed
+- **`aello remove` and `aello login --agent cline` re-read `config.toml` before
+  saving it.** Both loaded the config, then blocked on prompts with no time
+  bound, then wrote that stale snapshot back — so an `aello login` finished in
+  another terminal while the prompt sat there was silently discarded, token and
+  all. `aello init` already documented this rule and followed it; these two were
+  the outliers.
+
 - **Commands that name an env dir now ask the blueprint which agent it is.**
   Five of them built `.claude-env-<name>` regardless, so on a Cline blueprint
   they operated on a path that does not exist and said nothing: `remove --purge`
