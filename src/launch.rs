@@ -4,6 +4,30 @@ use anyhow::{Context, Result};
 use std::path::Path;
 use std::process::Command;
 
+/// Credentials that must not reach a launched agent by inheritance.
+///
+/// An env's auth is aello's to choose: the shared OAuth token, or nothing and
+/// Claude's own login prompt. The launching shell's environment was neither.
+/// Agents run `aello` from inside an aello env in this project, so an ambient
+/// `CLAUDE_CODE_OAUTH_TOKEN` is routine — and the `no token configured` branch
+/// printed "Claude will prompt login" while the env silently authenticated as
+/// whoever owns that variable. On the Cline side it is worse than confusing:
+/// Cline's `claude-code` provider would pick up aello's shared subscription
+/// token in place of the per-env metered key the blueprint was created for.
+///
+/// Removed on the *child*, never unset in this process — `aello` itself still
+/// reads its own environment normally.
+const INHERITED_CREDENTIALS: &[&str] =
+    &["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"];
+
+/// Strip [`INHERITED_CREDENTIALS`] from a child command. Call before setting any
+/// credential aello does choose, so that one wins.
+pub fn scrub_inherited_credentials(c: &mut Command) {
+    for k in INHERITED_CREDENTIALS {
+        c.env_remove(k);
+    }
+}
+
 /// Per-blueprint git identity. Multiple blueprints edit the same repo, so
 /// attributing commits to the blueprint makes `git blame` / `git log --author`
 /// reveal which one made each change. Email is synthetic (`<name>@aello.local`).
@@ -65,6 +89,7 @@ pub fn launch(
     oauth_token: Option<&str>,
 ) -> Result<i32> {
     let mut c = Command::new(claude_exe());
+    scrub_inherited_credentials(&mut c);
     c.env("CLAUDE_CONFIG_DIR", env_dir);
     // Unified transcript folder for the PostCompact hook.
     c.env("AELLO_CONTEXTDB", contextdb);
@@ -105,6 +130,37 @@ pub fn launch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The scrub has to reach the child as an explicit *removal*, not merely an
+    /// absence — the child inherits this process's environment otherwise, and
+    /// this process is very often an aello env with a token in it.
+    #[test]
+    fn launched_agents_do_not_inherit_the_shells_credentials() {
+        let mut c = Command::new("claude");
+        scrub_inherited_credentials(&mut c);
+        let removed: Vec<String> = c
+            .get_envs()
+            .filter(|(_, v)| v.is_none())
+            .map(|(k, _)| k.to_string_lossy().into_owned())
+            .collect();
+        for k in INHERITED_CREDENTIALS {
+            assert!(removed.contains(&k.to_string()), "{k} still reaches the child");
+        }
+    }
+
+    /// aello's own token still wins: the scrub runs first, then the `env` call.
+    #[test]
+    fn the_configured_token_survives_the_scrub() {
+        let mut c = Command::new("claude");
+        scrub_inherited_credentials(&mut c);
+        c.env("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-configured");
+        let set: Vec<_> = c
+            .get_envs()
+            .filter(|(k, _)| k.to_string_lossy() == "CLAUDE_CODE_OAUTH_TOKEN")
+            .filter_map(|(_, v)| v.map(|v| v.to_string_lossy().into_owned()))
+            .collect();
+        assert_eq!(set, ["sk-ant-oat01-configured"]);
+    }
 
     #[test]
     fn git_identity_is_blueprint_scoped() {

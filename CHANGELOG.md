@@ -73,6 +73,24 @@
   fails it with no version to explain the mismatch.
 
 ### Fixed
+- **`aello login` redacts any line containing a token, not just a bare one.**
+  Redaction shared its predicate with the parser, which requires a
+  whitespace-delimited word starting with `sk-ant-` — so `{"token":"sk-ant-…"}`
+  and `CLAUDE_CODE_OAUTH_TOKEN=sk-ant-…` were echoed to aello's own stdout in
+  the clear, which `aello login | tee`, CI logs and tmux capture then keep. The
+  same cases are where parsing fails, so the user was then asked to paste a
+  year-long credential that had just been logged. Redaction is a plain substring
+  search now, deliberately wider than extraction.
+
+- **A launched agent no longer inherits the shell's credentials.** Agents run
+  `aello` from inside an aello env, so an ambient `CLAUDE_CODE_OAUTH_TOKEN` is
+  routine — and with no token configured, aello printed "Claude will prompt
+  login" while the env quietly authenticated as whoever owns that variable.
+  Worse on the Cline side, where the `claude-code` provider would pick up the
+  shared subscription token in place of the per-env metered key. Both launch
+  paths now strip `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` and
+  `ANTHROPIC_AUTH_TOKEN` from the child before setting whatever aello chose.
+
 - **`aello remove` and `aello login --agent cline` re-read `config.toml` before
   saving it.** Both loaded the config, then blocked on prompts with no time
   bound, then wrote that stale snapshot back — so an `aello login` finished in

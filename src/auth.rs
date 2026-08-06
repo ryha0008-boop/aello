@@ -84,8 +84,18 @@ fn extract_token(s: &str) -> Option<String> {
 }
 
 /// True if a single line contains a token — used to redact it before echoing.
+///
+/// Deliberately **wider** than [`extract_token`]: a plain substring search for
+/// the prefix, with none of the whitespace-word structure extraction relies on.
+/// Sharing `clean_token` looked tidy and made redaction exactly as narrow as
+/// parsing, so `{"token":"sk-ant-…"}` and `CLAUDE_CODE_OAUTH_TOKEN=sk-ant-…`
+/// both printed in the clear — the leading `{"token":"` and the interior `=`
+/// are not trimmed, so neither word starts with `sk-ant-`. Worse, they are the
+/// same cases where parsing fails, so the user was then asked to paste a token
+/// aello had just written to a redirectable stdout. Over-redacting costs a line
+/// of output; under-redacting persists a year-long credential in a log.
 fn line_has_token(line: &str) -> bool {
-    line.split_whitespace().any(|w| clean_token(w).is_some())
+    line.contains("sk-ant-")
 }
 
 #[cfg(test)]
@@ -120,5 +130,20 @@ mod tests {
         // The auth-URL line (and any other non-token line) is not redacted.
         assert!(!line_has_token("Visit https://claude.ai/oauth/authorize?code=xyz"));
         assert!(!line_has_token("Success! Logged in."));
+    }
+
+    /// Redaction has to be wider than extraction, not equal to it. Each of these
+    /// printed a live year-long token to a redirectable stdout while
+    /// `extract_token` — sharing the same predicate — also failed to parse it,
+    /// so the user was invited to paste what had just been logged.
+    #[test]
+    fn redaction_catches_tokens_extraction_cannot_parse() {
+        assert!(line_has_token(r#"{"token":"sk-ant-oat01-ABCDEF0123456789xyz"}"#));
+        assert!(line_has_token("CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-ABCDEF0123456789xyz"));
+        assert!(line_has_token("│ sk-ant-oat01-ABCDEF0123456789xyz│"));
+        // Even a fragment: a token wrapped across two lines by a boxed UI still
+        // has the prefix on the first of them, and half a token is still half a
+        // token in a log.
+        assert!(line_has_token("your token is sk-ant-oat01-ABC"));
     }
 }
