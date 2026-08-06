@@ -82,6 +82,7 @@ cargo install --path .
 - **Claude Code** on your `PATH` (`claude`). aello sets `CLAUDE_CONFIG_DIR` and launches it.
 - **Python 3** — used for the voice and for archiving session transcripts.
 - **git** / **gh** only for the `maintainer` and `contributor` roles.
+- **Cline** (`npm i -g cline`) only if you create a `--agent cline` blueprint. Not needed otherwise.
 
 ## Quick start
 
@@ -194,7 +195,9 @@ They share nothing but the project directory — separate env dirs (`.claude-env
 
 ⚠️ **A Cline env is metered.** It uses your own provider key and every turn costs money per token, where a Claude env costs nothing beyond the subscription. Its env dir is gitignored unconditionally, because that key sits in plaintext inside it.
 
-A Cline env is also quieter, and that is a limitation of Cline rather than a choice: it gets **no voice, no transcript capture and no seeded skills**, because Cline fires no end-of-response hook and its one working hook carries no content. The four response rules do survive, as a rules file. Full detail, including why the Claude subscription can't drive a Cline env that edits files: [`docs/cline.md`](docs/cline.md).
+A Cline env gets the same persona, the same four response rules, the same `/sync`, `/handoff`, `/note` and `/twosentences`, and a memory — all of it through a rules file Cline re-sends on every request, since it has no per-turn hook to inject into and no memory system of its own.
+
+It is quieter in two ways, and both are limits of Cline rather than choices: **no voice and no transcript capture**, because Cline fires no end-of-response hook. And in headless `-p` mode a command needs a trailing word — `-p "/sync now"` — because Cline refuses any one-word prompt. Full detail, including why the Claude subscription can't drive a Cline env that edits files: [`docs/cline.md`](docs/cline.md).
 
 ## Voice — every env speaks
 
