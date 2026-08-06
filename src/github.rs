@@ -5,6 +5,7 @@
 //! *offers* at runtime: precheck `gh` auth, ensure a git repo with an initial
 //! commit, then `gh repo create` (which sets `origin` and pushes in one shot).
 
+use crate::models::Agent;
 use anyhow::{bail, Context, Result};
 use std::io::Write;
 use std::path::Path;
@@ -36,16 +37,17 @@ pub fn run(name: Option<String>, public: bool, yes: bool) -> Result<()> {
         bail!("`gh` is not authenticated. Run `gh auth login` first.");
     }
 
-    // 2. A git repo with at least one commit (gh's --push needs a commit).
-    ensure_git_repo(&project)?;
-
-    // 3. If origin already exists, there's nothing to set up.
+    // 2. If origin already exists, there's nothing to set up. (Checked before
+    //    `git init`, which is deliberate — see the confirm below.)
     if let Some(url) = remote_url(&project, "origin") {
         println!("origin already set to {url} — nothing to do.");
         return Ok(());
     }
 
-    // 4. Resolve the repo name and confirm.
+    // 3. Resolve the repo name and confirm — BEFORE anything is written. The
+    //    confirm used to come after `ensure_git_repo`, so answering "n" left a
+    //    `git init` and an `Initial commit` of the whole directory already on
+    //    disk with nothing to roll them back: "no" undid nothing.
     let repo = match name {
         Some(n) => n,
         None => project
@@ -61,6 +63,9 @@ pub fn run(name: Option<String>, public: bool, yes: bool) -> Result<()> {
         println!("Cancelled.");
         return Ok(());
     }
+
+    // 4. A git repo with at least one commit (gh's --push needs a commit).
+    ensure_git_repo(&project)?;
 
     // 5. Create + push.
     let status = Command::new("gh")
@@ -88,7 +93,25 @@ fn ensure_git_repo(project: &Path) -> Result<()> {
     }
     if !ok(project, "git", &["rev-parse", "HEAD"]) {
         println!("No commits yet — creating an initial commit.");
+        // `git add -A` respects .gitignore, so write the env-dir lines first —
+        // this may be a project whose envs were placed by a version that only
+        // wrote them for the `github` role, and a Claude env with no shared
+        // token holds a `.credentials.json`.
+        crate::project::ensure_gitignore_entry(project, Agent::Claude.gitignore_pattern())?;
+        crate::project::ensure_gitignore_entry(project, Agent::Cline.gitignore_pattern())?;
         git(project, &["add", "-A"])?;
+        // Then check what actually got staged rather than trusting that. An
+        // already-tracked env dir ignores .gitignore entirely, and this commit
+        // is one `gh repo create --public` away from the internet.
+        let staged = staged_paths(project);
+        let bad = forbidden_staged(&staged);
+        if !bad.is_empty() {
+            bail!(
+                "refusing to commit — these are agent env paths and may hold credentials:\n  {}\n\
+                 Untrack them first (`git rm -r --cached <path>`), then re-run.",
+                bad.join("\n  ")
+            );
+        }
         if !ok(project, "git", &["diff", "--cached", "--quiet"]) {
             let args = initial_commit_args(has_git_identity(project));
             let refs: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -98,6 +121,40 @@ fn ensure_git_repo(project: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Paths currently staged, one per line, empty on any failure.
+fn staged_paths(project: &Path) -> Vec<String> {
+    Command::new("git")
+        .args(["diff", "--cached", "--name-only"])
+        .current_dir(project)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The staged paths that must never reach a commit aello creates: anything
+/// inside either agent's env dir, and any `.credentials.json` wherever it sits.
+/// Matched on path *components* so a nested `sub/.claude-env-x/…` is caught too.
+fn forbidden_staged(paths: &[String]) -> Vec<String> {
+    paths
+        .iter()
+        .filter(|p| {
+            p.split(['/', '\\']).any(|c| {
+                c.starts_with(Agent::Claude.env_prefix())
+                    || c.starts_with(Agent::Cline.env_prefix())
+                    || c == ".credentials.json"
+            })
+        })
+        .cloned()
+        .collect()
 }
 
 /// True when git has a usable author identity (`user.name` AND `user.email`
@@ -223,5 +280,36 @@ mod tests {
         assert!(a.contains(&"user.email=aello@aello.local".to_string()));
         // `-c` precedes each override so git applies them for this invocation only.
         assert_eq!(a.iter().filter(|s| *s == "-c").count(), 2);
+    }
+
+    /// The bootstrap commit is a blanket `git add -A` of a directory nobody has
+    /// curated, and `gh repo create` can publish it. `.gitignore` alone is not
+    /// enough — an env dir tracked before the ignore line existed stays tracked.
+    #[test]
+    fn the_bootstrap_commit_refuses_to_stage_an_env_dir() {
+        let paths: Vec<String> = [
+            "src/main.rs",
+            ".claude-env-coder/.credentials.json",
+            "docs/readme.md",
+            "sub/.cline-env-bot/data/settings/providers.json",
+            "nested/.credentials.json",
+            "claude-internal/coder/persona.CLAUDE.md",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+        let bad = forbidden_staged(&paths);
+        assert_eq!(
+            bad,
+            [
+                ".claude-env-coder/.credentials.json",
+                "sub/.cline-env-bot/data/settings/providers.json",
+                "nested/.credentials.json",
+            ]
+        );
+        // The tracked mirror is deliberately NOT forbidden — committing it is
+        // the whole point of `claude-internal/`.
+        assert!(forbidden_staged(&["claude-internal/coder/memory/MEMORY.md".into()]).is_empty());
     }
 }

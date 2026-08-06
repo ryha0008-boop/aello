@@ -73,6 +73,43 @@
   fails it with no version to explain the mismatch.
 
 ### Fixed
+- **A fresh clone no longer loses everything `claude-internal/` was tracked to
+  keep.** The mirror is written one way, env → tracked folder, *with prune* —
+  and the env dir is the one thing a clone is guaranteed not to have. So the
+  first `aello run` on a second machine seeded a bare env and then deleted every
+  tracked memory note and hand-kept skill that the bare env did not have.
+  (Measured on this repository: 11 tracked memory notes and 6 skills against the
+  2 and 4 a fresh placement seeds.) `place` now restores a missing env dir *from*
+  the mirror before it seeds anything, which is the direction tracking the folder
+  always implied.
+
+  A missing mirror *source* also no longer prunes: the memory path is derived
+  from the launch directory's exact spelling, and a derivation that comes out
+  wrong is indistinguishable from a deletion.
+
+- **Every env dir is gitignored, whatever the role.** The `.claude-env-*` line
+  was written only for `github` blueprints, on the reasoning that a Claude env
+  holds no secret — but with no shared token configured, Claude Code writes its
+  own `.credentials.json` inside it, and `standalone` (the *default* role) never
+  got the line. The Cline side has always written its line unconditionally; both
+  do now.
+
+- **`aello github-setup` asks before it writes, and checks what it stages.** The
+  confirmation prompt came *after* `git init` and the blanket `git add -A`
+  `Initial commit`, so answering "n" cancelled nothing that had happened.
+  It now confirms first, writes both ignore lines before staging, and refuses to
+  commit if anything staged is inside an agent env dir or is a
+  `.credentials.json` — an already-tracked file ignores `.gitignore` entirely,
+  and this commit is one `gh repo create --public` away from the internet.
+
+- **An unreadable file is no longer treated as an empty one.** `.gitignore`,
+  `.claude.json` and the env persona were each read with
+  `read_to_string(…).unwrap_or_default()` and then written back in full, so any
+  non-UTF-8 byte or a Windows sharing violation replaced the user's file with
+  aello's one line. Only `NotFound` defaults now; every other IO error fails
+  loudly. (Same distinction `config::load` already draws — the fix existed in
+  one file and had not been generalized.)
+
 - **`aello edit --model` no longer applies Claude's model rules to a Cline
   blueprint.** Setting `openai/gpt-oss-120b` was rejected with "use an alias
   (opus, sonnet, haiku)" — a Claude-shaped error on a blueprint that has nothing

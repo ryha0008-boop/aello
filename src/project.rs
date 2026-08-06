@@ -194,19 +194,38 @@ fn rename_dir(from: &Path, to: &Path, case_flip: bool) -> std::io::Result<()> {
     })
 }
 
+/// Read a file that may legitimately not exist yet: `Ok(None)` only for
+/// `NotFound`, every other IO error propagates.
+///
+/// `read_to_string(...).unwrap_or_default()` is the shape this replaces, and it
+/// is a data-loss bug wherever the caller writes the result back. `read_to_string`
+/// also fails on any non-UTF-8 byte and on a Windows sharing violation — a
+/// `.gitignore` Notepad saved as UTF-16, a `CLAUDE.md` with one Latin-1 byte, a
+/// `.claude.json` open in another process — and the default turns "I could not
+/// read your file" into "your file was empty", which the very next line then
+/// makes true. Same distinction `config::load` draws, generalized: the July
+/// audit got it fixed there and the pattern survived in three more places.
+fn read_existing(path: &Path) -> Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(s) => Ok(Some(s)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e).with_context(|| format!("could not read {}", path.display())),
+    }
+}
+
 /// Mark the env as onboarded so interactive `claude` skips its first-run
 /// wizard (theme/login) and goes straight in — auth is handled by the shared
 /// token. Merges `hasCompletedOnboarding: true` into `.claude.json`.
 pub fn mark_onboarded(env_dir: &Path) -> Result<()> {
     let path = env_dir.join(".claude.json");
-    let mut v: serde_json::Value = match std::fs::read_to_string(&path) {
+    let mut v: serde_json::Value = match read_existing(&path)? {
         // Claude Code owns this file too; if it exists but we can't parse it,
         // leave it untouched rather than overwrite real state with `{}`.
-        Ok(s) => match serde_json::from_str(&s) {
+        Some(s) => match serde_json::from_str(&s) {
             Ok(v) => v,
             Err(_) => return Ok(()),
         },
-        Err(_) => serde_json::json!({}),
+        None => serde_json::json!({}),
     };
     if let Some(obj) = v.as_object_mut() {
         obj.insert("hasCompletedOnboarding".into(), serde_json::Value::Bool(true));
@@ -230,6 +249,11 @@ pub fn place(
     claude_md: Option<&str>,
     caps: &Capabilities,
 ) -> Result<()> {
+    // Before anything is seeded: a tracked mirror with no env dir beside it is a
+    // fresh clone, and the mirror is the only copy of this blueprint's skills,
+    // memory and persona on the machine.
+    restore_from_mirror(env_dir, &inst.name)?;
+
     std::fs::create_dir_all(env_dir).context("could not create env dir")?;
 
     std::fs::write(env_dir.join(".aello.toml"), toml::to_string_pretty(inst)?)
@@ -446,9 +470,18 @@ fn scaffold_project(
                 .context("could not write project CLAUDE.md")?;
         }
     }
+    // Keep env dirs out of the repo — unconditional, exactly as the Cline side
+    // is. It was gated on `github` as a tidiness measure, on the premise that a
+    // Claude env holds no secret because auth arrives as an env var at launch.
+    // That premise is false whenever no shared token is configured: Claude Code
+    // then writes its own `.credentials.json` into the env dir (`run_blueprint`
+    // probes for exactly that file), and `standalone` — the *default* role — has
+    // `github: false`, so the one line that would have kept it out of a
+    // `git add -A` was never written. The line costs nothing in a project with
+    // no git, and a blueprint with no git duties still shares the working tree
+    // with one that has them.
+    ensure_gitignore_entry(project, crate::models::Agent::Claude.gitignore_pattern())?;
     if caps.github {
-        // Keep env dirs (and the credentials inside them) out of the repo.
-        ensure_gitignore_entry(project, crate::models::Agent::Claude.gitignore_pattern())?;
         // Normalize line endings so multi-OS blueprints sharing a repo don't
         // churn CRLF/LF on every commit.
         let ga = project.join(".gitattributes");
@@ -526,6 +559,49 @@ fn mirror_env_internal(
     Ok(())
 }
 
+/// Seed a missing env dir from the tracked `claude-internal/<blueprint>/` mirror.
+///
+/// The mirror is tracked precisely so the skills, memory and persona that live
+/// in a gitignored directory survive a clone — but nothing read it back, so the
+/// first `aello run` on a fresh clone seeded a bare env and then mirrored *that*
+/// over the tracked copy, deleting it. (Measured on this repository: 11 tracked
+/// memory notes and 6 skills against 2 and 4 seeded.) The mirror is a snapshot
+/// of the env everywhere else; this is the one direction that reads it, and only
+/// when there is no env to contradict it.
+///
+/// Everything below still gets rewritten by the rest of `place` — a regenerated
+/// `/sync`, a persona the config would seed — so this restores what nothing else
+/// can: memory, hand-kept skills, and a `custom` persona.
+fn restore_from_mirror(env_dir: &Path, blueprint: &str) -> Result<()> {
+    if env_dir.exists() {
+        return Ok(());
+    }
+    let project = env_dir.parent().unwrap_or(env_dir);
+    let src = project.join("claude-internal").join(blueprint);
+    if !src.exists() {
+        return Ok(());
+    }
+
+    // `copy_dir_all` prunes, but the destinations here do not exist yet, so it
+    // is a plain copy — and its symlink skipping is wanted either way.
+    copy_dir_all(&src.join("skills"), &env_dir.join("skills"))
+        .context("could not restore skills from claude-internal")?;
+    let mem = env_dir
+        .join("projects")
+        .join(crate::sessions::encode_project_path(project))
+        .join("memory");
+    copy_dir_all(&src.join("memory"), &mem)
+        .context("could not restore memory from claude-internal")?;
+    let persona = src.join("persona.CLAUDE.md");
+    if persona.exists() {
+        std::fs::create_dir_all(env_dir).context("could not create env dir")?;
+        std::fs::copy(&persona, env_dir.join("CLAUDE.md"))
+            .context("could not restore the persona from claude-internal")?;
+    }
+    println!("Restored '{blueprint}' from claude-internal/ (no env dir here yet).");
+    Ok(())
+}
+
 /// One-way *sync* of `src` into `dst`: copy every regular file/subdir from `src`,
 /// then delete anything in `dst` that no longer exists in `src`. Pruning keeps
 /// the tracked mirror from accumulating orphaned files — a deleted memory note,
@@ -533,13 +609,18 @@ fn mirror_env_internal(
 /// committing forever. (Dropping the `github` cap is handled a level up, in
 /// `mirror_env_internal`, which removes the folder outright rather than diffing
 /// it.) Symlinks are skipped: the env is the
-/// single source of truth and must not pull foreign content into git. A missing
-/// `src` prunes `dst` entirely (nothing left to mirror).
+/// single source of truth and must not pull foreign content into git.
+///
+/// A missing `src` leaves `dst` **alone**. It used to prune it entirely, on the
+/// reading that nothing left to mirror means nothing left to keep — but the
+/// source path is derived, and a derivation that comes out wrong is
+/// indistinguishable from a deletion. The memory source encodes
+/// `current_dir()`'s exact spelling, so launching from a case-variant cwd points
+/// it at a directory that has never existed and takes the tracked notes with it.
+/// Deleting content from the mirror still works the ordinary way: the source
+/// directory exists and the file is gone from it.
 fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
     if !src.exists() {
-        if dst.exists() {
-            std::fs::remove_dir_all(dst).context("could not prune stale mirror dir")?;
-        }
         return Ok(());
     }
     std::fs::create_dir_all(dst).context("could not create mirror destination dir")?;
@@ -579,10 +660,12 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
 
 /// Ensure `entry` exists as its own line in the project's `.gitignore`, creating
 /// the file or appending as needed. Idempotent — a matching line (ignoring
-/// surrounding whitespace) is never duplicated. Preserves existing content.
+/// surrounding whitespace) is never duplicated. Preserves existing content —
+/// and fails rather than writing when the existing content cannot be read, since
+/// the write below is a full-file rewrite (see [`read_existing`]).
 pub fn ensure_gitignore_entry(project: &Path, entry: &str) -> Result<()> {
     let path = project.join(".gitignore");
-    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let existing = read_existing(&path)?.unwrap_or_default();
     // Treat a trailing-slash variant (`.claude-env-*/`) as already present so we
     // don't append a near-duplicate line.
     let norm = |l: &str| l.trim().trim_end_matches('/').to_string();
@@ -795,7 +878,7 @@ fn ensure_tldr_instruction(env_dir: &Path) -> Result<()> {
         return Ok(());
     }
     let path = env_dir.join("CLAUDE.md");
-    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let existing = read_existing(&path)?.unwrap_or_default();
     if existing.contains("TL;DR") {
         return Ok(());
     }
@@ -1683,15 +1766,114 @@ mod tests {
         assert!(other.exists(), "another blueprint's mirror must survive");
     }
 
+    /// The mirror is tracked so a clone still has the blueprint's memory,
+    /// skills and persona — and until this, the first `aello run` after a clone
+    /// seeded a bare env and mirrored it straight over them.
     #[test]
-    fn no_github_cap_writes_no_gitignore() {
+    fn a_fresh_clone_is_restored_from_the_mirror_not_erased_by_it() {
+        let proj = tempfile::tempdir().unwrap();
+        let env = env_dir(proj.path(), "demo");
+        let inst = Instance { name: "demo".into(), model: "haiku".into() };
+        let caps = Capabilities { github: true, ..Default::default() };
+        let mirror = proj.path().join("claude-internal").join("demo");
+
+        place(&env, &inst, Some("# seeded persona"), &caps).unwrap();
+
+        // A session's worth of accumulation: a memory note, a hand-kept skill,
+        // and a persona the user accepted.
+        let mem = env
+            .join("projects")
+            .join(crate::sessions::encode_project_path(proj.path()))
+            .join("memory");
+        std::fs::write(mem.join("aello-overview.md"), "what aello is").unwrap();
+        std::fs::create_dir_all(env.join("skills").join("regenerate")).unwrap();
+        std::fs::write(env.join("skills").join("regenerate").join("SKILL.md"), "# custom").unwrap();
+        std::fs::write(env.join("CLAUDE.md"), "# accepted persona gen1").unwrap();
+        place(&env, &inst, Some("# seeded persona"), &caps).unwrap();
+        assert!(mirror.join("memory").join("aello-overview.md").exists());
+
+        // The clone: the env dir is gitignored, so it is simply not there.
+        std::fs::remove_dir_all(&env).unwrap();
+        place(&env, &inst, Some("# seeded persona"), &caps).unwrap();
+
+        assert!(mem.join("aello-overview.md").exists(), "memory was not restored");
+        assert!(
+            env.join("skills").join("regenerate").join("SKILL.md").exists(),
+            "a non-generated skill was not restored"
+        );
+        assert_eq!(
+            std::fs::read_to_string(env.join("CLAUDE.md")).unwrap(),
+            "# accepted persona gen1",
+            "the accepted persona was replaced by the seeded one"
+        );
+        // And the mirror still holds it — the restore ran before the sync back.
+        assert!(mirror.join("memory").join("aello-overview.md").exists());
+    }
+
+    /// The memory source path is *derived* (it encodes `current_dir()`'s exact
+    /// spelling), so "the directory isn't there" can mean the derivation was
+    /// wrong rather than that the user deleted eleven notes. Prune only what a
+    /// present source says is gone.
+    #[test]
+    fn a_missing_memory_source_leaves_the_mirror_alone() {
+        let proj = tempfile::tempdir().unwrap();
+        let env = env_dir(proj.path(), "demo");
+        std::fs::create_dir_all(env.join("skills")).unwrap();
+        let mirror_mem = proj.path().join("claude-internal").join("demo").join("memory");
+        std::fs::create_dir_all(&mirror_mem).unwrap();
+        std::fs::write(mirror_mem.join("MEMORY.md"), "- [a](a.md)").unwrap();
+
+        // No `projects/<encoded>/memory` in the env at all.
+        mirror_env_internal(proj.path(), &env, "demo", true).unwrap();
+
+        assert!(
+            mirror_mem.join("MEMORY.md").exists(),
+            "an unfindable source pruned the tracked memory"
+        );
+    }
+
+    /// Every placement ignores its env dir, whatever the role. This used to be
+    /// `github`-only, and the default role is `standalone` — so the env that is
+    /// most likely to hold a `.credentials.json` (no shared token configured)
+    /// was the one nothing kept out of `git add -A`.
+    #[test]
+    fn every_role_gitignores_its_env_dir() {
         let proj = tempfile::tempdir().unwrap();
         let env = env_dir(proj.path(), "bare");
         let inst = Instance { name: "bare".into(), model: "haiku".into() };
-        let caps = Capabilities { changelog: true, ..Default::default() };
 
-        place(&env, &inst, None, &caps).unwrap();
-        assert!(!proj.path().join(".gitignore").exists());
+        // standalone: no caps at all.
+        place(&env, &inst, None, &Capabilities::default()).unwrap();
+        let gi = std::fs::read_to_string(proj.path().join(".gitignore")).unwrap();
+        assert!(gi.contains(".claude-env-*"), "standalone env dir was not ignored");
+        // The rest of the github scaffolding stays gated.
+        assert!(!proj.path().join(".gitattributes").exists());
+
+        // Still exactly one line after a second placement.
+        place(&env, &inst, None, &Capabilities { changelog: true, ..Default::default() }).unwrap();
+        let gi = std::fs::read_to_string(proj.path().join(".gitignore")).unwrap();
+        assert_eq!(gi.matches(".claude-env-*").count(), 1);
+    }
+
+    /// An unreadable `.gitignore` is not an empty one. `read_to_string` fails on
+    /// any non-UTF-8 byte, and this function rewrites the whole file — so the
+    /// old `unwrap_or_default()` replaced every rule the repo had with one line.
+    #[test]
+    fn an_unreadable_gitignore_is_refused_not_replaced() {
+        let proj = tempfile::tempdir().unwrap();
+        let gi = proj.path().join(".gitignore");
+        // UTF-16LE *with the BOM*, which is what Notepad writes when told to.
+        // The BOM is load-bearing here: BOM-less UTF-16 ASCII is byte-for-byte
+        // valid UTF-8 (the high bytes are NULs), so it reads back as NUL-laced
+        // text and appends without error — corrupted, but not caught. `FF FE`
+        // is the byte pair that no UTF-8 string can contain.
+        let mut utf16 = vec![0xFF, 0xFE];
+        utf16.extend("target/\n*.log\n".encode_utf16().flat_map(u16::to_le_bytes));
+        std::fs::write(&gi, &utf16).unwrap();
+
+        let err = ensure_gitignore_entry(proj.path(), ".claude-env-*").unwrap_err();
+        assert!(err.to_string().contains(".gitignore"), "the error should name the file: {err}");
+        assert_eq!(std::fs::read(&gi).unwrap(), utf16, "the user's .gitignore was rewritten");
     }
 
     #[test]
