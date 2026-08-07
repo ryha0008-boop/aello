@@ -23,13 +23,13 @@ export const metadata: Metadata = {
   // this, and pointing it at the repo made every one of them resolve to a
   // github.com path that does not exist.
   metadataBase: new URL('https://ryha0008-boop.github.io/aello/'),
-  title: 'aello — isolated Claude Code environments',
+  title: 'aello — isolated agent environments',
   description:
-    'aello gives every Claude Code agent its own config dir, persona, and skills, placed into any project with one command. Like a venv, for agents.',
+    'aello gives every agent its own config dir, persona, and skills, placed into any project with one command. Claude Code or the Cline CLI. Like a venv, for agents.',
   openGraph: {
-    title: 'aello — isolated Claude Code environments',
+    title: 'aello — isolated agent environments',
     description:
-      'Many agents, one repo, no collisions. Isolated Claude Code environments with shared login and per-agent git attribution.',
+      'Many agents, one repo, no collisions. Isolated Claude Code and Cline environments with shared login and per-agent git attribution.',
     type: 'website',
   },
 }

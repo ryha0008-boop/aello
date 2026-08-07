@@ -1,47 +1,72 @@
 /*
- * Tokens transcribed from the captured GitHub design system
+ * The structure — token names, the type scale, spacing, radii, motion — comes
+ * from the captured GitHub design system
  * (agent_run_results/design-systems/github1/DESIGN-SYSTEM.md).
- * Values are reproduced as extracted — do not hand-tune them here.
+ *
+ * The COLOUR VALUES no longer do. They were retuned to an orange-on-near-black
+ * brand: one warm accent family, and neutral greys for everything else. The
+ * token names, and the count, are unchanged from the capture so the two stay
+ * comparable — except three that named their own hue (`indigo`, `purple-*`,
+ * `green-*`) and would now be lying about what they hold.
+ *
+ * Every colour was measured, not eyeballed: /design-system reports the WCAG
+ * ratio of each foreground against each surface it is painted on. The old green
+ * palette shipped one pair that failed AA; this one has none.
+ *
+ * Change values here, never in a component — the build fails on a literal
+ * colour anywhere else.
  */
 
 :root {
   /* Canvas / surfaces */
-  --color-canvas-default: #0d1117;
-  --color-canvas-subtle: #151a22;
-  --color-canvas-inset: #090d0a;
-  --color-canvas-overlay: rgba(13, 17, 23, 0.75);
+  /* A neutral near-black ramp, inset < default < subtle. Nothing is pure #000:
+     it flattens every shadow and border drawn on top of it. */
+  --color-canvas-default: #0d0d0d;
+  --color-canvas-subtle: #171717;
+  --color-canvas-inset: #070707;
+  --color-canvas-overlay: rgba(13, 13, 13, 0.75);
   --color-canvas-glass-subtle: rgba(255, 255, 255, 0.06);
   --color-canvas-glass-medium: rgba(255, 255, 255, 0.12);
-  --color-canvas-dark-glass: rgba(31, 35, 40, 0.4);
-  --color-canvas-green-subtle: #0d3024;
-  --color-canvas-green-dark: #0f1511;
+  --color-canvas-dark-glass: rgba(38, 38, 38, 0.4);
+  --color-canvas-accent-subtle: #2b1207;
+  --color-canvas-accent-dark: #17100b;
 
   /* Foreground */
+  /* Neutral greys. `subtle` is lighter than the captured value on purpose: at
+     the original it measured 2.79:1 on canvas-subtle, below AA for the caption
+     text it is used for. */
   --color-fg-default: #ffffff;
-  --color-fg-muted: #a4aea6;
-  --color-fg-subtle: #58635b;
+  --color-fg-muted: #a8a8a8;
+  --color-fg-subtle: #8a8a8a;
   --color-fg-on-dark-85: rgba(255, 255, 255, 0.85);
   --color-fg-on-dark-75: rgba(255, 255, 255, 0.75);
   --color-fg-on-dark-60: rgba(255, 255, 255, 0.6);
 
   /* Accent / brand */
-  --color-accent-emphasis: #08872b;
-  --color-accent-emphasis-hover: #0a9631;
-  --color-accent-bright: #5fed83;
-  --color-accent-fg: #8dd6ff;
+  /* Orange. `emphasis` is a fill that carries white text (5.18:1); `hover`
+     stays dark enough to keep that (4.55:1) rather than lightening into a fail;
+     `bright` is the workhorse accent; `fg` is the lighter tint for links and
+     focus rings. */
+  --color-accent-emphasis: #c2410c;
+  --color-accent-emphasis-hover: #d1470d;
+  --color-accent-bright: #ff8c42;
+  --color-accent-fg: #ffbe85;
 
   /* Decorative */
-  --color-decorative-indigo: #8c93fb;
-  --color-decorative-purple-soft: #a7a2ff;
-  --color-decorative-purple-mid: #5049c2;
+  /* The rest of the warm ramp, separated by lightness rather than hue: the
+     logo's three frames have to stay tellable apart, and three oranges of equal
+     lightness do not. */
+  --color-decorative-orange-mid: #d15a12;
+  --color-decorative-orange-soft: #ffd0ad;
+  --color-decorative-rust: #8a3a0e;
 
   /* Borders */
-  --color-border-default: #191f1b;
+  --color-border-default: #242424;
   --color-border-subtle: rgba(255, 255, 255, 0.1);
   --color-border-medium: rgba(255, 255, 255, 0.3);
   --color-border-strong: rgba(255, 255, 255, 0.6);
   --color-border-full: #ffffff;
-  --color-border-neutral: #484f58;
+  --color-border-neutral: #565656;
   --borderWidth-thin: 0.0625rem;
   --borderWidth-thick: 0.125rem;
 
@@ -117,7 +142,12 @@
   --base-duration-100: 0.1s;
   --base-duration-200: 0.2s;
   --brand-animation-duration-fast: 0.3s;
-  --brand-animation-duration-default: 0.6s;
+  /* 1.1s, not the captured 0.6s. This drives the scroll reveal and nothing
+     else, and easing-default is an expo-out that puts 90% of the movement in
+     the first third of the duration — so 0.6s was perceived as ~200ms and the
+     hero appeared to snap into place on load. At 1.1s that 90% point lands
+     around 360ms, which reads as a move rather than a flicker. */
+  --brand-animation-duration-default: 1.1s;
   --brand-Card-animation-duration: 0.4s;
   --brand-control-animation-duration: 80ms;
   --brand-animation-easing-default: cubic-bezier(0.16, 1, 0.3, 1);
@@ -132,10 +162,13 @@
   /* Z-index */
   --zIndex-sticky: 100;
 
-  /* Per-blueprint identity hues, drawn from the system's accent + decorative sets */
+  /* Per-blueprint identity hues */
+  /* Three steps down the warm ramp — front frame brightest, back deepest — so
+     the stacked logo still reads as three environments now that the palette is
+     a single hue family. */
   --hue-coder: var(--color-accent-bright);
-  --hue-docs: var(--color-accent-fg);
-  --hue-ops: var(--color-decorative-indigo);
+  --hue-docs: var(--color-decorative-orange-mid);
+  --hue-ops: var(--color-decorative-rust);
 }
 
 *,
@@ -241,7 +274,10 @@ pre {
 @media (scripting: enabled) {
   .reveal {
     opacity: 0;
-    transform: translateY(0.9375rem);
+    /* Was 0.9375rem. 15px of travel over a front-loaded curve is close to
+       invisible; --base-size-28 (1.75rem) is the spacing step nearest a
+       distance you can actually follow. */
+    transform: translateY(var(--base-size-28));
     transition:
       opacity var(--brand-animation-duration-default) var(--brand-animation-easing-default),
       transform var(--brand-animation-duration-default) var(--brand-animation-easing-default);

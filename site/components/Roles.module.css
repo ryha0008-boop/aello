@@ -33,7 +33,7 @@
 }
 
 .card[data-accent='true'] {
-  background: var(--color-canvas-green-subtle);
+  background: var(--color-canvas-accent-subtle);
   /* --color-accent-bright at 35%, rather than its channels inlined: the fill
      above and this border are one visual element and should track one token. */
   border-color: color-mix(in srgb, var(--color-accent-bright) 35%, transparent);

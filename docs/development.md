@@ -115,4 +115,12 @@ npm run dev      # http://localhost:3000
 npm run build    # static HTML in out/
 ```
 
-Its docs pages are generated at build time from this very directory, so a doc you add here appears on the site with no site-side change. Design tokens live in the `:root` block of `site/app/globals.css` and are transcribed from a captured design system — change values there, never inline in a component.
+Its docs pages are generated at build time from this very directory, so a doc you add here appears on the site with no site-side change.
+
+Design tokens live in the `:root` block of `site/app/globals.css` — **change values there, never inline in a component.** The token *structure* (names, type scale, spacing, radii, motion) is transcribed from a captured design system; the *colours* are not, having been retuned to orange on near-black. `/design-system` on the site renders the whole palette, generated from `globals.css` the same way these pages are generated from `docs/`, with a usage count and a measured WCAG contrast ratio per token.
+
+Three things fail `npm run build` rather than merely being discouraged, each naming the file, the line and the fix:
+
+- a literal colour (hex or `rgba()`) anywhere but `globals.css`;
+- an `@media` width outside the documented breakpoints (`48rem`, `63.25rem`, and the component-local `34rem`) — custom properties don't work inside media queries, so the literals are repeated per file and an invented one would otherwise open a silent dead zone;
+- unbalanced `/*` and `*/` inside the `:root` block, because an unterminated comment swallows every declaration up to the next close and the page then reports the smaller token set as the truth.

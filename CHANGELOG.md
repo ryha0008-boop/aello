@@ -61,6 +61,100 @@
   project's `AGENTS.md` (Cline's project-`CLAUDE.md` equivalent) and stops.
 
 ### Changed
+- **The scroll reveal is slow enough to see.** On the landing page it appeared
+  to snap into place on refresh, and the duration token was not the reason —
+  `--brand-animation-easing-default` is an expo-out that completes **90% of the
+  movement in the first third** of its duration, so the captured 0.6s was
+  perceived as roughly 200ms. Raising it to 1.1s and widening the travel from
+  0.9375rem to `--base-size-28` (1.75rem) puts the bulk of the movement between
+  390ms and 950ms — measured off the live page over DevTools, sampling computed
+  opacity and transform, rather than inferred from the token.
+
+  `--brand-animation-duration-default` drives the reveal and nothing else, so
+  the change is contained. `/design-system` now states the perceived duration
+  beside the nominal one and reads both **out of the tokens** — the first draft
+  of that sentence hardcoded "0.6s" and was wrong within the hour, which is the
+  entire argument for generating the page.
+
+- **The site palette is now orange on near-black.** The captured GitHub
+  green-and-blue is gone: one warm accent family over neutral greys, with
+  nothing set to pure `#000` — it flattens every border and shadow drawn on top
+  of it. The token *count* is unchanged and so is the *structure* (names, type
+  scale, spacing, radii, motion, all still from the capture); only the colour
+  values moved. Five tokens that named a hue they no longer hold were renamed
+  with them — `--color-decorative-indigo` → `--color-decorative-orange-mid`,
+  `-purple-soft` → `-orange-soft`, `-purple-mid` → `--color-decorative-rust`,
+  and `--color-canvas-green-{subtle,dark}` → `--color-canvas-accent-{subtle,dark}`
+  — because a token called `indigo` holding an orange is worse than no name.
+
+  Every value was measured rather than eyeballed. The old palette shipped one
+  pair below WCAG AA (`--color-fg-subtle` on `--color-canvas-subtle`, 2.79:1)
+  and one button state that put white text on a fill at 4.07:1; both are fixed,
+  and no pair fails AA now. The logo's three frames are separated by
+  *lightness* rather than hue, because three oranges of equal lightness are not
+  tellable apart — which the first candidate triad proved at 1.15:1 between two
+  of them.
+
+### Added
+- **The site has a `/design-system` page**, generated from `site/app/globals.css`
+  at build time rather than transcribed beside it — swatches, type specimens
+  with the line-height and weight that travel with each step, easing curves
+  drawn from their `cubic-bezier`, the spacing ramp, and a usage count per
+  token so the blast radius of changing one is visible before you change it.
+  Nine of the 99 tokens have no reference anywhere; the page says so and says
+  why (the palette is transcribed from the captured system wholesale), because
+  the useful fact is that editing one of them changes nothing on the page.
+
+  **Three rules are now enforced by `next build`, not documented and hoped for.**
+  A literal colour outside `globals.css` fails the build with the file, the
+  line and the fix; so does an `@media` width that is not one of the documented
+  breakpoints; so do unbalanced comment markers inside the `:root` block. All
+  three were verified by introducing a violation and watching the build fail — a
+  guard nobody has seen fire is indistinguishable from one that cannot, and the
+  first version of the third guard *was* that: it compared parsed tokens against
+  declared tokens, which can never disagree because both sides share the same
+  comment model. Marker balance is what actually distinguishes the two states.
+
+  The breakpoint rule paid for itself immediately: `app/docs/docs.module.css`
+  carried a lone `64rem` where the rest of the site turns at `63.25rem`, so
+  there was a 0.75rem band in which the docs page had already dropped its table
+  of contents while every other section was still wide. The comment rule earned
+  itself the same way — a multi-line note added to `globals.css` silently
+  swallowed the declaration after it, six tokens disappeared, and the page
+  rendered 93 of 99 as though that were the design system.
+
+  **The usage counts exclude the page itself**, and each token names the files
+  that reference it. Counting the design-system stylesheet meant the page cited
+  itself as evidence a token was used — `--color-decorative-orange-soft` and
+  `--borderRadius-large` both read as live when their only user was the swatch
+  describing them. Three tokens moved to inert once that stopped. The file list
+  exists because a bare "11×" raises the question it is meant to settle: the
+  Motion group in particular reads as a lot of animation, when all but three of
+  those references are hover and focus transitions.
+
+  The Motion group also carries a notice that appears **only** for a visitor
+  whose browser asks for reduced motion, saying so and naming the Windows
+  setting — because for them every duration specimen on the page is frozen and
+  the site's scroll reveal, waveform and transitions are all switched off. It is
+  CSS-only, gated on the same media query that does the disabling, so the two
+  cannot disagree.
+
+  Contrast is measured and reported on the page but deliberately not enforced,
+  since the palette is reproduced as extracted and a failing pair is fixed at
+  the call site. One pair fails AA today: `--color-fg-subtle` on
+  `--color-canvas-subtle`, 2.79:1.
+
+### Changed
+- **The landing page says there are two agents.** It described aello as
+  "isolated Claude Code environments" throughout — title, hero, footer,
+  metadata — and never mentioned Cline at all, so the one public page a new
+  user lands on contradicted the README beside it. It now leads with agent
+  environments, carries a *Two agents* section covering the split env dirs, the
+  separate logins and the metered key, and stops claiming every env speaks.
+  `docs/cline.md` was also absent from the site's reading order, which sorted it
+  last on a page whose comment claims to mirror `docs.rs::ORDER`; it now sits
+  after `voice` in both, and in the README's doc list.
+
 - **Voice hooks re-vendored at `HOOK_VERSION` 19.** `speak.py --status` now
   reports volume repairs over a **24-hour window** instead of the last 50
   history entries, with a count and — when there is nothing to report — how far

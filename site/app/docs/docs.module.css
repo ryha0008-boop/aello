@@ -406,7 +406,10 @@
 
 /* ── Narrow ──────────────────────────────────────────────────────────── */
 
-@media (max-width: 64rem) {
+/* 63.25rem, not the 64rem this used to carry: the odd value opened a 0.75rem
+   band where the docs page had already dropped its table of contents while
+   every other section on the site was still in its wide layout. */
+@media (max-width: 63.25rem) {
   .page {
     grid-template-columns: minmax(0, 1fr);
   }

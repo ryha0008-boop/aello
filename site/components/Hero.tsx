@@ -11,12 +11,12 @@ export default function Hero() {
     <section className={styles.hero} id="top">
       <div className={`container ${styles.inner}`}>
         <Reveal>
-          <p className="eyebrow">Isolated Claude Code environments</p>
+          <p className="eyebrow">Isolated agent environments</p>
           <h1 className={styles.title}>Many agents. One repo. No collisions.</h1>
           <p className={styles.lead}>
-            aello drops each Claude Code agent into its own config dir — persona, skills, hooks and
-            history kept apart — so several can work the same project without overwriting each
-            other. Like a venv, for agents.
+            aello drops each agent into its own config dir — persona, skills, hooks and history kept
+            apart — so several can work the same project without overwriting each other. Like a
+            venv, for agents. Claude Code by default, or the Cline CLI on its own key.
           </p>
         </Reveal>
 

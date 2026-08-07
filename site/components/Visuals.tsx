@@ -24,6 +24,39 @@ export function NoteVisual() {
   )
 }
 
+/**
+ * The two env dirs side by side. Claude Code is on top because it is the
+ * default and what everything is built around; Cline is the opt-in second.
+ */
+export function AgentsVisual() {
+  return (
+    <figure className={styles.card}>
+      <figcaption className={styles.filename}>.claude-env-api/</figcaption>
+      <div className={styles.note}>
+        <p className={styles.noteHeading}>Claude Code — the default</p>
+        <p className={styles.noteLine}>
+          Isolated by <code>CLAUDE_CONFIG_DIR</code>, on one shared subscription token. The voice,
+          the transcript archive and the per-turn response rules all ride on its hooks.
+        </p>
+      </div>
+
+      <div className={styles.mute}>
+        <code>.cline-env-runner/</code>
+        <span className={styles.muteNote}>isolated by --config / --data-dir instead</span>
+      </div>
+
+      <div className={styles.note}>
+        <p className={styles.noteHeading}>Cline — its own key</p>
+        <p className={styles.noteLine}>
+          A metered provider key, never inferred from the Claude login. Same persona, same four
+          commands, same memory — delivered as rules Cline re-sends every request, since it has no
+          hook to inject into.
+        </p>
+      </div>
+    </figure>
+  )
+}
+
 /** The spoken line, and the switch that stops it. */
 export function VoiceVisual() {
   return (

@@ -1,0 +1,478 @@
+/*
+ * This page is subject to its own rules: no literal colour, no breakpoint
+ * outside the documented set. If it cheated, the guards in lib/design-system.ts
+ * would fail the build on this file first.
+ */
+
+.head {
+  padding-block: var(--brand-Section-padding-normal) var(--brand-Section-padding-condensed);
+}
+
+.title {
+  margin-top: var(--base-size-12);
+  font-family: var(--brand-fontStack-sansSerifAlt);
+  font-size: var(--brand-text-size-700);
+  line-height: var(--brand-text-lineHeight-700);
+  font-weight: var(--brand-heading-weight-700);
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+
+.lead {
+  max-width: 60ch;
+  margin-top: var(--base-size-16);
+  font-size: var(--brand-text-size-350);
+  color: var(--color-fg-muted);
+  text-wrap: pretty;
+}
+
+/* ---- The two enforced rules ---- */
+
+.rules {
+  max-width: 60ch;
+  margin-top: var(--base-size-40);
+  padding: var(--base-size-24);
+  background: var(--color-canvas-subtle);
+  border: var(--borderWidth-thin) solid var(--color-border-default);
+  border-radius: var(--brand-borderRadius-large);
+}
+
+.rulesTitle {
+  font-family: var(--brand-fontStack-sansSerifAlt);
+  font-size: var(--brand-text-size-300);
+  font-weight: var(--brand-heading-weight-500);
+}
+
+.rulesList {
+  margin: var(--base-size-16) 0 0;
+  padding-left: var(--base-size-20);
+  display: grid;
+  gap: var(--base-size-12);
+  font-size: var(--brand-text-size-100);
+  color: var(--color-fg-muted);
+  text-wrap: pretty;
+}
+
+.rulesList strong {
+  color: var(--color-fg-default);
+  font-weight: 550;
+}
+
+/* fg-muted, not fg-subtle. On the old green palette that pair measured 2.79:1
+   and failed AA; the orange repalette lifted fg-subtle enough to pass, but this
+   is prose meant to be read, so it keeps the stronger of the two. */
+.rulesNote {
+  margin-top: var(--base-size-16);
+  font-size: var(--text-caption-size);
+  color: var(--color-fg-muted);
+}
+
+/* ---- Contrast ---- */
+
+.contrastList {
+  margin-top: var(--base-size-32);
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--borderWidth-thin);
+  background: var(--color-border-default);
+  border: var(--borderWidth-thin) solid var(--color-border-default);
+  border-radius: var(--brand-borderRadius-large);
+  overflow: hidden;
+}
+
+.contrastRow {
+  display: grid;
+  grid-template-columns: var(--base-size-48) minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--base-size-16);
+  padding: var(--base-size-12) var(--base-size-20);
+  background: var(--color-canvas-subtle);
+}
+
+.contrastChip {
+  display: grid;
+  place-items: center;
+  height: var(--base-size-32);
+  border-radius: var(--borderRadius-medium);
+  border: var(--borderWidth-thin) solid var(--color-border-subtle);
+  font-family: var(--brand-fontStack-sansSerifAlt);
+  font-size: var(--brand-text-size-100);
+}
+
+.contrastPair {
+  font-family: var(--brand-fontStack-monospace);
+  font-size: var(--text-caption-size);
+  color: var(--color-fg-on-dark-85);
+  overflow-wrap: anywhere;
+}
+
+.contrastOn {
+  color: var(--color-fg-subtle);
+}
+
+.contrastRatio {
+  font-family: var(--brand-fontStack-monospace);
+  font-size: var(--text-code-block-size);
+  color: var(--color-fg-default);
+  white-space: nowrap;
+}
+
+.contrastVerdict {
+  font-family: var(--brand-fontStack-monospace);
+  font-size: var(--text-caption-size);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+.contrastRow[data-level='aa'] .contrastVerdict {
+  color: var(--color-accent-bright);
+}
+
+.contrastRow[data-level='large'] .contrastVerdict {
+  color: var(--color-decorative-orange-soft);
+}
+
+.contrastRow[data-level='fail'] .contrastVerdict {
+  color: var(--color-fg-muted);
+}
+
+.contrastRow[data-level='fail'] {
+  background: var(--color-canvas-inset);
+}
+
+/* ---- Type scale ---- */
+
+.typeList {
+  margin-top: var(--base-size-40);
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--base-size-32);
+}
+
+.typeRow {
+  padding-bottom: var(--base-size-32);
+  border-bottom: var(--borderWidth-thin) solid var(--color-border-default);
+}
+
+.typeSpecimen {
+  font-family: var(--brand-fontStack-sansSerifAlt);
+  color: var(--color-fg-default);
+  text-wrap: balance;
+}
+
+.typeMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--base-size-8) var(--base-size-24);
+  margin: var(--base-size-16) 0 0;
+}
+
+.typeMeta div {
+  display: flex;
+  align-items: baseline;
+  gap: var(--base-size-6);
+}
+
+.typeMeta dt {
+  font-size: var(--text-caption-size);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-fg-subtle);
+}
+
+.typeMeta dd {
+  margin: 0;
+  font-family: var(--brand-fontStack-monospace);
+  font-size: var(--text-code-block-size);
+  color: var(--color-fg-on-dark-85);
+}
+
+/* ---- Token rows ---- */
+
+.tokenList {
+  margin-top: var(--base-size-32);
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--borderWidth-thin);
+  background: var(--color-border-default);
+  border: var(--borderWidth-thin) solid var(--color-border-default);
+  border-radius: var(--brand-borderRadius-large);
+  overflow: hidden;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: var(--base-size-64) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--base-size-20);
+  padding: var(--base-size-12) var(--base-size-20);
+  background: var(--color-canvas-subtle);
+}
+
+.row[data-unused='true'] {
+  background: var(--color-canvas-inset);
+}
+
+.specimen {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  min-width: 0;
+}
+
+.rowText {
+  display: grid;
+  gap: var(--base-size-4);
+  min-width: 0;
+}
+
+.rowHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--base-size-4) var(--base-size-12);
+  min-width: 0;
+}
+
+/* Answers "11× where?" on the row itself. Without it the count raises the
+   question it is meant to settle. */
+.usedIn {
+  font-family: var(--brand-fontStack-monospace);
+  font-size: var(--text-caption-size);
+  color: var(--color-fg-subtle);
+  overflow-wrap: anywhere;
+}
+
+.tokenName {
+  font-family: var(--brand-fontStack-monospace);
+  font-size: var(--text-code-block-size);
+  color: var(--color-fg-default);
+  overflow-wrap: anywhere;
+}
+
+.tokenValue {
+  font-family: var(--brand-fontStack-monospace);
+  font-size: var(--text-caption-size);
+  color: var(--color-fg-muted);
+  overflow-wrap: anywhere;
+}
+
+.tokenResolved {
+  font-family: var(--brand-fontStack-monospace);
+  font-size: var(--text-caption-size);
+  color: var(--color-accent-bright);
+  overflow-wrap: anywhere;
+}
+
+.uses {
+  font-family: var(--brand-fontStack-monospace);
+  font-size: var(--text-caption-size);
+  color: var(--color-fg-subtle);
+  white-space: nowrap;
+}
+
+.row[data-unused='true'] .uses {
+  color: var(--color-decorative-orange-soft);
+}
+
+/* ---- Specimens ---- */
+
+.swatch {
+  width: var(--base-size-56);
+  height: var(--base-size-32);
+  border-radius: var(--borderRadius-medium);
+  border: var(--borderWidth-thin) solid var(--color-border-subtle);
+  /* Transparencies are the point of the glass tokens, so show what is behind. */
+  background-image: linear-gradient(45deg, var(--color-canvas-default) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--color-canvas-default) 25%, transparent 25%);
+  background-size: var(--base-size-8) var(--base-size-8);
+}
+
+.fontSpecimen {
+  font-size: var(--brand-text-size-200);
+  color: var(--color-fg-on-dark-85);
+  white-space: nowrap;
+}
+
+.bar {
+  display: block;
+  width: 100%;
+  height: var(--base-size-8);
+  border-radius: var(--borderRadius-full);
+  background: var(--color-canvas-inset);
+  overflow: hidden;
+}
+
+.bar i {
+  display: block;
+  height: 100%;
+  border-radius: var(--borderRadius-full);
+  background: var(--color-accent-bright);
+}
+
+.durationFill {
+  width: 100%;
+  transform-origin: left center;
+  animation-name: sweep;
+  animation-timing-function: var(--brand-animation-easing-default);
+  animation-iteration-count: infinite;
+}
+
+@keyframes sweep {
+  0% {
+    transform: scaleX(0);
+  }
+  70%,
+  100% {
+    transform: scaleX(1);
+  }
+}
+
+.shadowChip {
+  width: var(--base-size-56);
+  height: var(--base-size-32);
+  border-radius: var(--borderRadius-medium);
+  background: var(--color-canvas-default);
+  border: var(--borderWidth-thin) solid var(--color-border-subtle);
+}
+
+.curve {
+  width: var(--base-size-48);
+  height: var(--base-size-40);
+  overflow: visible;
+}
+
+.curveGuide {
+  stroke: var(--color-border-medium);
+  stroke-width: 3;
+  stroke-dasharray: 8 8;
+}
+
+.curveLine {
+  fill: none;
+  stroke: var(--color-accent-bright);
+  stroke-width: 7;
+  stroke-linecap: round;
+}
+
+.plain {
+  font-family: var(--brand-fontStack-monospace);
+  font-size: var(--text-code-block-size);
+  color: var(--color-fg-on-dark-75);
+}
+
+.inertLead {
+  max-width: 60ch;
+  margin-top: var(--base-size-16);
+  font-size: var(--brand-text-size-350);
+  line-height: 1.5;
+  color: var(--color-fg-muted);
+  text-wrap: pretty;
+}
+
+.inertLead strong {
+  color: var(--color-fg-default);
+  font-weight: 550;
+}
+
+/*
+ * Shown ONLY to a visitor whose browser asks for reduced motion — for whom the
+ * duration specimens below are static and the claim "0.6s fade" is unverifiable
+ * on their own screen. CSS-only, so it needs no script and cannot disagree with
+ * the media query that actually disables the motion.
+ */
+.reducedNote {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reducedNote {
+    display: block;
+    max-width: 60ch;
+    margin-top: var(--base-size-20);
+    padding: var(--base-size-16) var(--base-size-20);
+    background: var(--color-canvas-accent-subtle);
+    border: var(--borderWidth-thin) solid var(--color-border-default);
+    border-radius: var(--brand-borderRadius-large);
+    font-size: var(--brand-text-size-100);
+    color: var(--color-fg-muted);
+    text-wrap: pretty;
+  }
+}
+
+/* ---- Breakpoints ---- */
+
+.breakpointList {
+  margin-top: var(--base-size-32);
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--base-size-16);
+}
+
+.breakpoint {
+  display: grid;
+  gap: var(--base-size-4);
+  padding: var(--base-size-20);
+  background: var(--color-canvas-subtle);
+  border: var(--borderWidth-thin) solid var(--color-border-default);
+  border-radius: var(--brand-borderRadius-large);
+}
+
+.breakpointValue {
+  font-family: var(--brand-fontStack-monospace);
+  font-size: var(--brand-text-size-300);
+  color: var(--color-accent-bright);
+}
+
+.breakpointPx {
+  font-family: var(--brand-fontStack-monospace);
+  font-size: var(--text-caption-size);
+  color: var(--color-fg-subtle);
+}
+
+.breakpointNote {
+  margin-top: var(--base-size-4);
+  font-size: var(--brand-text-size-100);
+  color: var(--color-fg-muted);
+  text-wrap: pretty;
+}
+
+@media (max-width: 48rem) {
+  .head {
+    padding-block: var(--brand-Section-padding-condensed);
+  }
+
+  .title {
+    font-size: var(--brand-text-size-500);
+  }
+
+  .row {
+    grid-template-columns: var(--base-size-48) minmax(0, 1fr);
+    row-gap: var(--base-size-8);
+  }
+
+  .uses {
+    grid-column: 2;
+  }
+
+  .contrastRow {
+    grid-template-columns: var(--base-size-40) minmax(0, 1fr) auto;
+    row-gap: var(--base-size-8);
+  }
+
+  .contrastVerdict {
+    grid-column: 2 / -1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .durationFill {
+    animation: none;
+    transform: none;
+  }
+}

@@ -14,6 +14,7 @@ export default function Nav() {
         <nav className={styles.links} aria-label="Main">
           <a href="#how">How it works</a>
           <a href="#roles">Roles</a>
+          <a href="#agents">Agents</a>
           <a href="#workflows">Workflows</a>
           <Link href="/docs/">Docs</Link>
         </nav>

@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import Logo from './Logo'
 import styles from './Footer.module.css'
 
@@ -12,10 +13,11 @@ export default function Footer() {
             <Logo size={18} />
             aello
           </a>
-          <p className={styles.tagline}>Isolated Claude Code environments.</p>
+          <p className={styles.tagline}>Isolated agent environments.</p>
         </div>
 
         <nav className={styles.links} aria-label="Footer">
+          <Link href="/design-system/">Design system</Link>
           <a href={`${REPO}#readme`}>Documentation</a>
           <a href={`${REPO}/releases`}>Releases</a>
           <a href={`${REPO}/blob/main/CONTRIBUTING.md`}>Contributing</a>

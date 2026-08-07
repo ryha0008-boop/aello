@@ -13,7 +13,8 @@ export default function Install() {
           <h2 className="sectionHeading">Get aello</h2>
           <p className="sectionLead">
             A single binary with no runtime to install. You&apos;ll also need Claude Code on your
-            PATH, and Python 3 for the transcript hooks.
+            PATH, and Python 3 for the transcript hooks. The Cline CLI only if you create a{' '}
+            <code>--agent cline</code> blueprint.
           </p>
         </Reveal>
 

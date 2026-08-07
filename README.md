@@ -4,7 +4,7 @@
 [![license: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 [![good first issues](https://img.shields.io/github/issues/ryha0008-boop/aello/good%20first%20issue.svg?color=7057ff&label=good%20first%20issues)](https://github.com/ryha0008-boop/aello/labels/good%20first%20issue)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
-[![docs](https://img.shields.io/badge/docs-ryha0008--boop.github.io%2Faello-8dd6ff.svg)](https://ryha0008-boop.github.io/aello/docs/)
+[![docs](https://img.shields.io/badge/docs-ryha0008--boop.github.io%2Faello-ff8c42.svg)](https://ryha0008-boop.github.io/aello/docs/)
 
 Isolated agent environments — like Python venvs, but for AI agents.
 
@@ -116,7 +116,7 @@ Rewritten one of those for a project and want to keep it? Put an empty `.aello-k
 
 Transcripts of every session are archived outside the repo so nothing is lost when a session ends.
 
-Full documentation: **<https://ryha0008-boop.github.io/aello/docs/>** — start with [workflows](https://ryha0008-boop.github.io/aello/docs/workflows/) for task-shaped walkthroughs, then [concepts](https://ryha0008-boop.github.io/aello/docs/concepts/), [roles](https://ryha0008-boop.github.io/aello/docs/roles/), [skills](https://ryha0008-boop.github.io/aello/docs/skills/), [voice](https://ryha0008-boop.github.io/aello/docs/voice/) and [troubleshooting](https://ryha0008-boop.github.io/aello/docs/troubleshooting/).
+Full documentation: **<https://ryha0008-boop.github.io/aello/docs/>** — start with [workflows](https://ryha0008-boop.github.io/aello/docs/workflows/) for task-shaped walkthroughs, then [concepts](https://ryha0008-boop.github.io/aello/docs/concepts/), [roles](https://ryha0008-boop.github.io/aello/docs/roles/), [skills](https://ryha0008-boop.github.io/aello/docs/skills/), [voice](https://ryha0008-boop.github.io/aello/docs/voice/), [cline](https://ryha0008-boop.github.io/aello/docs/cline/) and [troubleshooting](https://ryha0008-boop.github.io/aello/docs/troubleshooting/).
 
 Those pages are generated from [`docs/`](docs/) in this repo, and the same files ship **inside the binary** — `aello docs` lists them, `aello docs workflows` prints one, and `?` in the TUI opens a reader. No internet needed.
 
@@ -201,9 +201,9 @@ A Cline env gets the same persona, the same four response rules, the same `/sync
 
 It is quieter in two ways, and both are limits of Cline rather than choices: **no voice and no transcript capture**, because Cline fires no end-of-response hook. And in headless `-p` mode a command needs a trailing word — `-p "/sync now"` — because Cline refuses any one-word prompt. Full detail, including why the Claude subscription can't drive a Cline env that edits files: [`docs/cline.md`](docs/cline.md).
 
-## Voice — every env speaks
+## Voice — every Claude env speaks
 
-Every env reads the last line of each response aloud, so you can leave an agent working and hear when it lands. There is nothing to switch on.
+Every Claude env reads the last line of each response aloud, so you can leave an agent working and hear when it lands. There is nothing to switch on. (A Cline env is silent — see above.)
 
 ```sh
 aello voice mute              # silence every env, and stop the sentence playing now

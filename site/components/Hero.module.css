@@ -2,8 +2,9 @@
   padding-block: var(--base-size-80) var(--brand-Hero-regular-padding);
   background:
     /* Derived from the tokens rather than restating their channels: these were
-       the literal RGB of --color-accent-emphasis and --color-decorative-purple-mid,
-       so retuning either token silently left the hero glow behind. */
+       the literal RGB of --color-accent-emphasis and the deep decorative tone,
+       so retuning either token silently left the hero glow behind. Which is
+       exactly what it earned on the orange repalette — both glows followed. */
     radial-gradient(
       60rem 32rem at 12% -10%,
       color-mix(in srgb, var(--color-accent-emphasis) 16%, transparent),
@@ -11,7 +12,7 @@
     ),
     radial-gradient(
       48rem 28rem at 92% 4%,
-      color-mix(in srgb, var(--color-decorative-purple-mid) 14%, transparent),
+      color-mix(in srgb, var(--color-decorative-rust) 14%, transparent),
       transparent 62%
     );
 }
