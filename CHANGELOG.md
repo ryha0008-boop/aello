@@ -101,6 +101,19 @@
   project's `AGENTS.md` (Cline's project-`CLAUDE.md` equivalent) and stops.
 
 ### Changed
+- **`docs/cline.md` no longer implies a Cline env touches nothing outside
+  itself.** An isolated run does write one file into the shared tree —
+  `~/.cline/cli-node-extra-ca-certs.pem`, a node CA bundle — whatever `--config`
+  and `--data-dir` say. Measured by deleting it and re-running: it came back
+  byte-identical, while the run's sessions, database, logs and credential all
+  stayed inside the env dir and the shared tree's session count did not move. No
+  credential or per-env state crosses over, so nothing changes about how the
+  isolation is used; the claim was simply stronger than the evidence, and a
+  stated rationale that has quietly become false is worse than none. The page
+  also now records that the launch path can be exercised end to end with a
+  deliberately invalid key, which is the cheapest way to check a new machine is
+  wired up without spending anything at a provider.
+
 - **The scroll reveal is slow enough to see.** On the landing page it appeared
   to snap into place on refresh, and the duration token was not the reason —
   `--brand-animation-easing-default` is an expo-out that completes **90% of the

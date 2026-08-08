@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: 4742e7a2-20a8-4f4b-bb8d-1bae2f0fd8ea
-  modified: 2026-08-06T19:16:01.729Z
+  modified: 2026-08-08T17:56:38.551Z
 ---
 
 Investigated 2026-08-06 for a possible "aello for Cline". Everything below was
@@ -145,6 +145,12 @@ from reading the bundle turned out to be wrong, so prefer running the thing.
 19. **Real slash commands would mean shipping a JavaScript plugin — decided against.** The TUI `/` menu = five built-ins (`config`, `settings`, `mcp`, `fork`, `team`) **plus `listRuntimeCommands()`**, which comes from installed plugins; each runtime command carries `name`/`instructions`/`description`. But `cline plugin install <dir>` on a folder of markdown fails with **"No plugin entry files found"** — a plugin is an npm-style package with a JS entry (`index.js`/`.mjs`). And `--cwd` installs to **`<project>/.cline/plugins`**, workspace-scoped, so one plugin would be shared by every env in a repo rather than isolated per blueprint. A node dependency plus a hole in the isolation model, for cosmetics. Revisit only if Cline gains config-dir-scoped or markdown-only plugins.
 
     **`@file` is not a separate mechanism.** The TUI hint string is *"/ for slash commands, @ for file mentions, Ctrl+P for menu"*, but in one-shot mode naming `@canary.txt` simply made the model issue an ordinary `read_files` call. In the TUI the `@` is a picker for convenience. Nothing to build on that a plain path in a rule does not already give.
+
+20. **The full `aello run` → Cline chain is measured working on 2026-08-08, and the one thing left untested is a valid key.** Isolated `AELLO_CONFIG_DIR` + a scratch project + a deliberately bogus OpenRouter key, against the **installed** binary (0.2.25): `aello run` placed the env, `cline auth` installed the key into `<env>/data/settings/providers.json` (`tokenSource: manual`), the launch reached OpenRouter and came back `User not found.` — its 401 for a bad key. Everything Cline wrote — `data/db/sessions.db`, `data/sessions/<id>/`, `data/logs/cline.log`, `data/cache/` — landed **inside** the env dir, the shared tree's session count did not move (28 before and after), and `.gitignore` got `.cline-env-*`. The missing-login guard was measured too, from the real config: `aello run UnderdogerDev` bails with *"there is no Cline login — run `aello login --agent cline` first"* before spending anything.
+
+    ⚠️ **Correction to #13 and #15: `~/.cline` is NOT completely untouched.** An isolated run creates `~/.cline/cli-node-extra-ca-certs.pem` (187 KB) in the **shared** tree when it is absent, whatever `--config`/`--data-dir` say. Proved by deleting it and re-running the isolated probe: it came back byte-identical (same SHA-256). It is a static node CA bundle — no credentials, no sessions, no per-env state — so the isolation that matters holds, but "no file touched" was too strong and would have been reported as a leak by anyone who checked. `cline --version` does **not** rewrite it; it is written only when missing. Note that Windows NTFS *file tunneling* re-uses the old CreationTime for a name recreated within ~15s, so the recreated file looked older than it was — compare hashes, not timestamps.
+
+    **The real config has no `[cline]` section at all**, and the one Cline env on disk — `UnderdogerDev` at `C:\Users\H\Desktop\ai-tools\underdoger` — has rules, skills and memory but **no `data/` dir**, i.e. it has been placed and never launched. So #18's end-to-end verification was done under some other config that no longer exists; nothing on this machine can run a Cline env until `aello login --agent cline` is run.
 
 11. **The user already has a 53 KB `claude-code-vs-cline-comparison.md`** at
     `C:\Users\H\Desktop\ai-tools\cline8\`, dated 2026-08-04, alongside

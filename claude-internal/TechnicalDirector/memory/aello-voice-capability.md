@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: 4c62a069-53fc-49ff-85fb-83bcc5a0da21
-  modified: 2026-08-06T16:04:08.760Z
+  modified: 2026-08-08T18:17:54.379Z
 ---
 
 aello's `voice` capability (added 2026-08-01) vendors its TTS hook from **revoiced**, a separate project of the user's. The design rationale lives in aello's `CLAUDE.md` + `docs/capabilities.md` — this note is only the things the repo can't tell you.
@@ -67,6 +67,8 @@ aello's `voice` capability (added 2026-08-01) vendors its TTS hook from **revoic
     **Measured on a placed copy, not the checkout** (`python <env>/hooks/speak.py --sweep`). The clean reading was checked for the empty-result trap first: `duck._stored()` yields **43** entries here, 42 at 1.0 and one at exact 0.0 — so "repaired: nothing" is real, not a scan that could never match. Then the guard was made to fire: staged 0.5 on a **closed** app's entry via `_write_stored`, and `signature` printed `kept`, the default printed `CLAIM` and repaired it `(registry)`, `REVOICED_SWEEP=0` printed `off` and did nothing; the entry read back 1.0. **Still unverified, and upstream says so too:** the registry write provably persists, but whether the audio engine honours it at that app's next launch rather than overwriting from a cache is unknown — if not, only the live-session repair path is real.
 
     **17 — an empty `REVOICED_TELEGRAM` is now off**, which is the bug from #18 returned as a fix. **18 — a failed send is no longer swallowed**: it lands in `state.json` as **`telegram_error`** (`at`/`reason`/`project`), cleared by the next success, so it reads "right now". Not on the history entry, because `record()` has already appended by then. That is a **new key revoiced owns and aello reads** — `voice.rs::telegram_error_line` prints it in `aello voice status`, and the round-trip test asserts a mute does not erase it. Reporting it on aello's side matters because `aello voice status` is otherwise the thing that says nothing is wrong.
+
+    **The two-writer rule needs no maintenance on aello's side, and that is now measured rather than assumed.** RevoicedMainDev asked (2026-08-08) whether a new top-level `board` key — the station's freeform project map, written by `serve.py` via `/api/board` — would survive an aello write, since a preserve-by-allowlist implementation would drop it silently and read as the user's map deleting itself. It survives: `read_state` parses into a bare `serde_json::Value` and `write_state` re-serialises the whole object, so there is no field list to add to, and `voice.rs` is the only Rust writer of `state.json`. Verified against the **installed** binary by pointing `LOCALAPPDATA` at a scratch dir holding a `board`-bearing state file and running `mute`, `mute --project` and `unmute` over it — nodes, shapes, floats and colours all came back intact. Ruled out on the way: a UTF-8 **BOM** makes aello refuse the file, but `speak.py` reads plain `utf-8` too and calls the same file corrupt, so both writers decline rather than clobber — symmetric, and nothing writes a BOM anyway (it was a PowerShell `Set-Content -Encoding utf8` artifact in the harness).
 
     **Rollout done the same way as always and verified by execution:** `cargo install --path . --force` first (the exe is locked while a TUI/session runs — move it aside as `aello.exe.old.$$`), then copy all five files into each `<env>/hooks/`, then ask every copy `--hook-version` **and** digest its five files against the repo's. 39/39 answer 18 with an identical digest.
 

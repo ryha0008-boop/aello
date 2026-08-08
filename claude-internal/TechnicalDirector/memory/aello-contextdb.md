@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: 07544da2-e8b0-49d8-bd4c-33fbb89ffcc6
-  modified: 2026-08-04T12:40:17.721Z
+  modified: 2026-08-08T18:17:39.386Z
 ---
 
 Audited end-to-end on **2026-08-03** after the user suspected the PostCompact hook was broken. Findings, all measured against the live contextdb at `C:\Users\H\Desktop\work\contextdb`:
@@ -27,5 +27,7 @@ Audited end-to-end on **2026-08-03** after the user suspected the PostCompact ho
 - **`--thinking-display` is a real CLI flag but is undocumented in `claude --help`.** Found by grepping the `claude` binary (a 265 MB native exe — `grep -a` works on it, and it's also how the four `*THINKING*` env vars and the hook-event names were confirmed). Registered alongside `--thinking` and `--max-thinking-tokens`. Don't conclude a Claude Code capability is absent from `--help` alone.
 
 **What a transcript actually contains** (measured on a 6.1 MB, 880-line session): every tool call with full inputs (195), every tool result in full (2.27 MB total, largest single result 626 KB — no truncation cap), all assistant/user text, file-history snapshots and deltas, attachments and images, and the full `uuid`/`parentUuid` causal chain. So the archive is a complete record of what was *done*; reasoning arrives only as the summaries above.
+
+- **"SessionEnd hook … failed: Hook cancelled" does not mean the archive was lost — and the message cannot tell you which happened.** Seen 2026-08-08 on an AlgoMainDev exit, for `session-end.py` *and* `speak.py` together. Both had in fact completed: the archive holds the full 2.0 MB transcript, `transcript_archived` set, the `/handoff` note embedded, and the last transcript line parses; no voice lease leaked and no lock went stale. Not a timeout either — timed against that same 2 MB transcript with `AELLO_CONTEXTDB` pointed at a scratch dir, `session-end.py` takes **0.29 s** and `speak.py` **0.72 s**, both exit 0. So it is a shutdown race: the CLI stops waiting on `prompt_input_exit` and labels the hooks cancelled while their processes finish anyway. **The consequence that matters is that the identical message would appear if a copy really had been cut short**, so the only way to know is to look in `<contextdb>/<project>/<blueprint>/` for a `_end.jsonl` carrying a non-empty `transcript_archived`. Two "Resume this session with:" blocks printed back-to-back in one terminal are not two simultaneous exits — the archives were five hours apart; the adjacency is Claude's alternate screen restoring.
 
 [[aello-overview]] [[aello-dev-gotchas]]

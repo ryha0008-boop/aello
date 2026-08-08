@@ -71,6 +71,8 @@ So `config/rules/aello.md` routes them instead: it lists each command against th
 
 **Verified end to end** against a real provider on 2026-08-06: `/sync now` opened the memory index, looked for `AGENTS.md` and correctly reported nothing to change; `/handoff please` wrote a properly name-prefixed `<name>.HANDOFF.md` at the project root.
 
+The launch path itself was re-measured on 2026-08-08 against the installed binary, using a deliberately invalid key: `aello run` placed the env, `cline auth` installed the key into `<env>/data/settings/providers.json`, and the request reached the provider, which rejected it. Everything before the provider is therefore exercised even without a working credential — which is also the cheapest way to check that a new machine is wired up correctly.
+
 ⚠️ **In one-shot mode (`-p`) a command needs a trailing word** — `-p "/sync now"`, not `-p "/sync"`. Cline refuses *any* one-word prompt with "Unknown command or unquoted prompt", the four commands included. That is why the router matches a **prefix** rather than an exact message, and aello refuses a one-word prompt itself with the real reason rather than letting Cline's message mislead you. The interactive TUI has a genuine `/` menu and is not affected.
 
 An early test appeared to show `-p "/twosentences"` working on its own. It had in fact been rewritten by Git Bash into `C:/Program Files/Git/twosentences` — which contains a space, so Cline accepted it and the model *guessed* the skill from the path. Worth knowing if you test from a POSIX shell on Windows: set `MSYS_NO_PATHCONV=1`, or a leading-slash argument is silently turned into a path.
@@ -123,3 +125,4 @@ Session state lives in `<env>/data/sessions/` and `<env>/data/db/sessions.db`.
 - **Cline refuses any one-word prompt**, `/sync` included. Add a word: `-p "/sync now"`. aello says so before launching rather than letting Cline's message read like a quoting mistake.
 - **`/sync` and the memory rule are instructions, not enforcement.** Nothing in Cline blocks an agent that ignores them, where Claude Code's equivalents ride hooks aello controls.
 - `aello edit` does not change an agent, by design.
+- **One file still lands in the shared tree.** An isolated run creates `~/.cline/cli-node-extra-ca-certs.pem` (a ~187 KB node CA bundle) whenever it is absent, whatever `--config` and `--data-dir` say. Measured 2026-08-08 by deleting it and re-running: it came back byte-identical, while the run's own sessions, database, logs and credential all stayed inside the env dir and the shared tree's session count did not move. No credentials or per-env state cross over, so the isolation that matters holds — but "nothing outside the env is touched" would be too strong a claim.

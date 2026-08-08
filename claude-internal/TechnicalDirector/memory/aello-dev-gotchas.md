@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: reference
   originSessionId: 72999d30-dfc8-4f50-aac5-cbe588b64645
-  modified: 2026-08-08T17:03:25.616Z
+  modified: 2026-08-08T18:17:06.486Z
 ---
 
 Two non-obvious things when developing/testing aello on Windows:
@@ -95,3 +95,5 @@ Two non-obvious things when developing/testing aello on Windows:
 
 42. **`*.HANDOFF.md` in `.gitignore` is unanchored, so it matches at every depth — including inside the tracked mirror.** Extends #29. When the handoff needed to reach a second machine, the obvious design was to snapshot it into `claude-internal/<name>/` under its own name; `git check-ignore -v` says `claude-internal/TechnicalDirector/TechnicalDirector.HANDOFF.md` **is ignored**, so that snapshot would have been committed by nothing and noticed by no one — the exact silent-empty-result shape this repo keeps hitting. The mirror copy is therefore lowercase **`handoff.md`**, which `git check-ignore` confirms is not matched. Check a new tracked filename against `git check-ignore -v` *before* building anything on it; an unanchored pattern from three sessions ago reaches places you are not thinking about.
 
+
+43. **NTFS *file tunneling* re-uses a deleted file's CreationTime when the same name reappears within ~15 seconds — so a recreated file can look older than the thing that recreated it.** Hit while proving that an isolated Cline run writes `~/.cline/cli-node-extra-ca-certs.pem` into the shared tree: I deleted the file, re-ran the probe, and `CreationTime` came back as the *original* 17:51:58 rather than the moment of the run. Read literally that says the run did not create it, which is the opposite of what happened. **Compare hashes, not timestamps**, whenever the question is "did this operation produce this file" — `Get-FileHash` settled it in one line where every timestamp field lied. Same family as #30 and #41: the measurement agreed with the wrong conclusion.
