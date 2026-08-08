@@ -1,7 +1,8 @@
 name: release
 
-# Every push to main auto-bumps the patch version (+0.0.1), commits the bumped
-# Cargo.toml back, then builds the binaries from it and publishes TWO releases:
+# Every push to main runs the test suite on Linux and Windows, then auto-bumps the
+# patch version (+0.0.1), commits the bumped Cargo.toml back, then builds the
+# binaries from it and publishes TWO releases:
 #
 #   1. an immutable `vX.Y.Z` release — marked as GitHub's "Latest release".
 #      Package managers (Homebrew/Scoop/winget) need a versioned URL whose
@@ -26,8 +27,39 @@ permissions:
   contents: write
 
 jobs:
+  # Runs before `bump` so a red suite blocks the version bump too — a bump commit
+  # pushed for a build that then fails leaves a version that was never released,
+  # and the next push bumps again past it.
+  #
+  # It runs on the pushed commit rather than the bump commit: the bump changes only
+  # the version string, so this is the code that ships.
+  #
+  # Both platforms on purpose. The suite had only ever run where a human ran it —
+  # Windows, here — and nothing had ever executed it on Linux, which is where the
+  # cross-platform assumptions actually break (path separators, case sensitivity,
+  # and the CRLF normalisation the hook-digest tests do explicitly so a Windows
+  # checkout and Linux CI can agree). macOS is deliberately not covered: it builds
+  # from source only and no runner time is spent proving it twice.
+  #
+  # No `--locked`: the bump job commits a new Cargo.toml version without touching
+  # Cargo.lock, so from the next push onward the lockfile's recorded version trails
+  # by one and `--locked` would fail every run on a mismatch that means nothing.
+  test:
+    name: test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test
+
   bump:
     name: resolve version
+    needs: test
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.bump.outputs.version }}

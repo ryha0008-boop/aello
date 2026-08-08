@@ -133,6 +133,7 @@ aello remove <name> [--yes] [--purge]         # --purge also deletes the placed 
 aello edit <name> [--rename <new>] [--model <m>] [--claude-md <coder|none|custom|path>]
         [--role maintainer|contributor|standalone]
 aello persona <name> --from <file> [--project <dir>]     # install a written persona into a placed env
+aello restore <name> [--project <dir>]         # adopt the tracked mirror after pulling another machine's work
 aello run [name] [--resume [id]] [-p <prompt>] [-- <extra args for the agent>]
 aello login [--agent claude|cline]             # store a shared login (asks which, if unsaid)
 aello github-setup [--name <repo>] [--public] [--yes]   # create + push the repo via gh
@@ -152,6 +153,7 @@ aello update [--force]                         # self-update (--force reinstalls
 
 - `edit` changes a blueprint in place, including `--rename <new>` (validated, rejected if the name is taken) — which also moves the placed `.claude-env-<name>/` env dir and its `claude-internal/<name>/` mirror in the current project. `--role` swaps the role outright; omitting a flag leaves that field as-is. Changes apply on the next `run`; the global persona in an already-placed env is never re-clobbered.
 - `persona` replaces a placed env's `CLAUDE.md` with a persona you have written for that project, sets the blueprint to `custom` so aello stops seeding a template over it, and records the generation in `<env>/persona.gen` (`gen1 2026-08-03`). It is the only command that overwrites a persona — `run` never does. `aello list` then shows `custom` for that blueprint, so you can see at a glance which envs have a real persona.
+- `restore` is for working one blueprint from **two machines**. `aello run` seeds an env from the tracked `claude-internal/<name>/` mirror only when there is no env dir at all (a fresh clone); on the machine that already has one, pulling another machine's commits changes nothing the agent can see. `restore` copies that pulled memory and skills into the env dir and puts the resume note back at the project root. It is additive — memory and skills are merged, a differing persona is reported rather than replaced — so it's safe to run whenever you're unsure. The full loop is in [`docs/workflows.md`](docs/workflows.md#one-env-two-machines).
 - `run` with no name uses the sole blueprint (errors if there are several).
 - `--resume` with no value continues the most recent session; `--resume <id>` resumes a specific one. The TUI (`S`) browses sessions to resume.
 - `-p "<prompt>"` runs headless and exits. Anything after `--` is passed straight to `claude`.

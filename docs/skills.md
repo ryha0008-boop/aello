@@ -40,13 +40,13 @@ Sections, in order:
 
 1. **Repo health** — confirm it's a git repo, check for `origin` (offer `gh repo create` if missing, never without confirmation), report branch, ahead/behind, and a short status.
 2. **Reconcile memory, then docs** — memory **first**, so the checkpoint captures what the session learned before anything else is written. Then each doc the role owns gets a two-way pass: add what's missing, correct what's wrong, delete what no longer applies. Reported per file as updated / already-fresh / skipped.
-3. **Mirror the env** — one-way copy of `skills/`, memory, and the persona into the tracked `claude-internal/<name>/` folder, staged by explicit path.
+3. **Mirror the env** — copy `skills/`, memory, the persona and any resume note written this session into the tracked `claude-internal/<name>/` folder, staged by explicit path. Skills are pruned to match the env; memory is only ever added to, because on a repo worked from two machines a mirror-only note is the other machine's.
 4. **Commit + push** — stage only what this session touched, by explicit path; commit with an `Env: <name>` trailer; `git pull --rebase` before pushing so the push fast-forwards.
 
 Two rules inside it are worth knowing about, because they're the ones that bite:
 
 - **Never `git add -A`.** A blanket stage sweeps up another env's in-flight work and unrelated tooling scaffolding.
-- **Never stage `*.HANDOFF.md` or `*.NOTE.md`.** They're created during the session and deleted on the next boot, so "stage what you created this session" would otherwise catch them. They are deliberately not gitignored — only `.claude-env-*` is — so nothing else stops it.
+- **Never stage `*.HANDOFF.md` or `*.NOTE.md`.** They're created during the session and deleted on the next boot, so "stage what you created this session" would otherwise catch them. They are deliberately not gitignored — only `.claude-env-*` is — so nothing else stops it. This is about the files **at the project root**: the mirror step's `claude-internal/<name>/handoff.md` snapshot is tracked on purpose, and is the only way a resume note reaches a second machine.
 
 Full detail, including `claude-internal/` and the `VERSION` convention: [roles.md](roles.md).
 

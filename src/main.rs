@@ -118,6 +118,19 @@ enum Commands {
         /// Doc to print (slug, e.g. `concepts`). Omit to list available docs.
         name: Option<String>,
     },
+    /// Adopt the tracked `claude-internal/<name>/` mirror into an existing env.
+    ///
+    /// Run this after pulling work another machine pushed: it copies that
+    /// blueprint's memory, skills, persona (if absent) and resume note back into
+    /// the gitignored env dir, which `aello run` only does for a fresh clone.
+    /// Nothing local is overwritten except the resume note.
+    Restore {
+        /// Blueprint whose env receives the mirror.
+        name: String,
+        /// Project holding the env dir (default: current directory).
+        #[arg(long)]
+        project: Option<PathBuf>,
+    },
     /// Accept a generated global persona into a placed env.
     ///
     /// Replaces that env's CLAUDE.md, flips the blueprint's persona to
@@ -221,6 +234,7 @@ fn main() {
         Some(Commands::Update { force }) => update::run(force),
         Some(Commands::Completions { shell }) => cmd_completions(shell),
         Some(Commands::Docs { name }) => cmd_docs(name),
+        Some(Commands::Restore { name, project }) => cmd_restore(name, project),
         Some(Commands::Persona { name, from, project }) => cmd_persona(name, from, project),
         Some(Commands::Voice { action }) => match action {
             VoiceAction::Mute { project } => voice::mute(project),
@@ -917,6 +931,59 @@ fn prompt_secret(label: &str) -> Result<Option<String>> {
 /// generation sidecar. Doing this through aello rather than by hand is what
 /// keeps the config edit safe — `Config` is serialized from the struct, so a
 /// key written into `config.toml` by anything else is dropped on the next save.
+/// `aello restore <name>` — pull the tracked mirror into an env dir that already
+/// exists, so a second machine's committed memory, skills and resume note land
+/// where this env actually reads them.
+fn cmd_restore(name: String, project: Option<PathBuf>) -> Result<()> {
+    let cfg = config::load()?;
+    let bp = cfg
+        .find(&name)
+        .with_context(|| format!("no blueprint named '{name}'"))?;
+    let bp_name = bp.name.clone();
+    validate_name(&bp_name)
+        .with_context(|| format!("blueprint name in config.toml is invalid: '{bp_name}'"))?;
+    if bp.agent == Agent::Cline {
+        bail!(
+            "'{bp_name}' is a Cline blueprint, and only Claude envs are mirrored into \
+             claude-internal/ — there is nothing to restore from."
+        );
+    }
+
+    let project = match project {
+        Some(p) => p,
+        None => std::env::current_dir().context("could not read the current directory")?,
+    };
+    let env = project::env_dir(&project, &bp_name);
+    if !env.exists() {
+        // Not an error: `place` restores a missing env dir from the mirror by
+        // itself, which is the fresh-clone case this command is the counterpart to.
+        println!(
+            "'{bp_name}' has no env dir here yet — `aello run {bp_name}` seeds it from the \
+             mirror on its own. Restoring anyway."
+        );
+    }
+
+    let r = project::restore(&project, &env, &bp_name)?;
+    println!("Restored '{bp_name}' from claude-internal/{bp_name}/:");
+    println!("  {} memory note(s) → {}", r.memory, project::memory_dir(&env, &project).display());
+    println!("  {} skill(s) → {}", r.skills, env.join("skills").display());
+    if r.handoff {
+        println!("  resume note → {}", project::handoff_path(&project, &bp_name).display());
+        println!("  It is delivered and deleted on the next launch.");
+    }
+    if r.persona_differs {
+        println!(
+            "  persona: the mirror's snapshot differs from {} and was left alone.",
+            env.join("CLAUDE.md").display()
+        );
+        println!(
+            "  `aello persona {bp_name} --from claude-internal/{bp_name}/persona.CLAUDE.md` \
+             to take it."
+        );
+    }
+    Ok(())
+}
+
 fn cmd_persona(name: String, from: PathBuf, project: Option<PathBuf>) -> Result<()> {
     let mut cfg = config::load()?;
     let bp = cfg

@@ -100,6 +100,34 @@ pub fn env_dir(project: &Path, name: &str) -> PathBuf {
     project.join(format!("{}{name}", crate::models::Agent::Claude.env_prefix()))
 }
 
+/// This env's memory dir for this project. The `<encoded-cwd>` component is
+/// derived from the project path, so the same env restored onto a second machine
+/// — a different absolute path, quite possibly a different OS — resolves to that
+/// machine's spelling rather than the one baked into the mirror.
+pub fn memory_dir(env_dir: &Path, project: &Path) -> PathBuf {
+    env_dir
+        .join("projects")
+        .join(crate::sessions::encode_project_path(project))
+        .join("memory")
+}
+
+/// Where the tracked mirror of a blueprint's env lives.
+pub fn mirror_dir(project: &Path, blueprint: &str) -> PathBuf {
+    project.join("claude-internal").join(blueprint)
+}
+
+/// The mirror's snapshot of the resume note. Deliberately **not** named
+/// `<blueprint>.HANDOFF.md`: this repo (and any repo that adds the pattern)
+/// gitignores `*.HANDOFF.md`, and the whole point of the snapshot is to be
+/// committed so the note reaches another machine.
+pub const MIRRORED_HANDOFF: &str = "handoff.md";
+
+/// The live resume note the SessionStart hook reads and deletes, at the project
+/// root.
+pub fn handoff_path(project: &Path, blueprint: &str) -> PathBuf {
+    project.join(format!("{blueprint}.HANDOFF.md"))
+}
+
 /// Move a placed blueprint's on-disk artifacts when it's renamed: the env dir
 /// `<prefix><old>` → `<prefix><new>` (whichever agent's prefix that is), the
 /// `name` in its `.aello.toml`,
@@ -550,17 +578,39 @@ fn mirror_env_internal(
     }
     copy_dir_all(&env_dir.join("skills"), &dest.join("skills"))
         .context("could not mirror skills into claude-internal")?;
-    let mem = env_dir
-        .join("projects")
-        .join(crate::sessions::encode_project_path(project))
-        .join("memory");
-    copy_dir_all(&mem, &dest.join("memory"))
+    // Memory is a union, not a mirror — see `merge_dir`. The extras it reports are
+    // notes another machine committed and this env has never seen, which is
+    // exactly the state `aello restore` exists to resolve; the alternative was
+    // deleting them here, on a launch, with nothing printed.
+    let orphaned = merge_dir(&memory_dir(env_dir, project), &dest.join("memory"))
         .context("could not mirror memory into claude-internal")?;
+    if !orphaned.is_empty() {
+        println!(
+            "note: {} memory note(s) in claude-internal/{blueprint}/memory/ are not in this env:",
+            orphaned.len()
+        );
+        for name in &orphaned {
+            println!("  {name}");
+        }
+        println!("  `aello restore {blueprint}` to adopt them, or `git rm` one to drop it.");
+    }
     let persona = env_dir.join("CLAUDE.md");
     if persona.exists() {
         std::fs::create_dir_all(&dest).context("could not create claude-internal dir")?;
         std::fs::copy(&persona, dest.join("persona.CLAUDE.md"))
             .context("could not snapshot persona into claude-internal")?;
+    }
+    // Snapshot the resume note so it can reach another machine. The root file is
+    // still the live one — written by `/handoff`, read and deleted on the next
+    // boot — and is still never committed itself; this copy is, under a name the
+    // `*.HANDOFF.md` ignore rule does not match. Absent means "not written this
+    // session", never "delete the snapshot": the last note stands until a new one
+    // replaces it, the way the persona snapshot does.
+    let handoff = handoff_path(project, blueprint);
+    if handoff.exists() {
+        std::fs::create_dir_all(&dest).context("could not create claude-internal dir")?;
+        std::fs::copy(&handoff, dest.join(MIRRORED_HANDOFF))
+            .context("could not snapshot the handoff into claude-internal")?;
     }
     Ok(())
 }
@@ -592,11 +642,7 @@ fn restore_from_mirror(env_dir: &Path, blueprint: &str) -> Result<()> {
     // is a plain copy — and its symlink skipping is wanted either way.
     copy_dir_all(&src.join("skills"), &env_dir.join("skills"))
         .context("could not restore skills from claude-internal")?;
-    let mem = env_dir
-        .join("projects")
-        .join(crate::sessions::encode_project_path(project))
-        .join("memory");
-    copy_dir_all(&src.join("memory"), &mem)
+    copy_dir_all(&src.join("memory"), &memory_dir(env_dir, project))
         .context("could not restore memory from claude-internal")?;
     let persona = src.join("persona.CLAUDE.md");
     if persona.exists() {
@@ -604,8 +650,114 @@ fn restore_from_mirror(env_dir: &Path, blueprint: &str) -> Result<()> {
         std::fs::copy(&persona, env_dir.join("CLAUDE.md"))
             .context("could not restore the persona from claude-internal")?;
     }
+    // The resume note the other machine left. Nothing local can conflict — there
+    // is no env dir here yet, so there has never been a session to write one.
+    let handoff = src.join(MIRRORED_HANDOFF);
+    if handoff.exists() {
+        std::fs::copy(&handoff, handoff_path(project, blueprint))
+            .context("could not restore the handoff from claude-internal")?;
+    }
     println!("Restored '{blueprint}' from claude-internal/ (no env dir here yet).");
     Ok(())
+}
+
+/// What `restore` did, so the caller can print it without re-reading the disk.
+#[derive(Debug)]
+pub struct Restored {
+    pub memory: usize,
+    pub skills: usize,
+    pub handoff: bool,
+    /// The env's persona differs from the mirror's snapshot and was left alone.
+    pub persona_differs: bool,
+}
+
+/// Adopt the tracked mirror into an env dir **that already exists** — the inbound
+/// half of working one env across two machines.
+///
+/// `restore_from_mirror` covers only the fresh-clone case, and deliberately: it
+/// must never contradict a live env. But that leaves the return trip broken. Come
+/// home to the machine that already has the env dir, pull the notes the other
+/// device committed, and nothing reads them — then `place` mirrors the local env
+/// back over them. Before memory became a union that silently deleted them; now
+/// it strands them. Either way the user needs one command that says "the mirror
+/// has moved on, take it".
+///
+/// **Nothing here overwrites local work.** Memory and skills are unions, so a note
+/// this machine holds and the mirror does not survives. The persona is reported
+/// and left alone — it is the file aello never clobbers, and `aello persona` is
+/// the command that exists to replace one deliberately. The one exception is the
+/// resume note, which is *replaced*: the local root file is by then a note this
+/// machine already snapshotted into the mirror and committed, so it is recoverable
+/// from git history, while the mirror's copy is the one just pulled — the whole
+/// reason for running this.
+pub fn restore(project: &Path, env_dir: &Path, blueprint: &str) -> Result<Restored> {
+    let src = mirror_dir(project, blueprint);
+    if !src.exists() {
+        anyhow::bail!(
+            "no mirror at {} — nothing to restore from. It is written by the `github` \
+             role's /sync step, so a standalone blueprint has none.",
+            src.display()
+        );
+    }
+
+    // The extras each returns are files this env has and the mirror does not —
+    // local work that has not been synced yet. Not this command's business; the
+    // point is only that a union never deletes them.
+    merge_dir(&src.join("memory"), &memory_dir(env_dir, project))
+        .context("could not restore memory from claude-internal")?;
+    merge_dir(&src.join("skills"), &env_dir.join("skills"))
+        .context("could not restore skills from claude-internal")?;
+
+    let snapshot = src.join("persona.CLAUDE.md");
+    let live = env_dir.join("CLAUDE.md");
+    let persona_differs = match (read_existing(&snapshot)?, read_existing(&live)?) {
+        // Compare the text, not the bytes. The scaffolded `.gitattributes` sets
+        // `* text=auto`, so the snapshot is stored LF and checked out with the
+        // platform's newlines while the env's CLAUDE.md — never touched by git —
+        // keeps whatever wrote it. A byte compare therefore reported "the persona
+        // differs, run aello persona" for two identical files on any machine whose
+        // checkout disagreed with the writer, which is the whole Windows↔Linux case
+        // this command exists for. Measured before fixing.
+        (Some(a), Some(b)) => normalize_newlines(&a) != normalize_newlines(&b),
+        (Some(a), None) => {
+            std::fs::create_dir_all(env_dir).context("could not create env dir")?;
+            std::fs::write(&live, a).context("could not restore the persona")?;
+            false
+        }
+        _ => false,
+    };
+
+    let handoff = src.join(MIRRORED_HANDOFF);
+    let restored_handoff = handoff.exists();
+    if restored_handoff {
+        std::fs::copy(&handoff, handoff_path(project, blueprint))
+            .context("could not restore the handoff from claude-internal")?;
+    }
+
+    // The counts are of what the *mirror* holds, not of what changed: a note
+    // identical on both sides is still one this env now provably has, and
+    // reporting "0 restored" for a healthy round trip reads like a failure.
+    Ok(Restored {
+        memory: count_entries(&src.join("memory"), false),
+        skills: count_entries(&src.join("skills"), true),
+        handoff: restored_handoff,
+        persona_differs,
+    })
+}
+
+/// Strip `\r` so two spellings of the same text compare equal. Only for
+/// comparisons — nothing is rewritten on disk, since the newlines a file already
+/// has are the ones its platform wants.
+fn normalize_newlines(s: &str) -> String {
+    s.replace('\r', "")
+}
+
+/// Entries directly inside `dir` — directories when `dirs`, else regular files.
+/// A skill is a directory holding `SKILL.md`; a memory note is a file.
+fn count_entries(dir: &Path, dirs: bool) -> usize {
+    std::fs::read_dir(dir)
+        .map(|rd| rd.flatten().filter(|e| e.path().is_dir() == dirs).count())
+        .unwrap_or(0)
 }
 
 /// One-way *sync* of `src` into `dst`: copy every regular file/subdir from `src`,
@@ -662,6 +814,53 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Copy `src` over `dst` **without pruning**, and report the top-level names in
+/// `dst` that `src` does not have.
+///
+/// This is `copy_dir_all`'s non-destructive half, and it exists because memory is
+/// the one thing here with two writers on two machines. A pruning mirror is
+/// correct while an env dir is the only source of truth; the moment a second
+/// device commits notes of its own, prune means "delete whatever the other
+/// machine wrote", silently, on the next launch. Union plus a named report is the
+/// only merge that cannot lose a note. Deleting one for real stays possible — it
+/// takes a `git rm` of the mirror copy, which is deliberate rather than a
+/// side effect of launching.
+///
+/// A missing `src` leaves `dst` alone, for the same reason `copy_dir_all` does: a
+/// derived source path that comes out wrong is indistinguishable from an empty one.
+fn merge_dir(src: &Path, dst: &Path) -> Result<Vec<String>> {
+    if !src.exists() {
+        return Ok(vec![]);
+    }
+    std::fs::create_dir_all(dst).context("could not create merge destination dir")?;
+
+    let mut from_src = std::collections::HashSet::new();
+    for entry in std::fs::read_dir(src).context("could not read merge source dir")? {
+        let entry = entry?;
+        let ft = entry.file_type()?;
+        if ft.is_symlink() {
+            continue;
+        }
+        from_src.insert(entry.file_name());
+        let to = dst.join(entry.file_name());
+        if ft.is_dir() {
+            merge_dir(&entry.path(), &to)?;
+        } else {
+            std::fs::copy(entry.path(), &to).context("could not copy merged file")?;
+        }
+    }
+
+    let mut extra = vec![];
+    for entry in std::fs::read_dir(dst).context("could not read merge dest dir")? {
+        let entry = entry?;
+        if !from_src.contains(&entry.file_name()) {
+            extra.push(entry.file_name().to_string_lossy().into_owned());
+        }
+    }
+    extra.sort();
+    Ok(extra)
 }
 
 /// Ensure `entry` exists as its own line in the project's `.gitignore`, creating
@@ -1708,9 +1907,12 @@ mod tests {
     }
 
     #[test]
-    fn mirror_prunes_files_deleted_from_the_env() {
-        // The mirror is a one-way sync: a file removed from the env must not
-        // linger in the tracked claude-internal/ folder.
+    fn mirroring_never_deletes_a_memory_note_the_env_lacks() {
+        // Memory used to be a one-way pruning sync, and this test asserted the
+        // prune. That is correct only while one machine owns the env dir: a note
+        // another device committed has no counterpart here, so the next launch
+        // deleted it — silently, and the commit after that recorded the deletion.
+        // The mirror keeps it now, and `aello restore` is how it gets adopted.
         let proj = tempfile::tempdir().unwrap();
         let env = env_dir(proj.path(), "demo");
         let caps = Capabilities { github: true, ..Default::default() };
@@ -1719,27 +1921,180 @@ mod tests {
         let ci = proj.path().join("claude-internal").join("demo");
         assert!(ci.join("skills/sync/SKILL.md").exists());
 
-        // Delete a memory note from the live env, then re-place. (A memory note
-        // is the reachable case: the earlier version of this test hand-deleted
-        // the /sync skill, a state production can't reach — the skill is only
-        // removed when no caps are left, which implies github is off, which used
-        // to mean the mirror never ran at all.)
-        let mem = env
-            .join("projects")
-            .join(crate::sessions::encode_project_path(proj.path()))
-            .join("memory");
-        std::fs::write(mem.join("scratch.md"), "temporary\n").unwrap();
-        place(&env, &Instance { name: "demo".into(), model: "haiku".into() }, Some("# p"), &caps).unwrap();
-        assert!(ci.join("memory/scratch.md").exists(), "new note reaches the mirror");
-
-        std::fs::remove_file(mem.join("scratch.md")).unwrap();
+        // Stand in for a note this env has never seen by writing it straight into
+        // the mirror — which is what `git pull` does.
+        std::fs::write(ci.join("memory").join("from-laptop.md"), "other machine\n").unwrap();
         place(&env, &Instance { name: "demo".into(), model: "haiku".into() }, Some("# p"), &caps).unwrap();
 
-        // The orphaned copy is gone; the rest of the mirror survives.
-        assert!(!ci.join("memory/scratch.md").exists(), "stale note should be pruned");
+        assert!(
+            ci.join("memory/from-laptop.md").exists(),
+            "a pulled note must survive a launch that never saw it"
+        );
         assert!(ci.join("skills/sync/SKILL.md").exists(), "skills still mirrored");
         assert!(ci.join("memory/MEMORY.md").exists(), "memory still mirrored");
         assert!(ci.join("persona.CLAUDE.md").exists(), "persona still mirrored");
+    }
+
+    #[test]
+    fn mirroring_still_prunes_a_skill_the_blueprint_no_longer_seeds() {
+        // Skills stay a strict one-way mirror: they are generated from the role on
+        // every place, so an orphan is stale output and not another machine's work.
+        let proj = tempfile::tempdir().unwrap();
+        let env = env_dir(proj.path(), "demo");
+        let caps = Capabilities { github: true, ..Default::default() };
+        place(&env, &Instance { name: "demo".into(), model: "haiku".into() }, Some("# p"), &caps).unwrap();
+
+        let ci = proj.path().join("claude-internal").join("demo");
+        std::fs::create_dir_all(ci.join("skills").join("retired")).unwrap();
+        std::fs::write(ci.join("skills").join("retired").join("SKILL.md"), "# old\n").unwrap();
+        place(&env, &Instance { name: "demo".into(), model: "haiku".into() }, Some("# p"), &caps).unwrap();
+
+        assert!(!ci.join("skills/retired").exists(), "stale skill should be pruned");
+        assert!(ci.join("skills/sync/SKILL.md").exists(), "live skills survive");
+    }
+
+    #[test]
+    fn the_handoff_is_snapshotted_into_the_mirror_and_restored_from_it() {
+        // The resume note is the one thing that never crossed to a second machine:
+        // the root file is deleted on the next boot and gitignored in some repos,
+        // and /sync was told in as many words never to commit it. The mirror copy
+        // is the crossing, under a name `*.HANDOFF.md` does not match.
+        let proj = tempfile::tempdir().unwrap();
+        let env = env_dir(proj.path(), "demo");
+        let caps = Capabilities { github: true, ..Default::default() };
+        let inst = Instance { name: "demo".into(), model: "haiku".into() };
+        place(&env, &inst, Some("# p"), &caps).unwrap();
+
+        let root_note = proj.path().join("demo.HANDOFF.md");
+        std::fs::write(&root_note, "# Handoff\nwhere I got to\n").unwrap();
+        place(&env, &inst, Some("# p"), &caps).unwrap();
+
+        let mirrored = proj.path().join("claude-internal").join("demo").join(MIRRORED_HANDOFF);
+        assert!(mirrored.exists(), "the handoff must reach the mirror");
+        assert!(
+            !mirrored.file_name().unwrap().to_string_lossy().contains(".HANDOFF.md"),
+            "the mirrored name must not match the *.HANDOFF.md ignore rule"
+        );
+
+        // Boot consumes the root file. The snapshot is what a second machine reads.
+        std::fs::remove_file(&root_note).unwrap();
+        place(&env, &inst, Some("# p"), &caps).unwrap();
+        assert!(mirrored.exists(), "an absent root note must not delete the snapshot");
+
+        let r = restore(proj.path(), &env, "demo").unwrap();
+        assert!(r.handoff);
+        assert_eq!(
+            std::fs::read_to_string(&root_note).unwrap(),
+            "# Handoff\nwhere I got to\n",
+            "restore puts the note back where SessionStart reads it"
+        );
+    }
+
+    #[test]
+    fn restore_adopts_the_mirror_without_deleting_local_work() {
+        // The inbound half. `place` only restores a *missing* env dir, so coming
+        // home to an existing one left the pulled notes unread — and it must not
+        // fix that by overwriting whatever this machine wrote in the meantime.
+        let proj = tempfile::tempdir().unwrap();
+        let env = env_dir(proj.path(), "demo");
+        let caps = Capabilities { github: true, ..Default::default() };
+        let inst = Instance { name: "demo".into(), model: "haiku".into() };
+        place(&env, &inst, Some("# persona from here"), &caps).unwrap();
+
+        let mem = memory_dir(&env, proj.path());
+        std::fs::write(mem.join("local-only.md"), "written here, never synced\n").unwrap();
+
+        // What a `git pull` leaves behind.
+        let ci = proj.path().join("claude-internal").join("demo");
+        std::fs::write(ci.join("memory").join("from-laptop.md"), "the other machine\n").unwrap();
+        std::fs::write(ci.join("persona.CLAUDE.md"), "# a different persona\n").unwrap();
+
+        let r = restore(proj.path(), &env, "demo").unwrap();
+
+        assert!(mem.join("from-laptop.md").exists(), "the pulled note lands where memory is read");
+        assert!(mem.join("local-only.md").exists(), "an unsynced local note survives");
+        assert_eq!(
+            std::fs::read_to_string(env.join("CLAUDE.md")).unwrap(),
+            "# persona from here",
+            "the persona is never clobbered — it is reported instead"
+        );
+        assert!(r.persona_differs, "and the difference is reported");
+        assert!(r.memory >= 2, "counts what the mirror holds: {}", r.memory);
+    }
+
+    #[test]
+    fn restore_seeds_a_persona_only_when_the_env_has_none() {
+        let proj = tempfile::tempdir().unwrap();
+        let env = env_dir(proj.path(), "demo");
+        let ci = proj.path().join("claude-internal").join("demo");
+        std::fs::create_dir_all(ci.join("memory")).unwrap();
+        std::fs::write(ci.join("persona.CLAUDE.md"), "# the snapshot\n").unwrap();
+        std::fs::create_dir_all(&env).unwrap();
+
+        let r = restore(proj.path(), &env, "demo").unwrap();
+        assert_eq!(std::fs::read_to_string(env.join("CLAUDE.md")).unwrap(), "# the snapshot\n");
+        assert!(!r.persona_differs, "seeding an absent persona is not a conflict");
+    }
+
+    #[test]
+    fn a_crlf_checkout_is_not_a_persona_conflict() {
+        // The cross-OS trap. `* text=auto` (which the github role scaffolds) stores
+        // the snapshot LF and checks it out with the platform's newlines, while the
+        // env's CLAUDE.md is never touched by git and keeps the writer's. Comparing
+        // bytes told the user their persona had diverged, and to run `aello persona`
+        // over it, when the two files were the same text — on the exact
+        // Windows-to-Linux round trip `restore` is for. Measured on a real repo
+        // before this landed.
+        let proj = tempfile::tempdir().unwrap();
+        let env = env_dir(proj.path(), "demo");
+        let ci = proj.path().join("claude-internal").join("demo");
+        std::fs::create_dir_all(ci.join("memory")).unwrap();
+        std::fs::create_dir_all(&env).unwrap();
+
+        let text = "# Persona\nline two\n";
+        std::fs::write(env.join("CLAUDE.md"), text).unwrap();
+        std::fs::write(ci.join("persona.CLAUDE.md"), text.replace('\n', "\r\n")).unwrap();
+
+        let r = restore(proj.path(), &env, "demo").unwrap();
+        assert!(!r.persona_differs, "newlines alone must not read as a divergence");
+
+        // A real difference still does.
+        std::fs::write(ci.join("persona.CLAUDE.md"), "# Persona\r\nsomething else\r\n").unwrap();
+        let r = restore(proj.path(), &env, "demo").unwrap();
+        assert!(r.persona_differs, "a genuine edit must still be reported");
+    }
+
+    #[test]
+    fn restore_refuses_when_there_is_no_mirror() {
+        // Reporting success against a mirror that was never written is the empty
+        // result this project keeps getting wrong: a standalone blueprint has none.
+        let proj = tempfile::tempdir().unwrap();
+        let env = env_dir(proj.path(), "demo");
+        std::fs::create_dir_all(&env).unwrap();
+        let err = restore(proj.path(), &env, "demo").unwrap_err();
+        assert!(format!("{err}").contains("no mirror at"), "got: {err}");
+    }
+
+    #[test]
+    fn a_restored_env_reads_memory_at_this_machines_path_spelling() {
+        // The cross-device case: the mirror was committed by a machine whose
+        // project path encodes differently (a Windows drive letter vs a POSIX
+        // home). Both directions derive the component from the project path they
+        // are handed, so neither carries the other machine's spelling.
+        let proj = tempfile::tempdir().unwrap();
+        let env = env_dir(proj.path(), "demo");
+        let ci = proj.path().join("claude-internal").join("demo");
+        std::fs::create_dir_all(ci.join("memory")).unwrap();
+        std::fs::write(ci.join("memory").join("MEMORY.md"), "- index\n").unwrap();
+        // A stale encoded dir from the other machine, as a clone would carry it.
+        let foreign = env.join("projects").join("C--Users-someone-else-repo").join("memory");
+        std::fs::create_dir_all(&foreign).unwrap();
+
+        restore(proj.path(), &env, "demo").unwrap();
+
+        let here = memory_dir(&env, proj.path());
+        assert!(here.join("MEMORY.md").exists(), "restored into this machine's encoded dir");
+        assert!(!foreign.join("MEMORY.md").exists(), "not into the other machine's");
     }
 
     #[test]

@@ -64,19 +64,60 @@ The rhythm of a long piece of work across several sessions.
 ```
         ┌─ work ─┐
         │        ▼
-   /handoff ← /sync ← (repeat)
+    /sync ← /handoff ← (repeat)
         │
         ▼
      /clear  →  next session boots with the note
 ```
 
 1. **Work.** Normal Claude Code.
-2. **`/sync`** when you reach a checkpoint — reconciles memory, then the docs the role owns, then commits and pushes. Type it yourself; the agent will not run it on its own.
-3. **`/handoff`** before you clear or quit — writes `<name>.HANDOFF.md` at the project root: what shipped, open threads, gotchas.
+2. **`/handoff`** when you're about to stop — writes `<name>.HANDOFF.md` at the project root: what shipped, open threads, gotchas.
+3. **`/sync`** last — reconciles memory, then the docs the role owns, snapshots the env (including the handoff you just wrote), then commits and pushes. Type it yourself; the agent will not run it on its own.
 4. **`/clear`** or exit.
 5. **Next session** — the SessionStart hook delivers the handoff note into the new session's context and deletes the file. The agent resumes mid-thought instead of re-reading the diff.
 
 Steps 2 and 3 are different things and you usually want both: `/sync` puts your work in git, `/handoff` puts your *state of mind* in front of the next session. A compaction saves a summary automatically; a `/clear` does not, which is exactly the gap `/handoff` fills.
+
+**`/handoff` before `/sync`, not after.** On one machine the order barely matters — the note sits at the project root either way and the next boot finds it. It matters the moment a second machine is involved: the only copy of the note that ever reaches git is the snapshot `/sync`'s mirror step takes, so a note written *after* `/sync` is never committed and stays on the machine that wrote it. The order above works for both cases, which is why it's the one documented.
+
+## One env, two machines
+
+Working the same blueprint from a desktop and a laptop — and the two need not run the same OS, since every path is derived per machine rather than carried in the mirror.
+
+What crosses between them is the tracked `claude-internal/<name>/` folder: memory, skills, the persona snapshot, and the resume note. What does **not** cross is `config.toml` (so the blueprint is added once per machine), your auth, and the contextdb — transcripts and session history stay on the machine that produced them.
+
+**First time on the second machine:**
+
+```sh
+git clone <repo> && cd <repo>
+aello add <Name> --model <same> --role <same>   # config.toml is per machine
+aello login                                     # auth is per machine
+aello run <Name>                                # prints "Restored '<Name>' from claude-internal/"
+```
+
+Use the **same blueprint name, with the same casing** — the hooks look for `<Name>.HANDOFF.md` exactly, so a case difference is a note nobody reads on a case-sensitive filesystem. Give it the same role too; the role generates the `/sync` skill, so a mismatch quietly changes what checkpointing does.
+
+**Every switch after that:**
+
+```
+  machine A                    git                    machine B
+  ─────────                    ───                    ─────────
+  work                                                
+  /handoff  ──┐                                       
+  /sync     ──┴──▶ push ──────────▶ pull ──▶ aello restore <Name>
+                                                      aello run <Name>
+                                                      work → /handoff → /sync → push
+       aello restore <Name> ◀── pull ◀──────────────────────┘
+```
+
+1. **Leaving a machine:** `/handoff`, then `/sync`. The push carries your memory, skills and the resume note.
+2. **Arriving at a machine:** `git pull`, then **`aello restore <Name>`**, then `aello run <Name>`. The restore copies the pulled memory and skills into the gitignored env dir and puts the resume note back at the project root, where the next launch delivers and deletes it.
+
+**Do not skip the restore.** `aello run` seeds an env from the mirror only when there is no env dir at all — a live env is never contradicted by a snapshot — so on the machine that already has one, pulling alone changes nothing the agent can see. The restore is additive and safe to run whenever you're unsure: memory and skills are merged rather than replaced, a persona that differs is reported and left alone, and only the resume note is overwritten.
+
+If you forget it, nothing is destroyed but nothing is delivered either. The next `aello run` will notice the pulled notes it has no copy of and name them, telling you to restore — memory is deliberately never pruned from the mirror, precisely so a launch cannot delete the other machine's work.
+
+One content-level caveat that aello can't fix for you: memory notes and handoffs written on one OS often name absolute paths (`C:\Users\...`), which read as nonsense on the other. Prefer paths relative to the repo root when a note is meant to be read from both.
 
 ## Telling another agent something
 

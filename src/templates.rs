@@ -217,8 +217,9 @@ Then, for each doc file below that exists, compare it against the current code a
 Version-control this env's internal config by mirroring it into the tracked `claude-internal/{name}/` folder at the repo root, so the skills, memory, and persona that live in the gitignored `.claude-env-{name}/` dir are captured in git. The folder is **namespaced per blueprint** (`claude-internal/{name}/`) so multiple blueprints sharing this repo don't clobber each other's mirror. The live env dir stays the **single source of truth** — this is a **one-way copy** from it, refreshing only what changed.
 - Self-heal first: `mkdir -p claude-internal/{name}/skills claude-internal/{name}/memory` — an env placed before this step won't have the folder yet, so create it.
 - Mirror `.claude-env-{name}/skills/` → `claude-internal/{name}/skills/`.
-- Mirror this env's memory dir (`.claude-env-{name}/projects/<this-project>/memory/`) → `claude-internal/{name}/memory/`.
+- Mirror this env's memory dir (`.claude-env-{name}/projects/<this-project>/memory/`) → `claude-internal/{name}/memory/`. **Add and overwrite; never delete a mirror note that has no counterpart in the env dir** — on a repo worked from two machines that note is the other machine's, and dropping it here is how it disappears. Deleting one for real is a deliberate `git rm`.
 - Snapshot `.claude-env-{name}/CLAUDE.md` → `claude-internal/{name}/persona.CLAUDE.md` — **keep this exact name**, never `CLAUDE.md`, so Claude Code does not auto-load the snapshot as a second persona.
+- If `{name}.HANDOFF.md` exists at the project root, snapshot it → `claude-internal/{name}/handoff.md`. **Lowercase `handoff.md`, and this copy IS committed** — it is the only way the resume note reaches another machine, since the root file is gitignored in some repos and deleted on the next boot in all of them. So run `/handoff` **before** `/sync`, not after: a note written afterwards misses this step and stays on this machine. Absent means nothing was written this session — leave the existing snapshot alone rather than deleting it.
 - Stage it by explicit path: `git add claude-internal/{name}`. This folder is tracked on purpose — it is *not* covered by the `.claude-env-*` gitignore line.
 "
         ));
@@ -226,7 +227,7 @@ Version-control this env's internal config by mirroring it into the tracked `cla
             "
 ## Commit + push
 - Stage **only the files you created or modified in this session**, plus any docs you reconciled above — by explicit path (e.g. `git add path/a path/b`). **Never `git add -A` / `git add .`** — a blanket stage sweeps unrelated untracked files (other tooling's scaffolding, another env's in-flight work) into your commit. Run `git status` first; unstage anything you didn't touch. Then commit with a clear message summarizing what changed.
-- **Never stage the transient env files.** `<blueprint>.HANDOFF.md` (a resume note to yourself) and `<blueprint>.NOTE.md` (another env's inbox) live at the project root, are **created during the session**, and are **deleted on the next boot** by the SessionStart hook. The rule above would otherwise sweep them in — a handoff you wrote this session *is* a file you created this session. They are deliberately not gitignored, because they are meant to be visible while they exist. Leave them untracked, and never commit one.
+- **Never stage the transient env files.** `<blueprint>.HANDOFF.md` (a resume note to yourself) and `<blueprint>.NOTE.md` (another env's inbox) live at the project root, are **created during the session**, and are **deleted on the next boot** by the SessionStart hook. The rule above would otherwise sweep them in — a handoff you wrote this session *is* a file you created this session. They are deliberately not gitignored, because they are meant to be visible while they exist. Leave them untracked, and never commit one. This is about the files **at the project root** — `claude-internal/{name}/handoff.md`, the snapshot the mirror step takes, is tracked on purpose and does get staged.
 - **End every commit message with a trailer line `Env: {name}`** (after a blank line) so the commit records which aello blueprint made it. Your git author identity is already set to this blueprint; the trailer makes it visible in the message body too.
 - **After committing, before pushing, run `git pull --rebase origin <current-branch>`** to integrate any commits the remote gained since you last fetched — another machine, another blueprint working in this repo, or CI auto-committing a version bump. This replays your commit on top so the push is a fast-forward — skipping it leaves you a commit behind and the *next* `/sync` push gets rejected.
 - Push to `origin` on the current branch. If the push fails for a missing upstream, set it: `git push -u origin <branch>`.
@@ -294,9 +295,16 @@ Write these sections, in order:
 Keep it tight and skimmable. Then tell the user the note is written and remind
 them it is deleted on next boot.
 
-`{name}.HANDOFF.md` is **never committed.** It is untracked on purpose and gone
-by the next boot, so if you run `/sync` after this, leave it out of the staging
-list — it is a file you created this session, and that rule does not cover it.
+**The file at the project root is never committed.** It is untracked on purpose
+and gone by the next boot, so if you run `/sync` after this, leave
+`{name}.HANDOFF.md` out of the staging list — it is a file you created this
+session, and that rule does not cover it.
+
+What *is* committed is the copy `/sync`'s mirror step snapshots to
+`claude-internal/{name}/handoff.md`, and that copy is how this note reaches a
+second machine working the same repo. It only happens if the snapshot is taken
+after you write — so the order is **`/handoff` first, then `/sync`**. Mention that
+to the user if they are about to switch machines.
 {keep}"
     )
 }
@@ -551,5 +559,38 @@ mod tests {
         let mirror = s.find("Mirror this env's internal config").expect("mirror step");
         let commit = s.find("## Commit + push").expect("commit step");
         assert!(mirror < commit, "mirror must be staged before commit");
+    }
+
+    #[test]
+    fn sync_carries_the_handoff_across_machines_without_committing_the_root_file() {
+        // Two rules that read as contradictions unless both are spelled out: the
+        // root `<name>.HANDOFF.md` is never staged, and the mirror's `handoff.md`
+        // always is. Without the second the note cannot reach a second machine at
+        // all — which is how it worked until now.
+        let caps = Capabilities { github: true, ..Default::default() };
+        let s = render_sync_skill(&caps, "reviewer");
+        assert!(s.contains("claude-internal/reviewer/handoff.md"));
+        assert!(s.contains("reviewer.HANDOFF.md"));
+        // The ordering is the whole flow: a note written after /sync misses the snapshot.
+        assert!(s.contains("`/handoff` **before** `/sync`"), "must state the order");
+        // And memory must not prune, or the other machine's notes die on a launch.
+        assert!(
+            s.contains("never delete a mirror note that has no counterpart in the env dir"),
+            "the union rule must be explicit"
+        );
+    }
+
+    #[test]
+    fn the_handoff_skill_scopes_never_committed_to_the_root_file() {
+        // It used to say `<name>.HANDOFF.md` is "never committed", full stop. Once
+        // /sync snapshots it into the mirror that is false as written, and two
+        // seeded skills contradicting each other is worse than either being wrong.
+        let s = render_handoff_skill("reviewer");
+        assert!(s.contains("The file at the project root is never committed"));
+        assert!(s.contains("claude-internal/reviewer/handoff.md"));
+        assert!(
+            s.contains("`/handoff` first, then `/sync`"),
+            "the order has to be stated where the note is written, not only in /sync"
+        );
     }
 }

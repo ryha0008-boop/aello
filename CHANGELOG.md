@@ -3,6 +3,46 @@
 ## [Unreleased]
 
 ### Added
+- **`aello restore <name>` — work one blueprint from two machines.** The tracked
+  `claude-internal/<name>/` mirror already carried a blueprint's memory, skills
+  and persona into git, and `aello run` seeded a fresh clone from it. The return
+  trip was missing: on the machine that already had an env dir, pulling the other
+  machine's commits changed nothing the agent could see, because a live env is
+  deliberately never contradicted by a snapshot. `restore` is that direction, run
+  on demand. It is additive — memory and skills are merged, so an unsynced local
+  note survives, and a persona that differs from the snapshot is reported and left
+  alone rather than replaced (`aello persona` is still the only command that
+  overwrites one) — compared as text, not bytes, because the scaffolded
+  `.gitattributes` normalizes newlines in the tracked snapshot but not in the
+  gitignored env dir, so a byte compare called two identical files a divergence on
+  any machine whose checkout disagreed with the writer. Works across operating
+  systems: the `<encoded-cwd>` component of the memory path is derived from each
+  machine's own project path rather than carried in the mirror. The full loop is in
+  `docs/workflows.md`.
+
+- **The `/handoff` resume note now reaches other machines.** `/sync`'s mirror step
+  snapshots `<name>.HANDOFF.md` to `claude-internal/<name>/handoff.md`, which is
+  committed; a clone or an `aello restore` puts it back at the project root where
+  the SessionStart hook delivers and deletes it. The file at the project root is
+  still never committed — it is gitignored in some repos and deleted on the next
+  boot in all of them, which is exactly why nothing but a snapshot could cross.
+  **This makes the order matter: `/handoff` before `/sync`.** A note written after
+  the snapshot is taken stays on the machine that wrote it, so both skills now say
+  so and the documented session loop puts `/handoff` first.
+
+### Fixed
+- **A launch no longer deletes memory notes another machine committed.** Mirroring
+  memory into `claude-internal/` was a pruning one-way sync, which is correct only
+  while one machine owns the env dir. Pull a second machine's notes and the next
+  `aello run` deleted every one of them from the mirror — silently, and the next
+  commit recorded the deletion, leaving git history as the only copy. Memory is
+  now a union: the mirror only ever gains notes, and a launch that finds notes it
+  has no counterpart for prints their names and points at `aello restore`.
+  Deleting one for real is a deliberate `git rm` of the mirror copy. Skills are
+  unaffected and still pruned — they are regenerated from the role on every
+  placement, so an orphan there is stale output rather than someone's work.
+  Reproduced against the released binary before the fix: one launch, one deleted
+  note, staged.
 - **aello can now drive the Cline CLI as well as Claude Code.** `aello add
   <name> --agent cline` creates a Cline blueprint; `aello run` places and
   launches it exactly as it does a Claude one. The two are split completely and

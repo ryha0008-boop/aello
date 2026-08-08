@@ -20,25 +20,31 @@ my-project/
 │   ├── skills/twosentences/SKILL.md  # universal — two-sentence summary
 │   └── projects/<cwd>/memory/  # starter working-style memory, seeded once
 ├── .claude-env-reviewer/     # a second blueprint, fully isolated
-├── claude-internal/          # TRACKED one-way mirror, namespaced per blueprint
+├── claude-internal/          # TRACKED mirror of the env, namespaced per blueprint
 │   └── <name>/               #   one folder per blueprint sharing the repo
-│       ├── skills/           #     mirror of <env>/skills/
-│       ├── memory/           #     mirror of <env>/projects/<cwd>/memory/
-│       └── persona.CLAUDE.md #     snapshot of <env>/CLAUDE.md (renamed; never auto-loads)
+│       ├── skills/           #     mirror of <env>/skills/ (one-way, pruned)
+│       ├── memory/           #     union with <env>/projects/<cwd>/memory/
+│       ├── persona.CLAUDE.md #     snapshot of <env>/CLAUDE.md (renamed; never auto-loads)
+│       └── handoff.md        #     snapshot of <name>.HANDOFF.md, so it can cross machines
 ├── CLAUDE.md                 # project-level instructions (maintainer only)
 ├── README.md  CHANGELOG.md  docs/   # scaffolded by the role
 └── .gitignore                # contains ".claude-env-*" (but NOT claude-internal/)
 ```
 
-The env dir is gitignored, so the skills, memory, and persona that define a blueprint would never reach git. With the `github` cap, `claude-internal/` (a tracked folder at the repo root) is a **one-way mirror** of that internal config — written *from* the env dir, never back into it, so the live env stays the single source of truth. Each blueprint mirrors into its own `claude-internal/<name>/` namespace, so multiple blueprints sharing one repo don't clobber each other. It's seeded at placement and refreshed by `/sync`. The persona snapshot is renamed (`persona.CLAUDE.md`) so Claude Code never auto-loads it as a second persona.
+The env dir is gitignored, so the skills, memory, and persona that define a blueprint would never reach git. With the `github` cap, `claude-internal/` (a tracked folder at the repo root) captures that internal config — written *from* the env dir, so the live env stays the source of truth for anything generated. Each blueprint mirrors into its own `claude-internal/<name>/` namespace, so multiple blueprints sharing one repo don't clobber each other. It's seeded at placement and refreshed by `/sync`. The persona snapshot is renamed (`persona.CLAUDE.md`) so Claude Code never auto-loads it as a second persona.
 
-One-way has a single exception, and it is the reason the folder is tracked at all: **on a clone**, where the mirror exists and the gitignored env dir does not, `aello run` restores the env from the mirror before it seeds anything. Everything after that is one-way again.
+**Skills are a strict one-way mirror; memory is a union.** A skill is regenerated from the role on every placement, so a mirrored skill the env no longer seeds is stale output and gets pruned. A memory note is not: on a repo worked from two machines, a note in the mirror with no counterpart in this env dir is the *other machine's*, and pruning it deleted committed work on a launch that had no way to know better. So memory only ever gains files, and a launch that finds mirror-only notes names them and points at `aello restore`. Deleting a note for real takes a `git rm` of the mirror copy — deliberate, rather than a side effect of starting a session.
+
+Reading the mirror back happens in exactly two places:
+
+- **On a clone**, where the mirror exists and the gitignored env dir does not, `aello run` restores the env from the mirror before it seeds anything. This is the reason the folder is tracked at all.
+- **On demand, via `aello restore <name>`**, when the env dir already exists — the case `aello run` deliberately will not touch, because a live env must not be contradicted by a snapshot. This is what you run after pulling work another machine pushed. See [`workflows.md`](workflows.md) for the full two-machine loop.
 
 **A project-level `<project>/.claude/settings.json` is silently ignored under aello.** Claude Code reads its settings from `CLAUDE_CONFIG_DIR`, which aello points at the env dir — so the per-project `.claude/` directory you'd use with a normal Claude Code install has no effect here, with no warning. Put hooks, permissions, and env vars in `<project>/.claude-env-<name>/settings.json` instead. This is per blueprint by design: two blueprints in one repo are meant to be able to disagree about their settings.
 
 ## Tracked source of truth vs derived artifacts
 
-A recurring rule across aello's `github` cap: **one tracked source of truth, everything else derived one-way and kept out of git.** `claude-internal/` is derived from the env dir; the same discipline governs versioning. The scaffolded `VERSION` file is the single tracked home of a project's version — any other stamp (a README badge, `package.json`'s `version`, a generated `version.ts`) must be **derived from `VERSION` at build time and the derived file gitignored**, never written into a second tracked file.
+A recurring rule across aello's `github` cap: **one tracked source of truth, everything else derived one-way and kept out of git.** `claude-internal/`'s *generated* half — the skills and the persona snapshot — is derived from the env dir that way; memory is the documented exception above, because two machines write it and a derived-only rule there deletes one of them. The same discipline governs versioning. The scaffolded `VERSION` file is the single tracked home of a project's version — any other stamp (a README badge, `package.json`'s `version`, a generated `version.ts`) must be **derived from `VERSION` at build time and the derived file gitignored**, never written into a second tracked file.
 
 This isn't optional polish: the scaffolded CI auto-bumps `VERSION` on every push, and the generated `/sync` stages only files the agent touched this session (never `git add -A`). A version duplicated into a tracked artifact therefore drifts on every CI bump and can never be reconciled by `/sync` — it strands dirty. Deriving + gitignoring the artifact is the structural fix (softening `/sync`'s staging rule is not). See `docs/roles.md` for the full rationale and the `env-console` precedent.
 

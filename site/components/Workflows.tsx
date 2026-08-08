@@ -22,7 +22,11 @@ const FEATURED: { heading: string; label?: string; body: string }[] = [
   {
     heading: 'The session loop: work, checkpoint, hand off',
     label: 'The session loop',
-    body: 'Work, /sync to checkpoint, /handoff before you clear — and the next session boots mid-thought.',
+    body: 'Work, /handoff before you clear, /sync to checkpoint — and the next session boots mid-thought.',
+  },
+  {
+    heading: 'One env, two machines',
+    body: 'Take an agent’s memory, skills and resume note to another machine — Windows or Linux — and bring them back.',
   },
   {
     heading: 'Telling another agent something',
