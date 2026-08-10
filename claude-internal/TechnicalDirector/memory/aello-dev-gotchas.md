@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: reference
   originSessionId: 72999d30-dfc8-4f50-aac5-cbe588b64645
-  modified: 2026-08-08T18:17:06.486Z
+  modified: 2026-08-10T16:21:24.191Z
 ---
 
 Two non-obvious things when developing/testing aello on Windows:
@@ -24,7 +24,7 @@ Two non-obvious things when developing/testing aello on Windows:
 
 7. **Claude Code's cwd→projects-dir encoding folds EVERY non-alphanumeric char to `-`, not just separators.** Verified empirically 2026-07-08: a real folder `…\work\human_behavior` is stored by Claude under `~/.claude/projects/` as `…-work-human-behavior` (underscore → hyphen; case preserved). So the rule is `replace([^A-Za-z0-9], '-')` — spaces and `_` fold too, not only `\ / : .`. aello's `sessions::encode_project_path` previously only folded `\ / : .`, so for any project path containing `_`/space it pointed seeded memory + `--resume` at a dir Claude never reads (silent no-op). Fixed on branch `audit-fixes-2026-07-08`. This is the ground truth behind the path-identity requirement in gotcha #2. See [[aello-architecture-decisions]].
 
-8. **aello's own config is at `%APPDATA%\aello\config\config.toml`** — note the extra `config/` level that `directories::ProjectDirs` adds on Windows. It is not in `~/.config/aello/`, not in `%APPDATA%\aello\`, and a `find` over the obvious places misses it entirely; this cost several commands on 2026-08-02. That file is the only place capabilities are recorded, so it is what you check when you need to know what a blueprint actually has.
+8. **aello's own config is at `%APPDATA%\aello\config\config.toml`** — note the extra `config/` level that `directories::ProjectDirs` adds on Windows. It is not in `~/.config/aello/`, not in `%APPDATA%\aello\`, and a `find` over the obvious places misses it entirely; this cost several commands on 2026-08-02. That file is the only place capabilities are recorded, so it is what you check when you need to know what a blueprint actually has. **And read the `contextdb` path out of it rather than assuming the default** — the documented default is `~/aello/contextdb`, but this machine's is `C:\Users\H\Desktop\work\contextdb`, so a scan pointed at the default finds an empty directory and reports zero transcripts, which is indistinguishable from "nothing recorded" (cost a wasted command on 2026-08-10). Note also that the same file holds `oauth_token` in plaintext, so don't `cat` it into anywhere shared.
 
 9. **A `SessionStart` hook can inject text into the new session, and it works** — verified end to end on 2026-08-02, not assumed from docs. Print `{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "..."}}` to stdout and Claude reads it as context. Confirmed by planting a note containing a nonsense codeword, running `aello run <bp> -p "what is the codeword?"`, and getting the codeword back. This is what makes `/handoff` and `/note` actually self-consuming (see [[aello-voice-capability]] for the hook-file layout). Worth remembering because the contract is external to this repo and easy to get subtly wrong — plain stdout is also accepted for SessionStart, but the JSON form is explicit.
 

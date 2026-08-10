@@ -29,6 +29,25 @@ Every assistant message in a Claude Code transcript carries a `usage` object:
 The 5m/1h split comes from the `cache_creation` sub-object when present; older
 transcripts without it are counted as 5m, the API's default TTL.
 
+**That split is load-bearing, not a detail.** Measured here 2026-08-10: every one
+of 38.8M cache-write tokens landed in the **1h** bucket, none in 5m. Had the
+sub-object been missed and the 5m fallback taken, the fleet total would have been
+understated by $145.63 — a 1h write is 2× input, a 5m write only 1.25×.
+
+**Token share is not cost share**, and the gap is wide enough to mislead. On the
+same measurement: cache read is 98.4% of tokens but 70% of cost; cache write is
+1.2% of tokens but 18% of cost; output is 0.4% of tokens but 13% of cost. Reads
+dominate either way, but "almost everything is cache" is a statement about
+tokens, not about money.
+
+There is **no ceiling on how much can be cached** — nothing meters cache storage.
+What exists is a cap of 4 cache breakpoints per request, a minimum cacheable
+prefix below which nothing is stored, and the 5m/1h expiry. Read tokens are
+billed per request, so one cached prefix re-read across a long session accrues
+read tokens without anything being "stored" repeatedly. That is why the fleet
+total reaches billions of read tokens and why no storage limit needs accounting
+for.
+
 Two directories are read:
 
 - **contextdb** (`<contextdb>/<project>/<blueprint>/`) — every session that has
@@ -69,6 +88,14 @@ so a dated id (`claude-haiku-4-5-20251001`) resolves to its family. Sonnet 5 is
 priced at its standard $3/$15 rather than the $2/$10 introductory rate — a price
 keyed to an expiry date would go quietly wrong the morning after, and already
 installed copies would keep reporting the old number.
+
+**Known limitation of that prefix match:** the `claude-opus-4` entry is $5/$25,
+correct for Opus 4.5 through 4.8, but it also swallows `claude-opus-4-0` and
+`claude-opus-4-1`, which are **$15/$75** — a 3× under-price. Deliberately not
+split: verified 2026-08-10 that no such transcript exists on this machine
+(25,682 Opus 5 records, 16 Haiku 4.5, 4 Sonnet 5, and nothing older), and these
+models are retired on the first-party API. It would only matter if an archive
+from an older era were ever restored.
 
 **A model with no rate entry is never priced at zero.** Its tokens are counted
 into a separate `unpriced` total and the model id is named in the output. A cost

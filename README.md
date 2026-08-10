@@ -244,8 +244,9 @@ aello tokens --json          # machine-readable
 
 Nothing needs enabling: this reads the transcripts contextdb already archives, so it works retroactively over history recorded before the feature existed. Live sessions in the current directory are counted too; sessions running in other projects appear once they end.
 
-Two things the output is deliberately explicit about, because both are easy to misread:
+Three things the output is deliberately explicit about, because all are easy to misread:
 
+- **The token split is not the cost split.** Cache read dominates the token count so heavily (98% on the machine this was built on) that it looks like everything else is noise — but it is only ~70% of the cost, against ~18% for cache writes and ~13% for output. Nor is cache uniformly cheap: a read is 0.1x the input rate, while a 1-hour cache write is **2x** it. Reads win on volume, not on unit price.
 - **Cost is an estimate at list API rates, not a bill.** An aello env runs on a Claude subscription, where no per-token charge exists. The figure answers "what would this have cost on the API". A model with no rate in the table is never priced at zero — its tokens are quarantined and the model id is named.
 - **The 5-hour percentage is against your own peak block, not your plan's quota.** The subscription limit appears in no transcript, so aello cannot read it and doesn't invent one. The largest 5-hour block ever recorded on the machine is the denominator, and the output says so.
 

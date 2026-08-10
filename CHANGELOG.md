@@ -36,6 +36,21 @@
   env is eating it. Verified against real data: the cost arithmetic reproduces
   independently to the cent, and the dedup matches a hand measurement of the same
   transcript. See `docs/tokens.md`.
+
+  Re-verified against the published rate card, and the docs now say three things
+  the numbers otherwise invite you to get wrong. **The token split is not the cost
+  split** — cache read is 98.4% of tokens but 70% of cost, against 18% for cache
+  writes and 13% for output — and **cache is not uniformly cheap**: a read is 0.1x
+  input but a 1-hour write is *2x* it, so reads win on volume rather than unit
+  price. **Every cache write measured here is the 1h bucket and none is 5m**, which
+  makes the "default to 5m when `cache_creation` is absent" fallback load-bearing:
+  silently taking it would understate the fleet by $145.63, not by a rounding
+  error. And **there is no cache storage ceiling** to account for — nothing meters
+  stored cache; read tokens bill per request, which is why one re-read prefix
+  accrues billions of read tokens without anything being stored at that size.
+  `docs/tokens.md` also now records the one rate entry known to be wrong and left
+  in deliberately: `claude-opus-4` prices Opus 4.0/4.1 at $5/$25 when they are
+  $15/$75, harmless while no such transcript exists.
 - **`aello restore <name>` — work one blueprint from two machines.** The tracked
   `claude-internal/<name>/` mirror already carried a blueprint's memory, skills
   and persona into git, and `aello run` seeded a fresh clone from it. The return
