@@ -22,7 +22,7 @@ use std::io::{self, Stdout};
 use std::path::{Path, PathBuf};
 
 use crate::models::{Agent, Blueprint, Role};
-use crate::{config, docs, project, sessions};
+use crate::{config, docs, project, sessions, tokens};
 
 type Term = Terminal<CrosstermBackend<Stdout>>;
 
@@ -143,6 +143,11 @@ enum Mode {
     /// Full-screen reader for the bundled `docs/`. `sel` is the current doc,
     /// `scroll` the vertical line offset into it.
     Help { docs: Vec<docs::Doc>, sel: usize, scroll: u16 },
+    /// Full-screen token accounting. `sel` is the highlighted env, `scroll` the
+    /// offset into its detail pane. The scan itself is cached on `App` — it
+    /// reads hundreds of MB of transcripts and takes seconds, which is fine
+    /// once and unacceptable per frame.
+    Tokens { sel: usize, scroll: u16 },
 }
 
 /// Subdirectories of `dir` (sorted, dotfolders hidden), with ".." first if
@@ -245,6 +250,12 @@ struct App {
     /// height during draw (the only place the render width is known) and read
     /// back when handling scroll keys so they can't run past the last line.
     help_scroll_max: std::cell::Cell<u16>,
+    /// Cached token scan. `None` until the tab is first opened — the scan walks
+    /// every archived transcript (322 MB / ~6s on this machine), so it happens
+    /// once per TUI session and on an explicit [R]efresh, never on a redraw.
+    tokens: Option<tokens::Report>,
+    /// Max scroll for the token detail pane, same deal as `help_scroll_max`.
+    tokens_scroll_max: std::cell::Cell<u16>,
 }
 
 impl App {
@@ -265,6 +276,8 @@ impl App {
             dir: launch_dir_label(),
             voice_muted: crate::voice::is_globally_muted(),
             help_scroll_max: std::cell::Cell::new(0),
+            tokens: None,
+            tokens_scroll_max: std::cell::Cell::new(0),
         };
         app.rebuild_view();
         Ok(app)
@@ -515,6 +528,19 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                 KeyCode::Char('?') => {
                     app.status.clear();
                     app.mode = Mode::Help { docs: docs::all(), sel: 0, scroll: 0 };
+                }
+                KeyCode::Char('t') => {
+                    app.status.clear();
+                    app.mode = Mode::Tokens { sel: 0, scroll: 0 };
+                    // Paint the SCANNING frame *before* the scan, not after:
+                    // reading every archived transcript takes seconds, and
+                    // without this the terminal sits on the old screen looking
+                    // hung. Cached afterwards — [R] inside the tab rescans.
+                    if app.tokens.is_none() {
+                        terminal.draw(|f| draw(f, &app))?;
+                        let cwd = std::env::current_dir().unwrap_or_default();
+                        app.tokens = Some(tokens::scan(&tokens::collect_sources(&cwd)));
+                    }
                 }
                 KeyCode::Char('f') => {
                     // Only meaningful when filtering is actually hiding something.
@@ -926,6 +952,43 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                 KeyCode::Home => *scroll = 0,
                 _ => {}
             },
+            Mode::Tokens { sel, scroll } => {
+                let envs = app.tokens.as_ref().map(|r| r.envs.len()).unwrap_or(0);
+                match code {
+                    KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('t') => {
+                        app.mode = Mode::Normal;
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        if envs > 0 {
+                            *sel = (*sel + 1).min(envs - 1);
+                            *scroll = 0;
+                        }
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        *sel = sel.saturating_sub(1);
+                        *scroll = 0;
+                    }
+                    KeyCode::PageDown | KeyCode::Char(' ') => {
+                        *scroll = scroll.saturating_add(10).min(app.tokens_scroll_max.get());
+                    }
+                    KeyCode::PageUp => *scroll = scroll.saturating_sub(10),
+                    KeyCode::Right | KeyCode::Char('l') => {
+                        *scroll = scroll.saturating_add(1).min(app.tokens_scroll_max.get());
+                    }
+                    KeyCode::Left | KeyCode::Char('h') => *scroll = scroll.saturating_sub(1),
+                    KeyCode::End | KeyCode::Char('g') => *scroll = app.tokens_scroll_max.get(),
+                    KeyCode::Home => *scroll = 0,
+                    KeyCode::Char('r') => {
+                        // Same pre-paint as opening the tab: drop the cache,
+                        // show SCANNING, then read the transcripts again.
+                        app.tokens = None;
+                        terminal.draw(|f| draw(f, &app))?;
+                        let cwd = std::env::current_dir().unwrap_or_default();
+                        app.tokens = Some(tokens::scan(&tokens::collect_sources(&cwd)));
+                    }
+                    _ => {}
+                }
+            }
         }
     }
 }
@@ -981,6 +1044,7 @@ fn draw(f: &mut Frame, app: &App) {
         Mode::Sessions { name, items, sel } => draw_sessions(f, name, items, *sel),
         Mode::Config { dir, entries, sel, new } => draw_config(f, dir, entries, *sel, new),
         Mode::Help { docs, sel, scroll } => draw_help(f, docs, *sel, *scroll, &app.help_scroll_max),
+        Mode::Tokens { sel, scroll } => draw_tokens(f, app, *sel, *scroll),
     }
 }
 
@@ -1075,6 +1139,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         keyhint("M", if app.voice_muted { "UNMUTE" } else { "MUTE" }),
         keyhint("L", "LOGIN"),
         keyhint("U", "UPDATE"),
+        keyhint("T", "TOKENS"),
         keyhint("?", "DOCS"),
         keyhint("Q", "QUIT"),
     ]);
@@ -1630,12 +1695,449 @@ fn push_text(spans: &mut Vec<Span<'static>>, buf: &mut String) {
     }
 }
 
+// ── Tokens tab ──────────────────────────────────────────────────────────────
+
+/// Full-screen token accounting: the 5-hour window across the top, envs down
+/// the left, the highlighted env's detail on the right.
+fn draw_tokens(f: &mut Frame, app: &App, sel: usize, scroll: u16) {
+    let area = f.area();
+    f.render_widget(Clear, area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(ORANGE_HOT))
+        .title(Span::styled(
+            " TOKENS // USAGE ",
+            Style::default().fg(ORANGE_HOT).add_modifier(Modifier::BOLD),
+        ))
+        .title_bottom(
+            Line::from(Span::styled(
+                " [↑/↓] ENV · [PGUP/PGDN] SCROLL · [R] RESCAN · [ESC] CLOSE ",
+                Style::default().fg(DIM),
+            ))
+            .centered(),
+        )
+        .style(Style::default().bg(SURFACE));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let Some(report) = app.tokens.as_ref() else {
+        // Painted deliberately before the scan runs — see the 't' handler.
+        f.render_widget(
+            Paragraph::new(vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    "  SCANNING TRANSCRIPTS…",
+                    Style::default().fg(ORANGE_HOT).add_modifier(Modifier::BOLD),
+                )),
+                Line::from(Span::styled(
+                    "  Reading every archived session in contextdb. A few seconds.",
+                    Style::default().fg(MUTED),
+                )),
+            ])
+            .style(Style::default().bg(SURFACE)),
+            inner,
+        );
+        return;
+    };
+
+    if report.envs.is_empty() {
+        f.render_widget(
+            Paragraph::new(format!(
+                "\n  NO USAGE RECORDED YET — {} TRANSCRIPT FILE(S) SCANNED",
+                report.files_scanned
+            ))
+            .style(Style::default().fg(MUTED).bg(SURFACE)),
+            inner,
+        );
+        return;
+    }
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(4), Constraint::Min(3)])
+        .split(inner);
+
+    draw_token_window(f, rows[0], report);
+
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(44), Constraint::Min(24)])
+        .split(rows[1]);
+
+    draw_token_envs(f, cols[0], report, sel);
+    draw_token_detail(f, cols[1], report, sel, scroll, &app.tokens_scroll_max);
+}
+
+/// The current 5-hour rate-limit block, with a bar.
+///
+/// The bar is scaled against this machine's own peak block — **the
+/// subscription quota is in no transcript**, so there is no true denominator to
+/// scale against. The label says which ceiling is being used rather than
+/// implying a limit aello does not know.
+fn draw_token_window(f: &mut Frame, area: Rect, report: &tokens::Report) {
+    let now = tokens::now();
+    let lines = match report.current_block(now) {
+        None => vec![
+            Line::from(Span::styled(
+                " CURRENT 5H WINDOW",
+                Style::default().fg(ORANGE).add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled(
+                "   NONE OPEN — NO ACTIVITY IN THE LAST 5 HOURS",
+                Style::default().fg(MUTED),
+            )),
+        ],
+        Some(b) => {
+            let peak = report.peak_block_tokens();
+            let total = b.priced.usage.total();
+            let frac = if peak > 0 { (total as f64 / peak as f64).min(1.0) } else { 0.0 };
+            let width = 24usize;
+            let filled = (frac * width as f64).round() as usize;
+            let mut split: Vec<(&String, &tokens::Usage)> = b.by_env.iter().collect();
+            split.sort_by_key(|(_, u)| std::cmp::Reverse(u.total()));
+            let who: Vec<String> = split
+                .iter()
+                .take(4)
+                .map(|(n, u)| format!("{n} {}", tokens::fmt_tokens(u.total())))
+                .collect();
+            vec![
+                Line::from(vec![
+                    Span::styled(
+                        " CURRENT 5H WINDOW  ",
+                        Style::default().fg(ORANGE).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!(
+                            "{} → {}   {} IN · {} LEFT",
+                            tokens::fmt_time(b.start),
+                            tokens::fmt_time(b.end()),
+                            tokens::fmt_duration(now - b.start),
+                            tokens::fmt_duration(b.end() - now),
+                        ),
+                        Style::default().fg(MUTED),
+                    ),
+                ]),
+                Line::from(vec![
+                    Span::styled("   ", Style::default()),
+                    Span::styled(
+                        "█".repeat(filled),
+                        Style::default().fg(if frac > 0.8 { ERR } else { ORANGE_HOT }),
+                    ),
+                    Span::styled("░".repeat(width - filled), Style::default().fg(DIM)),
+                    Span::styled(
+                        format!(
+                            "  {} · {} · {:.0}% OF PEAK BLOCK ({})",
+                            tokens::fmt_tokens(total),
+                            tokens::fmt_cost(b.priced.cost),
+                            frac * 100.0,
+                            tokens::fmt_tokens(peak),
+                        ),
+                        Style::default().fg(AMBER).add_modifier(Modifier::BOLD),
+                    ),
+                ]),
+                Line::from(Span::styled(format!("   {}", who.join(" · ")), Style::default().fg(TEXT))),
+            ]
+        }
+    };
+    f.render_widget(Paragraph::new(lines).style(Style::default().bg(SURFACE_HI)), area);
+}
+
+fn draw_token_envs(f: &mut Frame, area: Rect, report: &tokens::Report, sel: usize) {
+    let header = Row::new(["ENV", "TOTAL", "COST"].map(|h| {
+        Cell::from(h)
+            .style(Style::default().fg(ORANGE).add_modifier(Modifier::BOLD | Modifier::UNDERLINED))
+    }))
+    .height(1);
+
+    let rows = report.envs.iter().enumerate().map(|(i, e)| {
+        let bg = if i % 2 == 0 { SURFACE } else { STRIPE };
+        Row::new(vec![
+            Cell::from(e.blueprint.clone()).style(Style::default().fg(TEXT)),
+            Cell::from(tokens::fmt_tokens(e.priced.usage.total()))
+                .style(Style::default().fg(AMBER)),
+            Cell::from(tokens::fmt_cost(e.priced.cost)).style(Style::default().fg(ORANGE_HOT)),
+        ])
+        .style(Style::default().bg(bg))
+    });
+
+    let total = report.total();
+    let table = Table::new(
+        rows,
+        [Constraint::Min(10), Constraint::Length(7), Constraint::Length(9)],
+    )
+    .header(header)
+    .block(
+        Block::default()
+            .borders(Borders::RIGHT)
+            .border_style(Style::default().fg(DIM))
+            .title_bottom(Line::from(Span::styled(
+                format!(
+                    " ALL: {} · {} ",
+                    tokens::fmt_tokens(total.usage.total()),
+                    tokens::fmt_cost(total.cost)
+                ),
+                Style::default().fg(MUTED),
+            )))
+            .style(Style::default().bg(SURFACE)),
+    )
+    .column_spacing(1)
+    .row_highlight_style(
+        Style::default().bg(ORANGE_HOT).fg(Color::Black).add_modifier(Modifier::BOLD),
+    )
+    .highlight_symbol("›");
+
+    let mut state = TableState::default();
+    state.select(Some(sel.min(report.envs.len().saturating_sub(1))));
+    f.render_stateful_widget(table, area, &mut state);
+}
+
+/// Right pane: the highlighted env's buckets, per-model split, and sessions.
+fn draw_token_detail(
+    f: &mut Frame,
+    area: Rect,
+    report: &tokens::Report,
+    sel: usize,
+    scroll: u16,
+    scroll_max: &std::cell::Cell<u16>,
+) {
+    let Some(e) = report.envs.get(sel) else { return };
+    let mut lines: Vec<Line> = Vec::new();
+
+    let kv = |k: &str, v: String| {
+        Line::from(vec![
+            Span::styled(format!("  {k:<14}"), Style::default().fg(MUTED)),
+            Span::styled(v, Style::default().fg(TEXT)),
+        ])
+    };
+    let section = |t: &str| {
+        Line::from(Span::styled(
+            format!(" {t}"),
+            Style::default().fg(ORANGE).add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+        ))
+    };
+
+    let u = &e.priced.usage;
+    lines.push(Line::from(Span::styled(
+        format!(" {} ", e.blueprint),
+        Style::default().fg(ORANGE_HOT).add_modifier(Modifier::BOLD),
+    )));
+    lines.push(kv("PROJECTS", e.projects.iter().cloned().collect::<Vec<_>>().join(", ")));
+    lines.push(kv(
+        "ACTIVE",
+        format!("{} → {}", tokens::fmt_time(e.first), tokens::fmt_time(e.last)),
+    ));
+    lines.push(Line::from(""));
+    lines.push(section("TOKENS"));
+    lines.push(kv("INPUT", tokens::fmt_tokens(u.input)));
+    lines.push(kv("OUTPUT", tokens::fmt_tokens(u.output)));
+    lines.push(kv(
+        "CACHE WRITE",
+        format!(
+            "{}   (5m {} · 1h {})",
+            tokens::fmt_tokens(u.cache_write()),
+            tokens::fmt_tokens(u.cache_write_5m),
+            tokens::fmt_tokens(u.cache_write_1h)
+        ),
+    ));
+    lines.push(kv("CACHE READ", tokens::fmt_tokens(u.cache_read)));
+    lines.push(kv("TOTAL", tokens::fmt_tokens(u.total())));
+    lines.push(Line::from(vec![
+        Span::styled("  COST          ", Style::default().fg(MUTED)),
+        Span::styled(
+            tokens::fmt_cost(e.priced.cost),
+            Style::default().fg(ORANGE_HOT).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("  (list API rates, estimated)", Style::default().fg(DIM)),
+    ]));
+    if e.priced.unpriced_tokens > 0 {
+        lines.push(Line::from(Span::styled(
+            format!(
+                "  {} TOKEN(S) UNPRICED — NO RATE FOR THAT MODEL",
+                tokens::fmt_tokens(e.priced.unpriced_tokens)
+            ),
+            Style::default().fg(ERR),
+        )));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(section("BY MODEL"));
+    let mut models: Vec<(&String, &tokens::Usage)> = e.priced.by_model.iter().collect();
+    models.sort_by_key(|(_, u)| std::cmp::Reverse(u.total()));
+    for (m, mu) in models {
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {m:<28}"), Style::default().fg(TEXT)),
+            Span::styled(
+                format!("{:>8}", tokens::fmt_tokens(mu.total())),
+                Style::default().fg(AMBER),
+            ),
+            Span::styled(
+                format!("  {:>9}", mu.cost(m).map(tokens::fmt_cost).unwrap_or_else(|| "—".into())),
+                Style::default().fg(MUTED),
+            ),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(section(&format!("SESSIONS ({})", e.sessions.len())));
+    lines.push(Line::from(Span::styled(
+        format!("  {:<17}{:>5}{:>8}{:>10}{:>10}", "STARTED", "MSGS", "SPAN", "TOTAL", "COST"),
+        Style::default().fg(DIM),
+    )));
+    for s in &e.sessions {
+        lines.push(Line::from(Span::styled(
+            format!(
+                "  {:<17}{:>5}{:>8}{:>10}{:>10}",
+                tokens::fmt_time(s.first),
+                s.messages,
+                tokens::fmt_duration(s.last - s.first),
+                tokens::fmt_tokens(s.priced.usage.total()),
+                tokens::fmt_cost(s.priced.cost),
+            ),
+            Style::default().fg(TEXT),
+        )));
+    }
+
+    // Same cap discipline as the docs reader: without it the tail of a long
+    // session list is unreachable.
+    let viewport = area.height.saturating_sub(1);
+    scroll_max.set((lines.len() as u16).saturating_sub(viewport));
+
+    f.render_widget(
+        Paragraph::new(lines)
+            .scroll((scroll, 0))
+            .style(Style::default().bg(SURFACE))
+            .block(Block::default().padding(Padding::new(1, 1, 0, 0))),
+        area,
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn press(code: KeyCode, mods: KeyModifiers) -> KeyEvent {
         KeyEvent::new(code, mods)
+    }
+
+    /// An `App` with no config on disk, for render tests.
+    fn bare_app() -> App {
+        App {
+            blueprints: Vec::new(),
+            local: Vec::new(),
+            view: Vec::new(),
+            show_all: false,
+            selected: 0,
+            mode: Mode::Normal,
+            add_agent: Agent::Claude,
+            status: String::new(),
+            dir: "TEST / DIR".into(),
+            has_token: true,
+            voice_muted: false,
+            help_scroll_max: std::cell::Cell::new(0),
+            tokens: None,
+            tokens_scroll_max: std::cell::Cell::new(0),
+        }
+    }
+
+    fn sample_report() -> tokens::Report {
+        use std::collections::{BTreeMap, BTreeSet};
+        let u = tokens::Usage {
+            input: 41_000,
+            output: 2_670_000,
+            cache_write_5m: 1_000_000,
+            cache_write_1h: 6_650_000,
+            cache_read: 744_000_000,
+        };
+        let mut by_model = BTreeMap::new();
+        by_model.insert("claude-opus-5".to_string(), u);
+        let priced = tokens::Priced {
+            usage: u,
+            cost: u.cost("claude-opus-5").unwrap(),
+            unpriced_tokens: 0,
+            by_model,
+        };
+        let now = tokens::now();
+        let env = tokens::EnvRoll {
+            blueprint: "TechnicalDirector".into(),
+            projects: BTreeSet::from(["aello".to_string()]),
+            priced: priced.clone(),
+            sessions: vec![tokens::SessionRoll {
+                id: "c95944da".into(),
+                project: "aello".into(),
+                first: now - 7200,
+                last: now - 600,
+                messages: 173,
+                priced: priced.clone(),
+            }],
+            first: now - 90_000,
+            last: now - 600,
+        };
+        let block = tokens::Block {
+            start: now - 3600,
+            last: now - 600,
+            priced: priced.clone(),
+            by_env: BTreeMap::from([("TechnicalDirector".to_string(), u)]),
+        };
+        tokens::Report {
+            envs: vec![env],
+            blocks: vec![block],
+            unknown_models: BTreeSet::new(),
+            files_scanned: 220,
+            messages: 15_092,
+            raw_records: 32_286,
+        }
+    }
+
+    /// Renders the whole tab into an offscreen buffer. Catches the failure a
+    /// layout change actually causes — a Rect wider than its parent panics
+    /// inside ratatui, and that panic would only ever surface on the user's
+    /// terminal. Also pins the two claims the pane must never overstate: the
+    /// cost is estimated, and the window percentage is against our own peak
+    /// block rather than an unknown subscription quota.
+    #[test]
+    fn tokens_tab_renders_and_labels_its_estimates() {
+        let mut app = bare_app();
+        app.tokens = Some(sample_report());
+        let mut term =
+            Terminal::new(ratatui::backend::TestBackend::new(140, 34)).expect("test terminal");
+        term.draw(|f| draw_tokens(f, &app, 0, 0)).expect("draw");
+
+        let text: String = term
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<Vec<_>>()
+            .concat();
+
+        assert!(text.contains("TOKENS // USAGE"));
+        assert!(text.contains("TechnicalDirector"));
+        assert!(text.contains("CURRENT 5H WINDOW"));
+        assert!(text.contains("OF PEAK BLOCK"), "the denominator must be named");
+        assert!(text.contains("estimated"), "cost must never read as a bill");
+        assert!(text.contains("CACHE READ"));
+        assert!(text.contains("SESSIONS (1)"));
+    }
+
+    /// The pre-scan frame is a real state, not a transient: the scan takes
+    /// seconds and the tab is entered before it runs.
+    #[test]
+    fn tokens_tab_shows_a_scanning_frame_before_any_data() {
+        let app = bare_app(); // tokens: None
+        let mut term =
+            Terminal::new(ratatui::backend::TestBackend::new(100, 20)).expect("test terminal");
+        term.draw(|f| draw_tokens(f, &app, 0, 0)).expect("draw");
+        let text: String = term
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<Vec<_>>()
+            .concat();
+        assert!(text.contains("SCANNING TRANSCRIPTS"));
     }
 
     /// A Cline env placed here is placed here. The filter asked whether
@@ -1810,3 +2312,4 @@ mod tests {
         assert_eq!(persona_index(Some("/custom/path.md")), 0);
     }
 }
+

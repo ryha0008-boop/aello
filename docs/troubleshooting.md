@@ -145,6 +145,20 @@ To find out whether the block is the thing that fired, look for `<env>/hooks/pla
 
 To undo it for one env, remove the `PreToolUse` group from `<env>/settings.json` — but note `place` heals it back on the next `aello run`, so the real change is to `src/hooks_pre_tool_use.py` and the registration in `project.rs`.
 
+## `aello tokens` reports nothing, or misses an env
+
+It reads transcripts, so an env with no *ended* session has nothing to report. Three specific causes:
+
+- **Wrong contextdb root.** `aello tokens` reads the path in `config.toml` (`C` in the TUI shows it). If that changed after sessions were archived, the old archives are still where they were.
+- **A Cline env.** Skipped on purpose — Cline writes no Claude Code transcripts, so a zero there would mean "not applicable", not "nothing spent". Reporting it as 0 would be the silent-zero failure this codebase keeps hitting.
+- **A live session in another project.** Sessions in the current directory are read live from `<env>/projects/*/`; sessions elsewhere only appear once they end and SessionEnd archives them. contextdb records a project's folder *name*, not its path, so there is no way to find those env dirs from here.
+
+## `aello tokens` numbers look about twice as big as expected
+
+That is the shape of a broken deduplication, and it is worth checking rather than assuming. Claude Code writes **one transcript record per content block** and repeats the message's entire `usage` object on each one, so summing records instead of distinct `message.id`s roughly doubles everything — measured here, 266 usage-bearing records for 173 messages, overstating output by 68%.
+
+`aello tokens` deduplicates and prints how many duplicates it collapsed in its footer. On a real archive that number should be large (53% of records on the machine this was built on). **A collapse count of zero is not a clean run** — it means the dedup stopped working. The same applies to any script you write against these files.
+
 ## Something else
 
 Open an issue at <https://github.com/ryha0008-boop/aello/issues>. The useful ones state what you ran, what happened, and what you expected — and say which of the two copies you measured, the checkout or the placed env.

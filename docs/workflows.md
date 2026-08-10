@@ -212,6 +212,21 @@ aello voice status               # mute state, voice pool, HOOK_VERSION
 
 The state is machine-wide and shared by every env, so these work from any directory whether or not a blueprint is placed there. In the TUI, `M` toggles the global mute. Mechanism and troubleshooting: [voice.md](voice.md).
 
+## Checking what an env has spent
+
+```sh
+aello tokens                 # every env + the current 5-hour window
+aello tokens AlgoMainDev     # one env
+aello tokens --sessions      # per-session breakdown
+aello tokens --json          # for scripts
+```
+
+Nothing needs enabling — it reads the transcripts contextdb has been archiving all along, so it covers history recorded before the feature existed. `T` in the TUI shows the same data with the window across the top, envs down the left, and the selected env's buckets, per-model split and session list on the right.
+
+Read the output knowing two things. The **cost is an estimate at list API rates**, not a bill — an env runs on a subscription, where no per-token charge exists — and the **5-hour percentage is against your own busiest 5-hour block, not your plan's quota**, because the quota appears in no transcript. Both are labelled in the output; [tokens.md](tokens.md) explains why.
+
+Worth knowing before you draw conclusions: cache reads usually dwarf everything else, so a "wordy agent" is almost never where the tokens went.
+
 ## Removing an environment
 
 ```sh

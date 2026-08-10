@@ -1,5 +1,6 @@
 use anyhow::{bail, Context, Result};
 use clap::{CommandFactory, Parser, Subcommand};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 mod auth;
@@ -12,6 +13,7 @@ mod models;
 mod project;
 mod sessions;
 mod templates;
+mod tokens;
 mod tui;
 mod update;
 mod voice;
@@ -147,6 +149,22 @@ enum Commands {
         #[arg(long)]
         project: Option<PathBuf>,
     },
+    /// Token usage and estimated cost, per env.
+    ///
+    /// Read back out of the transcripts contextdb already archives — no new
+    /// hook, nothing to enable. Costs are list API rates applied to a
+    /// subscription's usage, so they answer "what would this have cost on the
+    /// API", not "what were you billed".
+    Tokens {
+        /// Only this blueprint (default: every env).
+        name: Option<String>,
+        /// List individual sessions rather than per-env totals.
+        #[arg(long)]
+        sessions: bool,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
     /// Mute or unmute the voice (applies to every env).
     Voice {
         #[command(subcommand)]
@@ -236,6 +254,7 @@ fn main() {
         Some(Commands::Docs { name }) => cmd_docs(name),
         Some(Commands::Restore { name, project }) => cmd_restore(name, project),
         Some(Commands::Persona { name, from, project }) => cmd_persona(name, from, project),
+        Some(Commands::Tokens { name, sessions, json }) => cmd_tokens(name, sessions, json),
         Some(Commands::Voice { action }) => match action {
             VoiceAction::Mute { project } => voice::mute(project),
             VoiceAction::Unmute { project } => voice::unmute(project),
@@ -1051,6 +1070,236 @@ fn cmd_docs(name: Option<String>) -> Result<()> {
             }
         },
     }
+    Ok(())
+}
+
+/// Token usage per env, from the transcripts contextdb already archives.
+fn cmd_tokens(name: Option<String>, sessions: bool, json: bool) -> Result<()> {
+    let cwd = std::env::current_dir()?;
+    let report = tokens::scan(&tokens::collect_sources(&cwd));
+
+    if report.messages == 0 {
+        println!("No token usage recorded yet.");
+        println!(
+            "Scanned {} transcript file(s). contextdb fills up as sessions end.",
+            report.files_scanned
+        );
+        return Ok(());
+    }
+
+    // Filter after scanning, never before: the 5-hour window is a shared quota,
+    // so it has to be computed across every env even when one is being shown.
+    let envs: Vec<&tokens::EnvRoll> = match &name {
+        Some(n) => report.envs.iter().filter(|e| e.blueprint.eq_ignore_ascii_case(n)).collect(),
+        None => report.envs.iter().collect(),
+    };
+    if envs.is_empty() {
+        let known: Vec<&str> = report.envs.iter().map(|e| e.blueprint.as_str()).collect();
+        bail!("no recorded usage for '{}'. Known: {}", name.unwrap_or_default(), known.join(", "));
+    }
+
+    if json {
+        return print_tokens_json(&report, &envs, sessions);
+    }
+
+    if sessions {
+        print_session_table(&envs);
+    } else {
+        print_env_table(&envs);
+    }
+    print_window(&report);
+
+    println!();
+    println!(
+        "{} message(s) across {} transcript file(s); {} duplicate content-block record(s) collapsed.",
+        report.messages,
+        report.files_scanned,
+        report.raw_records.saturating_sub(report.messages)
+    );
+    println!("Cost is estimated at list API rates on subscription usage — not a bill.");
+    // Only worth a line when tokens were actually dropped. `<synthetic>` is a
+    // Claude Code marker with no usage attached, so it matches no rate and
+    // costs nothing — announcing "0 tokens excluded" for it every run trains
+    // you to ignore the warning that matters.
+    let total = report.total();
+    if total.unpriced_tokens > 0 {
+        println!(
+            "{} token(s) excluded from cost — no rate for: {}",
+            tokens::fmt_tokens(total.unpriced_tokens),
+            report.unknown_models.iter().cloned().collect::<Vec<_>>().join(", ")
+        );
+    }
+    println!("Live sessions are only counted for envs placed in this directory; elsewhere they appear once the session ends.");
+    Ok(())
+}
+
+fn print_env_table(envs: &[&tokens::EnvRoll]) {
+    let w = envs.iter().map(|e| e.blueprint.len()).max().unwrap_or(9).max(9);
+    println!(
+        "{:<w$}  {:>8}  {:>8}  {:>9}  {:>9}  {:>9}  {:>10}",
+        "BLUEPRINT", "IN", "OUT", "CACHE-W", "CACHE-R", "TOTAL", "COST"
+    );
+    let mut sum = tokens::Priced::default();
+    for e in envs {
+        let u = &e.priced.usage;
+        println!(
+            "{:<w$}  {:>8}  {:>8}  {:>9}  {:>9}  {:>9}  {:>10}",
+            e.blueprint,
+            tokens::fmt_tokens(u.input),
+            tokens::fmt_tokens(u.output),
+            tokens::fmt_tokens(u.cache_write()),
+            tokens::fmt_tokens(u.cache_read),
+            tokens::fmt_tokens(u.total()),
+            tokens::fmt_cost(e.priced.cost),
+        );
+        sum.usage.add(u);
+        sum.cost += e.priced.cost;
+    }
+    if envs.len() > 1 {
+        println!("{:-<w$}  {:->8}  {:->8}  {:->9}  {:->9}  {:->9}  {:->10}", "", "", "", "", "", "", "");
+        println!(
+            "{:<w$}  {:>8}  {:>8}  {:>9}  {:>9}  {:>9}  {:>10}",
+            "TOTAL",
+            tokens::fmt_tokens(sum.usage.input),
+            tokens::fmt_tokens(sum.usage.output),
+            tokens::fmt_tokens(sum.usage.cache_write()),
+            tokens::fmt_tokens(sum.usage.cache_read),
+            tokens::fmt_tokens(sum.usage.total()),
+            tokens::fmt_cost(sum.cost),
+        );
+    }
+}
+
+fn print_session_table(envs: &[&tokens::EnvRoll]) {
+    for e in envs {
+        println!("\n{} — {} session(s)", e.blueprint, e.sessions.len());
+        println!(
+            "  {:<16}  {:>5}  {:>7}  {:>9}  {:>9}  {:>10}  {}",
+            "STARTED", "MSGS", "SPAN", "IN+OUT", "TOTAL", "COST", "SESSION"
+        );
+        for s in &e.sessions {
+            let u = &s.priced.usage;
+            println!(
+                "  {:<16}  {:>5}  {:>7}  {:>9}  {:>9}  {:>10}  {}",
+                tokens::fmt_time(s.first),
+                s.messages,
+                tokens::fmt_duration(s.last - s.first),
+                tokens::fmt_tokens(u.input + u.output),
+                tokens::fmt_tokens(u.total()),
+                tokens::fmt_cost(s.priced.cost),
+                s.id.chars().take(8).collect::<String>(),
+            );
+        }
+    }
+}
+
+/// The current 5-hour rate-limit block.
+///
+/// The percentage is deliberately against this machine's own peak block, not a
+/// quota: **the subscription's limit appears in no transcript**, so any fixed
+/// denominator would be invented. Saying which ceiling is being used keeps the
+/// number honest.
+fn print_window(report: &tokens::Report) {
+    let now = tokens::now();
+    println!();
+    let Some(b) = report.current_block(now) else {
+        println!("CURRENT 5H WINDOW  none open — no activity in the last 5 hours.");
+        return;
+    };
+    let peak = report.peak_block_tokens();
+    let total = b.priced.usage.total();
+    let pct = if peak > 0 { total as f64 / peak as f64 * 100.0 } else { 0.0 };
+    println!(
+        "CURRENT 5H WINDOW  {} → {}  ({} in, {} left)",
+        tokens::fmt_time(b.start),
+        tokens::fmt_time(b.end()),
+        tokens::fmt_duration(now - b.start),
+        tokens::fmt_duration(b.end() - now),
+    );
+    println!(
+        "  {} tokens · {} · {:.0}% of your peak 5h block ({})",
+        tokens::fmt_tokens(total),
+        tokens::fmt_cost(b.priced.cost),
+        pct,
+        tokens::fmt_tokens(peak),
+    );
+    let mut split: Vec<(&String, &tokens::Usage)> = b.by_env.iter().collect();
+    split.sort_by_key(|(_, u)| std::cmp::Reverse(u.total()));
+    let line: Vec<String> = split
+        .iter()
+        .map(|(n, u)| format!("{n} {}", tokens::fmt_tokens(u.total())))
+        .collect();
+    println!("  {}", line.join(" · "));
+}
+
+fn print_tokens_json(
+    report: &tokens::Report,
+    envs: &[&tokens::EnvRoll],
+    sessions: bool,
+) -> Result<()> {
+    let usage_json = |u: &tokens::Usage| {
+        serde_json::json!({
+            "input": u.input,
+            "output": u.output,
+            "cache_write_5m": u.cache_write_5m,
+            "cache_write_1h": u.cache_write_1h,
+            "cache_read": u.cache_read,
+            "total": u.total(),
+        })
+    };
+    let env_json: Vec<serde_json::Value> = envs
+        .iter()
+        .map(|e| {
+            let mut v = serde_json::json!({
+                "blueprint": e.blueprint,
+                "projects": e.projects,
+                "usage": usage_json(&e.priced.usage),
+                "cost_usd": e.priced.cost,
+                "unpriced_tokens": e.priced.unpriced_tokens,
+                "first": e.first,
+                "last": e.last,
+                "sessions": e.sessions.len(),
+            });
+            if sessions {
+                v["session_detail"] = serde_json::json!(e
+                    .sessions
+                    .iter()
+                    .map(|s| serde_json::json!({
+                        "id": s.id,
+                        "project": s.project,
+                        "first": s.first,
+                        "last": s.last,
+                        "messages": s.messages,
+                        "usage": usage_json(&s.priced.usage),
+                        "cost_usd": s.priced.cost,
+                    }))
+                    .collect::<Vec<_>>());
+            }
+            v
+        })
+        .collect();
+
+    let now = tokens::now();
+    let window = report.current_block(now).map(|b| {
+        serde_json::json!({
+            "start": b.start,
+            "end": b.end(),
+            "usage": usage_json(&b.priced.usage),
+            "cost_usd": b.priced.cost,
+            "peak_block_tokens": report.peak_block_tokens(),
+            "by_env": b.by_env.iter().map(|(k, u)| (k.clone(), u.total())).collect::<BTreeMap<_, _>>(),
+        })
+    });
+
+    let out = serde_json::json!({
+        "envs": env_json,
+        "window": window,
+        "unknown_models": report.unknown_models,
+        "files_scanned": report.files_scanned,
+        "messages": report.messages,
+        "cost_basis": "list API rates, estimated — not a bill",
+    });
+    println!("{}", serde_json::to_string_pretty(&out)?);
     Ok(())
 }
 

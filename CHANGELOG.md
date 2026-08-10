@@ -3,6 +3,39 @@
 ## [Unreleased]
 
 ### Added
+- **`aello tokens` and a `T` tab in the TUI — token usage and estimated cost per
+  env.** Input / output / cache-write / cache-read kept apart, because they price
+  as much as 20x apart; per-model split, per-session breakdown (`--sessions`), and
+  `--json`. It needs nothing enabled and works retroactively: the source is the
+  transcripts contextdb has been archiving all along, so history recorded before
+  this existed is already counted. Live sessions in the current directory are read
+  too, so the session you are sitting in shows up before it ends; sessions in other
+  projects appear once they do (contextdb records a project's folder name, not its
+  path, so their env dirs can't be located from elsewhere).
+
+  **Deduplicating by `message.id` is the whole correctness story, not a detail.**
+  Claude Code writes one transcript record per *content block* and repeats the
+  message's full `usage` on each, so summing records roughly doubles the answer —
+  measured on a real transcript here, 266 usage-bearing records for 173 distinct
+  messages, overstating output by 68% (218,607 vs 129,877). The same dedup absorbs
+  a session archived twice (17 of 122 archives on this machine) and the overlap
+  between an archive and the live transcript it was copied from, which is what
+  makes reading both sources safe at all. The CLI prints how many duplicates it
+  collapsed; on a real archive that number being zero means the dedup broke, not
+  that the run was clean.
+
+  Two claims the output refuses to overstate. **Cost is an estimate at list API
+  rates, never a bill** — an env runs on a subscription, where no per-token charge
+  exists — and a model with no rate entry is *quarantined into an `unpriced` total
+  and named*, never silently priced at zero, which is the failure shape this repo
+  keeps hitting. **The 5-hour percentage is against this machine's own peak block,
+  not a plan quota**: the subscription's limit appears in no transcript, so aello
+  cannot read it and does not guess, and the label says which ceiling it used.
+  Blocks are computed across every env because the quota is machine-wide (one
+  shared token), with a per-env split inside the current block so you can see which
+  env is eating it. Verified against real data: the cost arithmetic reproduces
+  independently to the cent, and the dedup matches a hand measurement of the same
+  transcript. See `docs/tokens.md`.
 - **`aello restore <name>` — work one blueprint from two machines.** The tracked
   `claude-internal/<name>/` mirror already carried a blueprint's memory, skills
   and persona into git, and `aello run` seeded a fresh clone from it. The return

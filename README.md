@@ -15,6 +15,7 @@ Isolated agent environments — like Python venvs, but for AI agents.
 - **Role-driven** — one choice per blueprint: `maintainer` owns the repo's docs and git, `contributor` commits its own work and logs it, `standalone` works alone. aello scaffolds the matching files and generates a `/sync` skill tailored to exactly that.
 - **Spoken** — every env reads each response's `TL;DR:` line aloud, with a different voice per concurrent session and one `aello voice mute` to stop them all.
 - **Same manners everywhere** — four rules ride every prompt in every env: be concise, don't be sycophantic, never hand over a plan for approval (plan mode is blocked outright), and close with one block — the spoken `TL;DR:` line, with 3–4 next steps beneath it, written to stand alone so you can skip the prose entirely.
+- **Accounted** — `aello tokens` (and `T` in the TUI) reports what each env has spent — input, output, cache write, cache read — with an estimated list-rate cost, read back out of transcripts aello was already archiving, so it works over history recorded before the feature existed.
 - **Attributable** — commits made through a blueprint are authored as `<blueprint> <blueprint@aello.local>`, so multi-agent work is traceable.
 
 Cross-platform: Linux (x86_64), macOS (Apple Silicon + Intel), Windows (x86_64).
@@ -138,6 +139,7 @@ aello run [name] [--resume [id]] [-p <prompt>] [-- <extra args for the agent>]
 aello login [--agent claude|cline]             # store a shared login (asks which, if unsaid)
 aello github-setup [--name <repo>] [--public] [--yes]   # create + push the repo via gh
 aello docs [name]                              # print bundled reference docs (no name lists them)
+aello tokens [name] [--sessions] [--json]      # token usage + estimated cost per env
 aello voice <mute|unmute|stop|status> [--project]       # off switch for the voice
 aello completions <bash|zsh|fish|powershell|elvish>     # print a shell completion script
 aello update [--force]                         # self-update (--force reinstalls the current version)
@@ -160,7 +162,7 @@ aello update [--force]                         # self-update (--force reinstalls
 
 ### TUI keys
 
-`↑/↓` move · `↵` run · `F` filter · `S` sessions · `A` add (guided) · `E` edit (guided) · `D` delete · `C` contextdb folder · `M` mute voice · `L` login · `U` update · `?` docs · `Q` quit. Command keys are case-insensitive, and `Ctrl+C` quits from anywhere. In the docs reader (`?`), `Home`/`End` jump to the start and end of a page.
+`↑/↓` move · `↵` run · `F` filter · `S` sessions · `A` add (guided) · `E` edit (guided) · `D` delete · `C` contextdb folder · `M` mute voice · `L` login · `U` update · `T` tokens · `?` docs · `Q` quit. Command keys are case-insensitive, and `Ctrl+C` quits from anywhere. In the docs reader (`?`), `Home`/`End` jump to the start and end of a page.
 
 `M` toggles the same machine-wide mute as `aello voice mute` — it silences every env, not just the selected blueprint, and cuts off whatever is speaking. While muted the footer reads `VOICE: MUTED`, so a silent machine doesn't look like a broken hook.
 
@@ -169,6 +171,8 @@ By default the registry shows only blueprints already placed in the current dire
 `E` edits the selected blueprint through the same guided steps as add, pre-filled with its current model, persona, and role (the name isn't editable). Changes apply on the next `run`.
 
 `?` opens a full-screen docs reader over the repo's `docs/` (`↑/↓` scroll, `Tab`/`←→` switch doc, `Esc` close). The same content is available from the CLI via `aello docs`.
+
+`T` opens the token tab: the current 5-hour window across the top, envs down the left, and the selected env's buckets, per-model split and session list on the right (`↑/↓` env, `PgUp`/`PgDn` scroll, `R` rescan, `Esc` close). The scan reads every archived transcript, so it happens once per TUI session and is cached — the first open shows `SCANNING…` for a few seconds rather than freezing.
 
 ## Roles
 
@@ -226,6 +230,26 @@ While it speaks it lowers other applications and puts them back afterwards. An a
 **You'll need** Python 3, and `pip install edge-tts` for the good voices — without it you get your OS's built-in voice. On Linux you also need one of `mpv`, `ffplay`, `mpg123` or `cvlc` to play audio.
 
 Not hearing anything? Run `aello voice status` first. [`docs/voice.md`](docs/voice.md) covers the rest.
+
+## Token usage
+
+`aello tokens` reports what each env has spent, split into input / output / cache-write / cache-read — the four buckets that price 20x apart — plus an estimated cost. `T` in the TUI shows the same thing.
+
+```sh
+aello tokens                 # per-env totals + the current 5-hour window
+aello tokens <name>          # one env
+aello tokens --sessions      # per-session breakdown
+aello tokens --json          # machine-readable
+```
+
+Nothing needs enabling: this reads the transcripts contextdb already archives, so it works retroactively over history recorded before the feature existed. Live sessions in the current directory are counted too; sessions running in other projects appear once they end.
+
+Two things the output is deliberately explicit about, because both are easy to misread:
+
+- **Cost is an estimate at list API rates, not a bill.** An aello env runs on a Claude subscription, where no per-token charge exists. The figure answers "what would this have cost on the API". A model with no rate in the table is never priced at zero — its tokens are quarantined and the model id is named.
+- **The 5-hour percentage is against your own peak block, not your plan's quota.** The subscription limit appears in no transcript, so aello cannot read it and doesn't invent one. The largest 5-hour block ever recorded on the machine is the denominator, and the output says so.
+
+[`docs/tokens.md`](docs/tokens.md) has the details, including why deduplicating by message id is load-bearing (Claude Code writes one record per content block, so summing records overstates output by ~68%).
 
 ## Git attribution
 

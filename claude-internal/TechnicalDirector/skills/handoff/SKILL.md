@@ -47,9 +47,16 @@ Write these sections, in order:
 Keep it tight and skimmable. Then tell the user the note is written and remind
 them it is deleted on next boot.
 
-`TechnicalDirector.HANDOFF.md` is **never committed.** It is untracked on purpose and gone
-by the next boot, so if you run `/sync` after this, leave it out of the staging
-list — it is a file you created this session, and that rule does not cover it.
+**The file at the project root is never committed.** It is untracked on purpose
+and gone by the next boot, so if you run `/sync` after this, leave
+`TechnicalDirector.HANDOFF.md` out of the staging list — it is a file you created this
+session, and that rule does not cover it.
+
+What *is* committed is the copy `/sync`'s mirror step snapshots to
+`claude-internal/TechnicalDirector/handoff.md`, and that copy is how this note reaches a
+second machine working the same repo. It only happens if the snapshot is taken
+after you write — so the order is **`/handoff` first, then `/sync`**. Mention that
+to the user if they are about to switch machines.
 
 ---
 
