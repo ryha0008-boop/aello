@@ -220,7 +220,10 @@ Version-control this env's internal config by mirroring it into the tracked `cla
 - Mirror this env's memory dir (`.claude-env-{name}/projects/<this-project>/memory/`) → `claude-internal/{name}/memory/`. **Add and overwrite; never delete a mirror note that has no counterpart in the env dir** — on a repo worked from two machines that note is the other machine's, and dropping it here is how it disappears. Deleting one for real is a deliberate `git rm`.
 - Snapshot `.claude-env-{name}/CLAUDE.md` → `claude-internal/{name}/persona.CLAUDE.md` — **keep this exact name**, never `CLAUDE.md`, so Claude Code does not auto-load the snapshot as a second persona.
 - If `{name}.HANDOFF.md` exists at the project root, snapshot it → `claude-internal/{name}/handoff.md`. **Lowercase `handoff.md`, and this copy IS committed** — it is the only way the resume note reaches another machine, since the root file is gitignored in some repos and deleted on the next boot in all of them. So run `/handoff` **before** `/sync`, not after: a note written afterwards misses this step and stays on this machine. Absent means nothing was written this session — leave the existing snapshot alone rather than deleting it.
+- **Read what you are about to publish, before you stage it.** This folder is your memory and your handoff, and it is the one part of this commit that nobody wrote for a reader. Memory notes are exactly where a session writes down a credential it just used — a provider API key, an OAuth token, an SSH key, a database password, the contents of a `.env`. Grep the mirror for them (`sk-ant-`, `ghp_`, `AKIA`, `BEGIN .* PRIVATE KEY`, `password`, `api_key`, `token`) and **read the hits**. If one is real key material: **stop, do not stage, do not commit**, remove it from the env's memory note as well as the mirror, and tell the user which note it was in. Do not note it and carry on — a commit is published the moment it is pushed, and rewriting history is not a fix once it is.
+- **Assume this repo is public unless you have checked.** `gh repo view --json visibility` answers it in one call. Identifiers are not the concern — IPs, hostnames, machine paths and domains are all fine — credentials and passwords are.
 - Stage it by explicit path: `git add claude-internal/{name}`. This folder is tracked on purpose — it is *not* covered by the `.claude-env-*` gitignore line.
+- A `pre-commit` hook in `.githooks/` refuses the commit if key material reaches the index anyway; the check above is so you find it *before* you have written it into a commit message and a mirror. **Never pass `--no-verify`.** If the hook fires, it found something real — read what it named.
 "
         ));
         s.push_str(&format!(
@@ -559,6 +562,32 @@ mod tests {
         let mirror = s.find("Mirror this env's internal config").expect("mirror step");
         let commit = s.find("## Commit + push").expect("commit step");
         assert!(mirror < commit, "mirror must be staged before commit");
+    }
+
+    /// The mirror step used to stage `claude-internal/` blind, and the whole
+    /// safety story was the sentence "this folder is tracked on purpose". It is
+    /// a session's own memory — the one place a password gets written down in
+    /// passing — and on this repo it goes to a public remote. The check has to
+    /// come *before* the stage, and it has to say refuse rather than warn: a
+    /// finding reported after the push is not a finding.
+    #[test]
+    fn sync_reads_the_mirror_before_it_publishes_it() {
+        let caps = Capabilities { github: true, ..Default::default() };
+        let s = render_sync_skill(&caps, "reviewer");
+
+        let check = s.find("before you stage it").expect("mirror must be reviewed before staging");
+        let stage = s.find("git add claude-internal/reviewer").expect("stage step");
+        assert!(check < stage, "the credential check must come before the stage");
+
+        assert!(s.contains("do not stage, do not commit"), "must refuse, not warn");
+        assert!(s.contains("Never pass `--no-verify`"));
+        // Scoped to what actually matters. An identifier scrubber produces a
+        // report nobody reads, and a report nobody reads protects nothing.
+        assert!(s.contains("BEGIN .* PRIVATE KEY"));
+        assert!(
+            s.contains("IPs, hostnames, machine paths and domains are all fine"),
+            "the scope has to be stated or this grows into a scrubber"
+        );
     }
 
     #[test]

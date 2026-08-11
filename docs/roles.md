@@ -22,6 +22,7 @@ Each role scaffolds the files it maintains, on placement, **only if missing** �
 | `.gitattributes` (CRLF normalize) | ✅ | ✅ | — |
 | `VERSION` + `.github/workflows/version.yml` (patch-bump CI) | ✅ | ✅ | — |
 | tracked `claude-internal/<name>/` mirror | ✅ | ✅ | — |
+| `.githooks/pre-commit` (blocks committed key material) | ✅ | ✅ | — |
 | `CHANGELOG.md` (`## [Unreleased]`) | ✅ | ✅ | — |
 | project-root `CLAUDE.md` | ✅ | — | — |
 | `docs/` directory | ✅ | — | — |
@@ -93,6 +94,19 @@ Reading the mirror back into an env happens in two places:
 The folder is **namespaced per blueprint** so multiple blueprints sharing one repo don't clobber each other's mirror. The persona snapshot is deliberately **not** named `CLAUDE.md` (which Claude Code would auto-load as a second persona). The folder is seeded at placement and refreshed by every `/sync`; it is **not** covered by the `.claude-env-*` gitignore line, so it commits normally.
 
 The skill is re-generated on every `aello run`, so changing a blueprint's role updates its `/sync` on the next placement. A `standalone` blueprint gets no `/sync` skill at all.
+
+### What stops a secret reaching the mirror
+
+The mirror is a session's own memory, and memory notes are exactly where a session writes down a credential it just used. `/sync` stages the folder **by path**, so nothing in that chain reads what is in it — and at least one repo on this account is public, which makes it a publish rather than a backup.
+
+Two guards, deliberately narrow:
+
+- **A `pre-commit` hook**, seeded to `.githooks/pre-commit` alongside the other `github` scaffolding, which blocks armored private keys, PuTTY keys, real `.env` files (`.env.example` passes), certificate and keystore bundles, `.netrc`/`.pgpass`/`.htpasswd`, port-knock sequences, and non-placeholder provider API keys. It is enabled with `git config core.hooksPath .githooks`, which aello re-runs **on every placement** — that setting is per-clone local config and does not travel with a pull, so a fresh clone otherwise has the file and no guard. If the repo already points `core.hooksPath` somewhere else, aello leaves it alone.
+- **A step in `/sync`** telling the agent to read the mirror for credentials *before* staging it and to refuse rather than warn — the hook catches what reaches the index, but by then the finding is already in a commit message and a mirror refresh.
+
+**What they deliberately do not check: IP addresses, hostnames, machine paths and domains.** Those are identifiers, not secrets, and flagging them produces a long report that gets skimmed once and then bypassed with `--no-verify` — at which point the real check is gone too. The scope is credentials that spend money and passwords whose only value is being unknown.
+
+The hook file carries an `aello-pre-commit v<N>` marker. A copy with an older marker is upgraded on the next placement, so a widened pattern reaches projects scaffolded months ago; a `pre-commit` **without** the marker is somebody's own hook and is never touched. It is written with LF regardless of your checkout, and `.githooks/* text eol=lf` is appended to the project's `.gitattributes` — hooks are run by `sh`, a CRLF one silently fails to execute, and the file has no extension so a `*.sh` rule does not cover it.
 
 ## Git attribution
 

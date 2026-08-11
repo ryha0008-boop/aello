@@ -5,3 +5,4 @@
 *.md text
 *.sh text eol=lf
 *.exe binary
+.githooks/* text eol=lf

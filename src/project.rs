@@ -29,6 +29,15 @@ const FOCUS_SCRIPT: &str = include_str!("hooks_focus.py");
 const NOTIFY_SCRIPT: &str = include_str!("hooks_notify.py");
 const WIN_AUDIO_SCRIPT: &str = include_str!("hooks_win_audio.ps1");
 
+/// The `pre-commit` hook seeded into every `github` project — see
+/// [`seed_pre_commit_hook`] for why it exists and how it is kept current.
+const PRE_COMMIT_HOOK: &str = include_str!("pre_commit_hook.sh");
+/// Bump together with the `aello-pre-commit v<N>` marker inside the script; a
+/// placed copy below this is replaced on the next placement. A test pins them
+/// to each other, since a widened pattern that never reaches an already
+/// scaffolded project is a guard that only looks deployed.
+const PRE_COMMIT_VERSION: u32 = 1;
+
 /// The `HOOK_VERSION` of the vendored copy above. Upstream bumps its constant
 /// whenever one of the five hook-path files changes, so comparing the two is
 /// how this copy learns it has fallen behind — see the test at the bottom of
@@ -534,6 +543,7 @@ fn scaffold_project(
                 .context("could not create .github/workflows dir")?;
             std::fs::write(&wf, VERSION_WORKFLOW).context("could not write version.yml")?;
         }
+        seed_pre_commit_hook(project)?;
     }
     // Seed the tracked claude-internal/ mirror so the env's skills, memory, and
     // persona are version-controlled from the first commit. Deliberately NOT
@@ -861,6 +871,114 @@ fn merge_dir(src: &Path, dst: &Path) -> Result<Vec<String>> {
     }
     extra.sort();
     Ok(extra)
+}
+
+/// Seed `.githooks/pre-commit` and point the clone at it.
+///
+/// Why aello does this at all: `/sync` mirrors an env's memory, persona and
+/// handoff into the tracked `claude-internal/<name>/` folder and stages it by
+/// path with **no check of what is in it**. Memory notes are exactly where a
+/// session writes down a password it just used, and one of the repos this runs
+/// in is public. Blocking a commit is the only point in that chain that can
+/// refuse; a skill instruction cannot, because the skill is advice to an agent.
+///
+/// Three properties, each of which cost somebody a debugging session:
+///
+/// * **Written with LF regardless of checkout.** Hooks are run by `sh` and a
+///   CRLF `pre-commit` fails to execute — and it has no extension, so a `*.sh`
+///   attribute rule does not cover the copy in the target project. Normalising
+///   here means the guard cannot be silently disabled by the line endings of
+///   whoever cloned aello.
+/// * **`core.hooksPath` is set on every placement, not once.** It is per-clone
+///   local config and does not travel with a pull, so a fresh clone of a project
+///   that has the file has no guard until something sets it again. Re-running it
+///   is what heals that; a marker recording "already configured" would go stale
+///   exactly when the repo is re-cloned. It is skipped when the setting already
+///   points somewhere else, since that is a hook layout aello did not build.
+/// * **Only aello's own copy is replaced.** The file carries a
+///   `aello-pre-commit v<N>` marker on line 2. A copy with an older marker is
+///   upgraded, so a widened pattern reaches projects scaffolded months ago; a
+///   file *without* the marker is somebody's own hook and is left alone.
+fn seed_pre_commit_hook(project: &Path) -> Result<()> {
+    // Not a git repo yet (`github-setup` runs later, or never): the hook would
+    // sit there unread and `git config` would fail. Nothing to do.
+    if !project.join(".git").exists() {
+        return Ok(());
+    }
+    let dir = project.join(".githooks");
+    let path = dir.join("pre-commit");
+    let ours = PRE_COMMIT_HOOK.replace("\r\n", "\n");
+
+    let write = match read_existing(&path)? {
+        None => true,
+        Some(existing) => match pre_commit_version(&existing) {
+            // Someone else's hook. Leave it; they own this path now.
+            None => false,
+            Some(v) => v < PRE_COMMIT_VERSION,
+        },
+    };
+    if write {
+        std::fs::create_dir_all(&dir).context("could not create .githooks dir")?;
+        std::fs::write(&path, &ours).context("could not write .githooks/pre-commit")?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755));
+        }
+    }
+
+    // Keep git from converting the hook to CRLF on a Windows checkout of the
+    // *target* project. `.githooks/*` rather than `*.sh`: the file has no
+    // extension, which is how this breaks silently.
+    ensure_gitattributes_entry(project, ".githooks/* text eol=lf")?;
+
+    let current = std::process::Command::new("git")
+        .arg("-C")
+        .arg(project)
+        .args(["config", "--local", "--get", "core.hooksPath"])
+        .output();
+    let configured = match &current {
+        Ok(o) => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+        Err(_) => return Ok(()), // no git binary; the file is still seeded
+    };
+    if configured.is_empty() || configured == ".githooks" {
+        let _ = std::process::Command::new("git")
+            .arg("-C")
+            .arg(project)
+            .args(["config", "--local", "core.hooksPath", ".githooks"])
+            .status();
+    }
+    Ok(())
+}
+
+/// The `aello-pre-commit v<N>` marker on line 2 of our own hook, or `None` when
+/// the file is not one of ours.
+fn pre_commit_version(text: &str) -> Option<u32> {
+    text.lines()
+        .take(5)
+        .find_map(|l| l.split("aello-pre-commit v").nth(1))
+        .and_then(|rest| {
+            let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            digits.parse().ok()
+        })
+}
+
+/// Ensure `entry` exists as its own line in the project's `.gitattributes`.
+/// Same contract as [`ensure_gitignore_entry`] — idempotent, append-only, and
+/// it refuses rather than clobbering when the existing file cannot be read.
+fn ensure_gitattributes_entry(project: &Path, entry: &str) -> Result<()> {
+    let path = project.join(".gitattributes");
+    let existing = read_existing(&path)?.unwrap_or_default();
+    if existing.lines().any(|l| l.trim() == entry) {
+        return Ok(());
+    }
+    let mut out = existing;
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str(entry);
+    out.push('\n');
+    std::fs::write(&path, out).context("could not write .gitattributes")
 }
 
 /// Ensure `entry` exists as its own line in the project's `.gitignore`, creating
@@ -1815,6 +1933,112 @@ mod tests {
         place(&env, &inst, None, &caps).unwrap();
         let after_second = std::fs::read_to_string(&gi).unwrap();
         assert_eq!(after_second.matches(".claude-env-*").count(), 1);
+    }
+
+    /// The version constant and the marker inside the script are two halves of
+    /// one fact. If they drift, a placed copy either never upgrades (marker
+    /// ahead) or upgrades on every single placement (marker behind) — and both
+    /// look like the feature working.
+    #[test]
+    fn the_pre_commit_marker_matches_the_recorded_version() {
+        assert_eq!(
+            pre_commit_version(PRE_COMMIT_HOOK),
+            Some(PRE_COMMIT_VERSION),
+            "the `aello-pre-commit v<N>` marker in src/pre_commit_hook.sh disagrees \
+             with PRE_COMMIT_VERSION ({PRE_COMMIT_VERSION})"
+        );
+    }
+
+    /// The hook is only a guard if it refuses. This runs the real script through
+    /// `sh` against a real staged blob, because every property that could break
+    /// it — CRLF, the anchored key pattern, the placeholder filter — is
+    /// invisible to a test that only checks the file was written.
+    #[test]
+    #[cfg(windows)]
+    fn the_seeded_pre_commit_hook_blocks_a_real_key_and_passes_clean_content() {
+        let proj = tempfile::tempdir().unwrap();
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(proj.path())
+                .args(args)
+                .output()
+                .expect("git")
+        };
+        if !run(&["init"]).status.success() {
+            return; // no git available; nothing to assert
+        }
+        let env = env_dir(proj.path(), "demo");
+        let inst = Instance { name: "demo".into(), model: "haiku".into() };
+        place(&env, &inst, None, &Capabilities { github: true, ..Default::default() }).unwrap();
+
+        let hook = proj.path().join(".githooks").join("pre-commit");
+        let bytes = std::fs::read(&hook).unwrap();
+        assert!(!bytes.contains(&b'\r'), "the hook must be LF — sh cannot run a CRLF script");
+
+        // Driven through `git commit`, not by invoking `sh` directly: git finds
+        // its own shell and honours `core.hooksPath`, so this also proves the
+        // config side landed. Calling `sh` here fails on PATH under cargo and
+        // would have proved only that the file parses.
+        run(&["config", "user.email", "t@example.com"]);
+        run(&["config", "user.name", "t"]);
+        assert_eq!(
+            String::from_utf8_lossy(&run(&["config", "--get", "core.hooksPath"]).stdout).trim(),
+            ".githooks",
+            "placement must point the clone at .githooks or the hook never runs"
+        );
+
+        // Clean content passes. `-A` is what a real /sync does.
+        std::fs::write(proj.path().join("ok.md"), "just some prose\n").unwrap();
+        run(&["add", "-A"]);
+        let ok = run(&["commit", "-m", "clean"]);
+        assert!(
+            ok.status.success(),
+            "a clean commit must not be blocked: {}",
+            String::from_utf8_lossy(&ok.stderr)
+        );
+
+        // A memory note carrying an armored key does not — this is the exact
+        // path the note is about: /sync stages claude-internal/ blind.
+        let note = proj.path().join("claude-internal/Demo/memory/leak.md");
+        std::fs::create_dir_all(note.parent().unwrap()).unwrap();
+        std::fs::write(&note, "the server key:\n-----BEGIN OPENSSH PRIVATE KEY-----\nb3Blbn\n").unwrap();
+        run(&["add", "claude-internal/Demo/memory/leak.md"]);
+        let blocked = run(&["commit", "-m", "leak"]);
+        let said = format!(
+            "{}{}",
+            String::from_utf8_lossy(&blocked.stdout),
+            String::from_utf8_lossy(&blocked.stderr)
+        );
+        assert!(!blocked.status.success(), "an armored private key must be blocked: {said}");
+        assert!(said.contains("PRIVATE KEY"), "the refusal must name what it found: {said}");
+    }
+
+    /// A hook the user wrote is theirs. Ours is upgraded in place; anything
+    /// without the marker is not touched, or aello silently eats a project's
+    /// own commit checks on its next launch.
+    #[test]
+    fn placement_upgrades_its_own_pre_commit_hook_and_leaves_a_foreign_one_alone() {
+        let proj = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(proj.path().join(".git")).unwrap();
+        let dir = proj.path().join(".githooks");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("pre-commit");
+
+        // Someone else's hook survives untouched.
+        std::fs::write(&path, "#!/bin/sh\n# my own checks\nexit 0\n").unwrap();
+        seed_pre_commit_hook(proj.path()).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "#!/bin/sh\n# my own checks\nexit 0\n");
+
+        // An older copy of ours is replaced.
+        std::fs::write(&path, "#!/bin/sh\n# aello-pre-commit v0 — stale\nexit 0\n").unwrap();
+        seed_pre_commit_hook(proj.path()).unwrap();
+        assert_eq!(pre_commit_version(&std::fs::read_to_string(&path).unwrap()), Some(PRE_COMMIT_VERSION));
+
+        // The `.gitattributes` line is appended once, not per placement.
+        seed_pre_commit_hook(proj.path()).unwrap();
+        let ga = std::fs::read_to_string(proj.path().join(".gitattributes")).unwrap();
+        assert_eq!(ga.matches(".githooks/* text eol=lf").count(), 1);
     }
 
     #[test]

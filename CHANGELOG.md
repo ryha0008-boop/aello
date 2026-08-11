@@ -148,6 +148,43 @@
   `/sync` for Cline has **no git step**: it reconciles the memory and the
   project's `AGENTS.md` (Cline's project-`CLAUDE.md` equivalent) and stops.
 
+### Added
+- **A `pre-commit` hook is now seeded alongside the other `github` scaffolding,
+  and `/sync` reads the mirror before it publishes it.** `/sync` mirrors an env's
+  memory, persona and handoff into the tracked `claude-internal/<name>/` folder
+  and stages it **by path** — so nothing in that chain ever read what was in it,
+  and the whole safety story was the sentence "this folder is tracked on
+  purpose". Memory notes are exactly where a session writes down a credential it
+  just used, and aello's own repo is public with 21 tracked mirror files, so for
+  that one the mirror is a publish rather than a backup. (Nothing has leaked: an
+  account-wide scan of 51 repos over full history found zero private keys, zero
+  real `.env` files and zero live provider keys. The problem is that nothing
+  prevented the next one.)
+
+  `.githooks/pre-commit` blocks armored private keys, PuTTY keys, real `.env`
+  files (`.env.example` passes), certificate/keystore bundles,
+  `.netrc`/`.pgpass`/`.htpasswd`, port-knock sequences, and non-placeholder
+  provider API keys. `git config core.hooksPath .githooks` is re-run **on every
+  placement**, because it is per-clone local config that does not travel with a
+  pull — a fresh clone otherwise has the hook file and no guard, which is the
+  failure that looks most like success. A repo already pointing `core.hooksPath`
+  elsewhere is left alone.
+
+  **It deliberately says nothing about IP addresses, hostnames, machine paths or
+  domains.** Those are identifiers, not secrets; flagging them produces a report
+  that gets skimmed once and then bypassed with `--no-verify`, at which point the
+  real check is gone with it. Narrow is what keeps it enforceable.
+
+  The file carries an `aello-pre-commit v<N>` marker: an older copy of *ours* is
+  upgraded on the next placement so a widened pattern reaches projects scaffolded
+  months ago, while a `pre-commit` without the marker is somebody's own hook and
+  is never touched. Written with LF regardless of checkout, with `.githooks/*
+  text eol=lf` appended to the project's `.gitattributes` — hooks are run by `sh`
+  and a CRLF one fails to execute, and the file has no extension so a `*.sh` rule
+  misses it. Verified by driving a real `git commit` through the seeded hook: a
+  clean commit passes, a memory note carrying an armored key is refused and the
+  refusal names what it found.
+
 ### Changed
 - **Voice hooks re-vendored at `HOOK_VERSION` 24, five bumps at once (19 → 24).**
   `speak.py`, `duck.py`, `focus.py` and `notify.py` all moved; `win_audio.ps1` is
