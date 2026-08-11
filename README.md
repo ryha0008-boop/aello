@@ -132,7 +132,7 @@ aello add <name> --model <m> [--agent claude|cline] [--claude-md <coder|none|cus
 aello list [--json]
 aello remove <name> [--yes] [--purge]         # --purge also deletes the placed env dir + mirror
 aello edit <name> [--rename <new>] [--model <m>] [--claude-md <coder|none|custom|path>]
-        [--role maintainer|contributor|standalone]
+        [--role maintainer|contributor|standalone] [--mirror-dir <path|->]
 aello persona <name> --from <file> [--project <dir>]     # install a written persona into a placed env
 aello restore <name> [--project <dir>]         # adopt the tracked mirror after pulling another machine's work
 aello run [name] [--resume [id]] [-p <prompt>] [-- <extra args for the agent>]
@@ -180,11 +180,19 @@ Pick one per blueprint. **One maintainer per repo, any number of contributors** 
 
 | Role | Scaffolds (if missing) | `/sync` |
 |---|---|---|
-| `maintainer` | project `CLAUDE.md`, `CHANGELOG.md`, `docs/`, `README.md`, `.gitattributes`, `VERSION` + bump CI, `claude-internal/<name>/` | full — repo health, reconcile memory + all four docs, mirror the env, commit & push with an `Env:` trailer |
-| `contributor` | `CHANGELOG.md`, `.gitattributes`, `VERSION` + bump CI, `claude-internal/<name>/` | git only — repo health, `CHANGELOG.md`, mirror the env, commit & push with an `Env:` trailer |
+| `maintainer` | project `CLAUDE.md`, `CHANGELOG.md`, `docs/`, `README.md`, `.gitattributes`, `VERSION` + bump CI, `claude-internal/<name>/`, `.githooks/pre-commit`, test+audit CI, `renovate.json` | full — repo health, reconcile memory + all four docs, mirror the env, commit & push with an `Env:` trailer |
+| `contributor` | `CHANGELOG.md`, `.gitattributes`, `VERSION` + bump CI, `claude-internal/<name>/`, `.githooks/pre-commit`, test+audit CI, `renovate.json` | git only — repo health, `CHANGELOG.md`, mirror the env, commit & push with an `Env:` trailer |
 | `standalone` | nothing | none — no `/sync` skill is seeded |
 
 Every role, `standalone` included, adds the `.claude-env-*` line to `.gitignore` — an env dir can hold Claude Code's own `.credentials.json` when no shared token is configured, so that one is not a git duty.
+
+Three of those exist to stop a class of mistake rather than to help you write code:
+
+- **`.githooks/pre-commit`** refuses a commit carrying key material — armored private keys, real `.env` files, certificate bundles, non-placeholder provider API keys. `/sync` mirrors your agent's *memory* into git, and a memory note is where a session writes down a credential it just used. It says nothing about IP addresses or hostnames on purpose: a check that cries wolf gets bypassed with `--no-verify`, which takes the real check with it. `git config core.hooksPath .githooks` is re-run on every placement, because that setting is per-clone and does not travel with a pull.
+- **`.github/workflows/ci.yml`** runs the tests and audits the dependencies on every push. It detects Python, Node or Rust at run time rather than being generated for one, so it drops into any repo; a repo with no manifest it recognises says so rather than passing silently.
+- **`.github/renovate.json`** sets the update policy: grouped minor/patch weekly, majors on their own PR, security updates off-schedule, nothing automerged. It does nothing until you install the [Renovate GitHub App](https://github.com/apps/renovate) — that part is yours.
+
+**`--mirror-dir` sends the `claude-internal/` mirror to another repo.** The mirror is an env's memory, persona and handoff, so in a **public** repo staging it is a publish rather than a backup. Point it at a working tree of a private repo and the product stays public while the memory does not; `/sync` then commits there instead, and stops rather than falling back. Without one, `/sync` checks the repo's visibility before staging and stops if it is public.
 
 The persona is separate from the role: `--claude-md <name\|path>` writes the env's global `CLAUDE.md` once, and no role rewrites it.
 
