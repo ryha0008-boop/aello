@@ -149,6 +149,45 @@
   project's `AGENTS.md` (Cline's project-`CLAUDE.md` equivalent) and stops.
 
 ### Added
+- **Dependency hygiene is now something aello establishes, not something each
+  project rediscovers.** A repo that grew organically has its tests and its
+  dependency audit running only where somebody remembers to type them — the
+  developer's desktop, never the server. Three pieces, seeded for roles with git
+  duties:
+
+  - **`.github/workflows/ci.yml`** — tests plus `pip-audit` / `npm audit` on
+    every push and PR. **Stack-agnostic like `version.yml`, but by detecting the
+    ecosystem at run time rather than at seed time**: aello does not know a
+    project's stack when it places into it, and a guess baked in at placement
+    seeds a workflow that fails forever in every repo of the other kind. A repo
+    with neither manifest reports that there was nothing to do, rather than
+    passing silently. The audit **fails the build** — an advisory that only
+    prints is one nobody reads.
+  - **`.github/renovate.json`** — grouped minor/patch weekly, majors on their own
+    PR, security updates off-schedule, **nothing automerged**, editing the
+    manifest and never a generated lock. Placement says once that it does nothing
+    until the Renovate **GitHub App** is installed, which aello cannot do —
+    reporting a seeded file as "configured" is the kind of claim this project
+    keeps having to undo.
+  - **A `/sync` step that asserts a lock exists and refuses to create one.**
+    Compiling a lock changes what installs, and on a live system that is a
+    deploy — not something a checkpoint does unasked.
+
+  **A hand-written `requirements.txt` listing only direct imports is the same
+  finding as having no lock at all**, which a "does the file exist" check misses
+  entirely. Measured in one 14-month-old project on 2026-08-11: everything
+  transitive was unpinned, and a **beta** release of a signing library had
+  installed itself into the code path that signs every order. In the same repo a
+  pin read off a developer's desktop was older than the server, so installing the
+  manifest moved production backwards on every run. Adding CI there found two
+  more bugs on its first two runs — a suite silently collecting 384 of 420 tests
+  while still printing OK, and four tests that passed only by reading a gitignored
+  file present on one machine.
+
+  The policy is stated in the generated `/sync` rather than in the persona,
+  deliberately: a persona is written once and never clobbered, so an edit there
+  reaches no existing env, while `place` rewrites the skill on every run.
+
 - **`/sync`'s mirror has a destination now — `aello edit <name> --mirror-dir
   <path>`.** The mirror is an env's memory, persona and handoff, and in a public
   repo staging it is a publish rather than a backup. Deleting it is not the fix:

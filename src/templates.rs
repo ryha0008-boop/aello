@@ -172,6 +172,16 @@ allowed-tools: {tools}
 - Check for an `origin` remote (`git remote get-url origin`). If there is none, warn and offer to create one with `gh repo create` — do NOT create it without explicit confirmation.
 - Report the current branch (warn on detached HEAD), `git fetch` (best-effort), then report ahead/behind vs the upstream.
 - Show a short `git status` summary.
+
+## Dependency hygiene
+The rule, once, so it is not re-derived per project: **ranges in the manifest, exact versions in the lock, deploys install from the lock and never resolve, nothing automerges, and a lock is verified by installing it — not by reading it.**
+
+- **Assert a lock exists; do not create one.** Python → `uv.lock`, or a `requirements.txt` that was *compiled* (exact pins, ideally hashes) rather than hand-written. Node → a committed `package-lock.json`. A manifest with no lock **is the finding** — report it and stop there. Compiling a lock changes what installs, and on a live system that is a deploy, which is not something a checkpoint gets to do unasked.
+- **A hand-written `requirements.txt` listing only direct imports is the same finding**, even though a file exists. Everything transitive is then unpinned and resolves to whatever is newest that day. Measured in one repo on 2026-08-11: a **beta** release of a signing library had installed itself into the code path that signs every order, and nobody chose it. Check whether the transitive set is pinned, not whether the file is present.
+- **Check the lock against what is actually deployed** where you can reach it. A pin read off a developer's desktop can be *older* than the server, in which case installing the manifest moves production backwards on every run — that also happened in the same repo.
+- If `.github/workflows/ci.yml` is absent, say so: without it the tests and the audit run only where somebody remembers to type them, which is never the server.
+- **Stage `.github/` explicitly when you touch it.** A workflow that exists on disk and was never committed does nothing, and it hides well: untracked because unstaged, skipped because untracked. Confirm with `git status --porcelain .github/` before you finish rather than assuming.
+- Renovate does nothing until its GitHub App is installed, which is the user's step and not yours. If `.github/renovate.json` exists, say whether you can see any Renovate PRs or a dependency dashboard issue; absent evidence, report it as **seeded, not confirmed running**.
 ",
         );
     }
@@ -604,6 +614,35 @@ mod tests {
             s.contains("IPs, hostnames, machine paths and domains are all fine"),
             "the scope has to be stated or this grows into a scrubber"
         );
+    }
+
+    /// The policy is stated in the skill rather than the persona on purpose: a
+    /// persona is written once and never clobbered, so an edit there reaches no
+    /// existing env, while `place` rewrites this skill on every run. The note
+    /// that asked for this said "put it in the blueprint persona" — that is the
+    /// one place it could not have worked.
+    #[test]
+    fn sync_states_the_dependency_policy_and_refuses_to_generate_a_lock() {
+        let caps = Capabilities { github: true, ..Default::default() };
+        let s = render_sync_skill(&caps, "reviewer", None);
+
+        assert!(s.contains("## Dependency hygiene"));
+        assert!(s.contains("ranges in the manifest, exact versions in the lock"));
+        assert!(s.contains("verified by installing it"));
+        // Report, never generate: compiling a lock changes what installs.
+        assert!(s.contains("Assert a lock exists; do not create one"));
+        // A present-but-hand-written manifest is the same finding as none. This
+        // is the half a "does the file exist" check misses entirely.
+        assert!(s.contains("listing only direct imports is the same finding"));
+        // The trap that made a seeded workflow do nothing for weeks.
+        assert!(s.contains("git status --porcelain .github/"));
+        // And Renovate cannot be reported as running by anyone but the user.
+        assert!(s.contains("seeded, not confirmed running"));
+
+        // A blueprint with no git duties gets none of it — same rule as the
+        // rest of repo health.
+        let none = render_sync_skill(&Capabilities { changelog: true, ..Default::default() }, "x", None);
+        assert!(!none.contains("## Dependency hygiene"));
     }
 
     /// The default is safe-by-default rather than merely configurable: a mirror

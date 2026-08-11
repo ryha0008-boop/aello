@@ -23,6 +23,8 @@ Each role scaffolds the files it maintains, on placement, **only if missing** �
 | `VERSION` + `.github/workflows/version.yml` (patch-bump CI) | ✅ | ✅ | — |
 | tracked `claude-internal/<name>/` mirror | ✅ | ✅ | — |
 | `.githooks/pre-commit` (blocks committed key material) | ✅ | ✅ | — |
+| `.github/workflows/ci.yml` (tests + dependency audit) | ✅ | ✅ | — |
+| `.github/renovate.json` (update policy) | ✅ | ✅ | — |
 | `CHANGELOG.md` (`## [Unreleased]`) | ✅ | ✅ | — |
 | project-root `CLAUDE.md` | ✅ | — | — |
 | `docs/` directory | ✅ | — | — |
@@ -148,6 +150,30 @@ git log --format='%(trailers:key=Env)'
 This is the point of running several blueprints in one repo: when something breaks, `git blame` tells you which agent did it.
 
 The seeded `VERSION` + `.github/workflows/version.yml` are **generic and stack-agnostic** — meant for *target* projects. The workflow patch-bumps `VERSION` on every push to `main` and commits it back with `[skip ci]` (a `GITHUB_TOKEN` push doesn't re-trigger CI). Bump minor/major by hand. Delete either file if a project manages versions another way.
+
+## Dependency hygiene
+
+A repo that grew organically has its tests and its dependency audit running **only where somebody remembers to type them** — the developer's desktop, never the server. That is not a property of any one project, so aello establishes it rather than letting each repo rediscover it.
+
+The policy, decided once so agents stop re-deriving it per project:
+
+> Ranges in the manifest, exact versions in the lock. Deploys install from the lock and never resolve. Nothing automerges. **A lock is verified by installing it, not by reading it.**
+
+Three pieces, all seeded for roles with git duties:
+
+- **`.github/workflows/ci.yml`** — tests plus `pip-audit` / `npm audit` on every push and PR. **Stack-agnostic like `version.yml`, but by detecting at run time rather than at seed time**: aello does not know a project's ecosystem when it places into it, and a guess baked in at placement seeds a workflow that fails forever in every repo of the other kind. A repo with neither a Python nor a Node manifest runs the job and reports that there was nothing to do — a true answer, not a green tick earned by skipping. **The audit fails the build**; an advisory that only prints is one nobody reads. Pin `python-version` to the interpreter the project is *deployed* on, not the developer's — a lock compiled against one and installed on another can resolve differently, which makes CI green and the server wrong.
+- **`.github/renovate.json`** — grouped minor/patch weekly, majors always their own PR, security updates off-schedule, **nothing automerged**, editing the manifest and never a generated lockfile. It does nothing at all until the Renovate **GitHub App** is installed, which is a manual step aello cannot perform; placement says so once rather than reporting it configured. Install "Renovate" — mend.io's wizard offers "Mend Application Security" first, which needs a paid licence.
+- **A `/sync` step that asserts a lock exists and refuses to create one.** Python → `uv.lock` or a *compiled* `requirements.txt`; Node → a committed `package-lock.json`. A manifest with no lock **is the finding**. Compiling a lock changes what installs, and on a live system that is a deploy — not something a checkpoint does unasked.
+
+Both files are written **only when absent**, so a project that has tuned its own keeps it. Neither is regenerated from the role the way a skill is.
+
+### What "a lockfile exists" does not mean
+
+A hand-written `requirements.txt` listing only the packages the code imports directly is the **same finding as having none**, even though the file is there. Everything transitive stays unpinned and resolves to whatever is newest that day. Measured in one 14-month-old project on 2026-08-11: a **beta** release of a signing library had installed itself into the code path that signs every order, and nobody chose it. In the same repo a pin read off the developer's desktop was *older* than the server, so installing the manifest moved production backwards on every run. Check whether the transitive set is pinned, not whether the file is present.
+
+Adding CI to that project found two more on its first two runs — one suite silently collecting **384 of 420 tests** because an undeclared test-only dependency made an import raise rather than degrade (the suite still printed OK), and four tests that passed only by reading a *gitignored* file which happened to exist on that machine, with a skip guard that checked the wrong verdict and so never fired. Neither is exotic; both are invisible until a second machine runs the suite.
+
+**A committed lock is not a deployed dependency.** If a project's deploy script contains no install step, the lock reaches the server and changes nothing until someone installs it by hand — and a running daemon keeps its loaded modules until it is restarted. Do not report "the lock is committed" as "the dependency is deployed".
 
 ### Convention: `VERSION` is the single source of truth — derive, don't duplicate
 

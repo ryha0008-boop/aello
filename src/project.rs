@@ -104,6 +104,184 @@ jobs:
           git push origin main
 "#;
 
+/// Test + dependency-audit CI, seeded for `github` blueprints beside
+/// `version.yml`.
+///
+/// Why aello seeds this rather than leaving it to each project: a repo that grew
+/// organically has its tests and its audits running **only where somebody
+/// remembers to type them**, which is the developer's desktop and never the
+/// server. Measured in one 14-month-old project on 2026-08-11, on the first two
+/// runs after CI was added: one suite was silently collecting **384 of 420
+/// tests** because a test-only dependency was undeclared and the import raised
+/// instead of degrading — and the suite still printed OK — and four more tests
+/// only passed by reading a *gitignored* file that happened to exist on that one
+/// machine, with a skip guard that checked the wrong verdict and so never fired.
+/// Neither is exotic; both are invisible without a second machine running the
+/// suite, and CI is the cheapest second machine.
+///
+/// **Stack-agnostic the same way `version.yml` is** — the file is generic and the
+/// *detection happens at run time*, because aello does not know a project's
+/// ecosystem at placement and guessing wrong seeds a workflow that fails forever.
+/// A repo with neither Python nor Node manifests runs the job and reports that it
+/// found nothing to do, which is a true answer rather than a green tick earned by
+/// skipping.
+///
+/// The audit **fails the build**. A non-blocking audit is a guard that never
+/// fires, which is the shape this codebase spends most of its guards preventing.
+/// Delete the file in a repo where that is not wanted.
+const CI_WORKFLOW: &str = r#"name: ci
+
+# Run this project's tests and audit its dependencies on every push and PR.
+# Seeded by aello. Deliberately stack-agnostic: nothing is detected at seed time,
+# because the project's ecosystem is not known then and a wrong guess is a
+# workflow that fails forever. Detection happens below, at run time.
+#
+# The audit FAILS the build on a known vulnerability. That is the point — an
+# advisory that only prints is one nobody reads. Delete this file if a repo does
+# not want it.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: detect ecosystem
+        id: detect
+        run: |
+          if [ -f pyproject.toml ] || [ -f requirements.txt ] || [ -f uv.lock ]; then
+            echo "python=1" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -f package.json ]; then
+            echo "node=1" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -f Cargo.toml ]; then
+            echo "rust=1" >> "$GITHUB_OUTPUT"
+          fi
+
+      # --- Python ---------------------------------------------------------
+      # Pin this to the interpreter the project is DEPLOYED on, not the one the
+      # developer happens to have. A lock compiled against 3.12 and installed on
+      # 3.11 can resolve differently, which makes CI green and the server wrong.
+      - uses: actions/setup-python@v5
+        if: steps.detect.outputs.python
+        with:
+          python-version: '3.12'
+      - name: install (python)
+        if: steps.detect.outputs.python
+        run: |
+          python -m pip install --upgrade pip
+          # Install from the LOCK where there is one. A deploy must never
+          # re-resolve, and CI is only telling the truth if it installs what a
+          # deploy would.
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          elif [ -f pyproject.toml ]; then
+            pip install -e .
+          fi
+          pip install pytest pip-audit
+      - name: test (python)
+        if: steps.detect.outputs.python
+        run: |
+          if ls test_*.py tests/ */tests/ >/dev/null 2>&1; then
+            pytest -q
+          else
+            echo "no pytest targets found"
+          fi
+      - name: audit (python)
+        if: steps.detect.outputs.python
+        run: pip-audit --strict
+
+      # --- Node -----------------------------------------------------------
+      - uses: actions/setup-node@v4
+        if: steps.detect.outputs.node
+        with:
+          node-version: '22'
+      - name: install (node)
+        if: steps.detect.outputs.node
+        run: |
+          # `npm ci` requires a committed lockfile and installs it exactly.
+          # Its absence is the finding, so say so rather than falling back to
+          # `npm install`, which resolves fresh and hides the gap.
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            echo "::error::package.json with no committed package-lock.json — nothing can reproduce this install"
+            exit 1
+          fi
+      - name: test (node)
+        if: steps.detect.outputs.node
+        run: npm test --if-present
+      - name: audit (node)
+        if: steps.detect.outputs.node
+        run: npm audit --audit-level=high
+
+      # --- Rust -----------------------------------------------------------
+      - name: test (rust)
+        if: steps.detect.outputs.rust
+        # No --locked: a project whose CI commits a version bump without
+        # touching Cargo.lock has a lockfile permanently one behind, and
+        # --locked then fails every run on a meaningless mismatch.
+        run: cargo test
+      - name: audit (rust)
+        if: steps.detect.outputs.rust
+        run: |
+          cargo install cargo-audit --locked >/dev/null 2>&1 || cargo install cargo-audit --locked
+          cargo audit
+
+      - name: nothing to do
+        if: '!steps.detect.outputs.python && !steps.detect.outputs.node && !steps.detect.outputs.rust'
+        run: echo "no Python, Node or Rust manifest found — no tests or audit to run"
+"#;
+
+/// Renovate config seeded for `github` blueprints.
+///
+/// Renovate detects ecosystems itself, so unlike the CI workflow this one is
+/// genuinely generic. The policy encoded here is the one decided once so that
+/// agents stop re-deriving it per project:
+///
+/// * grouped minor/patch weekly, majors always on their own PR;
+/// * security updates any time, ignoring the schedule;
+/// * **nothing automerges** — a dependency bump that lands unattended on a system
+///   holding real money is not a convenience;
+/// * it edits the **manifest**, never a generated lockfile.
+///
+/// Installing the GitHub App is a manual step aello cannot do, and the free
+/// product is "Renovate" — mend.io's wizard offers "Mend Application Security"
+/// first, which needs a paid licence. `place` says so on stdout rather than
+/// reporting this configured.
+const RENOVATE_JSON: &str = r#"{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "timezone": "UTC",
+  "schedule": ["before 6am on monday"],
+  "packageRules": [
+    {
+      "description": "Minor and patch together, once a week — one PR to review, not thirty.",
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "minor + patch"
+    },
+    {
+      "description": "A major is a breaking change and gets read on its own.",
+      "matchUpdateTypes": ["major"],
+      "groupName": null
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "schedule": null,
+    "labels": ["security"]
+  },
+  "automerge": false,
+  "dependencyDashboard": true,
+  "prConcurrentLimit": 5
+}
+"#;
+
 /// Env dir for a blueprint inside a project — `project/.claude-env-<name>`.
 pub fn env_dir(project: &Path, name: &str) -> PathBuf {
     project.join(format!("{}{name}", crate::models::Agent::Claude.env_prefix()))
@@ -556,6 +734,30 @@ fn scaffold_project(
             std::fs::create_dir_all(wf.parent().unwrap())
                 .context("could not create .github/workflows dir")?;
             std::fs::write(&wf, VERSION_WORKFLOW).context("could not write version.yml")?;
+        }
+        // Test + audit CI and a Renovate policy, beside version.yml. Both
+        // written only when absent: a project that has tuned its own must keep
+        // it, and unlike a skill these are not regenerated from a role.
+        let ci = project.join(".github").join("workflows").join("ci.yml");
+        if !ci.exists() {
+            std::fs::create_dir_all(ci.parent().unwrap())
+                .context("could not create .github/workflows dir")?;
+            std::fs::write(&ci, CI_WORKFLOW).context("could not write ci.yml")?;
+        }
+        let rn = project.join(".github").join("renovate.json");
+        if !rn.exists() {
+            std::fs::create_dir_all(rn.parent().unwrap())
+                .context("could not create .github dir")?;
+            std::fs::write(&rn, RENOVATE_JSON).context("could not write renovate.json")?;
+            // Said once, on the placement that seeds it. Renovate does nothing
+            // at all until the GitHub App is installed, and aello cannot do
+            // that — reporting the file as "configured" would be a lie of the
+            // kind this codebase keeps having to undo.
+            println!(
+                "note: seeded .github/renovate.json — it does nothing until you install the \
+                 Renovate GitHub App (github.com/apps/renovate). Pick \"Renovate\", not \
+                 \"Mend Application Security\", which needs a paid licence."
+            );
         }
         seed_pre_commit_hook(project)?;
     }
@@ -1954,6 +2156,48 @@ mod tests {
         place(&env, &inst, None, &caps).unwrap();
         let after_second = std::fs::read_to_string(&gi).unwrap();
         assert_eq!(after_second.matches(".claude-env-*").count(), 1);
+    }
+
+    /// Both new `github` files land, and — the part worth pinning — the CI
+    /// workflow decides the ecosystem **at run time**. Baking a guess in at
+    /// placement seeds a workflow that fails forever in every repo of the other
+    /// kind, and aello does not know a project's stack when it places into it.
+    #[test]
+    fn github_cap_seeds_ci_and_renovate_without_guessing_the_stack() {
+        let proj = tempfile::tempdir().unwrap();
+        let env = env_dir(proj.path(), "demo");
+        let inst = Instance { name: "demo".into(), model: "haiku".into(), mirror_root: None };
+        place(&env, &inst, None, &Capabilities { github: true, ..Default::default() }).unwrap();
+
+        let ci = std::fs::read_to_string(proj.path().join(".github/workflows/ci.yml")).unwrap();
+        assert!(ci.contains("detect ecosystem"), "the stack must be detected in the job");
+        assert!(ci.contains("pip-audit --strict"));
+        assert!(ci.contains("npm audit"));
+        // A repo with neither must say so rather than passing silently.
+        assert!(ci.contains("no Python, Node or Rust manifest found"));
+        assert!(ci.contains("cargo audit"));
+        // `npm install` would resolve fresh and paper over a missing lockfile,
+        // which is the finding, not something to work around. Match a *command*
+        // — a substring search hits the comment explaining why it is not used,
+        // exactly as a grep for `git add claude-internal` hits the line
+        // forbidding it.
+        assert!(ci.lines().any(|l| l.trim() == "npm ci"));
+        assert!(
+            !ci.lines().any(|l| l.trim().starts_with("npm install")),
+            "no step may actually run `npm install`"
+        );
+
+        let rn = std::fs::read_to_string(proj.path().join(".github/renovate.json")).unwrap();
+        assert!(rn.contains("\"automerge\": false"), "nothing automerges");
+        serde_json::from_str::<serde_json::Value>(&rn).expect("renovate.json must be valid JSON");
+
+        // Neither is regenerated over a project's own tuned copy.
+        std::fs::write(proj.path().join(".github/renovate.json"), "{\"mine\":true}").unwrap();
+        place(&env, &inst, None, &Capabilities { github: true, ..Default::default() }).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(proj.path().join(".github/renovate.json")).unwrap(),
+            "{\"mine\":true}"
+        );
     }
 
     /// The whole point of the destination is that the mirror stops being written
