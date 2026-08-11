@@ -3,6 +3,20 @@
 Failure modes and what they actually mean. Most of these look like something else first — that's why they're here.
 
 
+## Renovate is installed and nothing happens
+
+**Mend's onboarding wizard defaults to "Scan Only", which sets Renovate to `silent`.** In that mode it still runs jobs on schedule, but creates **no pull requests, no issues and no dependency dashboard** — so from outside, a correctly installed Renovate and one that was never installed produce byte-for-byte identical evidence: nothing.
+
+Measured here on 2026-08-11 across 33 repos: zero Renovate PRs and zero dashboards everywhere, while `gh` queries against the same repos returned real data — so the check was working and Renovate genuinely emitted nothing. The dashboard's own job log then showed runs 4 and 20 minutes old. It had been executing the whole time.
+
+Fix it at **developer.mend.io → your org → SETTINGS → Dependencies → Silent mode OFF**, then SAVE. The org overview should then show *Dependency Updates (Renovate)* as something other than `Silent`.
+
+Two things that look wrong on that page and are not: the plan reading **Community (Free)** is the right product, and *Code Security (SAST)* / *Dependency Security (SCA)* / *Infrastructure as Code* reading **Unavailable** is correct — those are Mend Application Security, which needs a paid licence.
+
+**Do not diagnose this from the config.** The first guess here was that the seeded `"schedule": ["before 6am on monday"]` was holding it back; the job log disproved that in one look. Read the job log, not the config.
+
+If Renovate is live and a particular repo is still untouched, check whether it has a `renovate.json` at all: with *Require config file* on, a repo without one is not updated until its onboarding PR is merged.
+
 ## Checking a repo's integrations
 
 `aello check [path]` (default: the current directory) or `aello check --all` (every repo holding a placed env, under your home dir or `--root`) verifies everything aello seeds into a project and **proves each one rather than reading a file**:

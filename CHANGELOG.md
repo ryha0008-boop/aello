@@ -3,6 +3,15 @@
 ## [Unreleased]
 
 ### Added
+- **Documented the Renovate failure mode that looks exactly like success:
+  Mend's onboarding defaults to "Scan Only", which sets Renovate to `silent`.**
+  It runs jobs on schedule and creates no PRs, no issues and no dependency
+  dashboard, so a correctly installed Renovate and one never installed produce
+  identical evidence — nothing. Measured across 33 repos here. `docs/roles.md`
+  now says installing the App is necessary and not sufficient, and
+  `docs/troubleshooting.md` gained a section with the fix and the reminder to
+  read the job log rather than the config: the first guess here blamed the
+  seeded weekly schedule, and the job log disproved it in one look.
 - **`aello check [path]` / `aello check --all` — verify a repo's aello
   integrations by proving each one rather than reading a file.** It executes the
   voice hook to ask its version, fires the `pre-commit` hook at a real staged
