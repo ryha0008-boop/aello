@@ -1,0 +1,107 @@
+name: ci
+
+# Run this project's tests and audit its dependencies on every push and PR.
+# Seeded by aello. Deliberately stack-agnostic: nothing is detected at seed time,
+# because the project's ecosystem is not known then and a wrong guess is a
+# workflow that fails forever. Detection happens below, at run time.
+#
+# The audit FAILS the build on a known vulnerability. That is the point — an
+# advisory that only prints is one nobody reads. Delete this file if a repo does
+# not want it.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: detect ecosystem
+        id: detect
+        run: |
+          if [ -f pyproject.toml ] || [ -f requirements.txt ] || [ -f uv.lock ]; then
+            echo "python=1" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -f package.json ]; then
+            echo "node=1" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -f Cargo.toml ]; then
+            echo "rust=1" >> "$GITHUB_OUTPUT"
+          fi
+
+      # --- Python ---------------------------------------------------------
+      # Pin this to the interpreter the project is DEPLOYED on, not the one the
+      # developer happens to have. A lock compiled against 3.12 and installed on
+      # 3.11 can resolve differently, which makes CI green and the server wrong.
+      - uses: actions/setup-python@v5
+        if: steps.detect.outputs.python
+        with:
+          python-version: '3.12'
+      - name: install (python)
+        if: steps.detect.outputs.python
+        run: |
+          python -m pip install --upgrade pip
+          # Install from the LOCK where there is one. A deploy must never
+          # re-resolve, and CI is only telling the truth if it installs what a
+          # deploy would.
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          elif [ -f pyproject.toml ]; then
+            pip install -e .
+          fi
+          pip install pytest pip-audit
+      - name: test (python)
+        if: steps.detect.outputs.python
+        run: |
+          if ls test_*.py tests/ */tests/ >/dev/null 2>&1; then
+            pytest -q
+          else
+            echo "no pytest targets found"
+          fi
+      - name: audit (python)
+        if: steps.detect.outputs.python
+        run: pip-audit --strict
+
+      # --- Node -----------------------------------------------------------
+      - uses: actions/setup-node@v4
+        if: steps.detect.outputs.node
+        with:
+          node-version: '22'
+      - name: install (node)
+        if: steps.detect.outputs.node
+        run: |
+          # `npm ci` requires a committed lockfile and installs it exactly.
+          # Its absence is the finding, so say so rather than falling back to
+          # `npm install`, which resolves fresh and hides the gap.
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            echo "::error::package.json with no committed package-lock.json — nothing can reproduce this install"
+            exit 1
+          fi
+      - name: test (node)
+        if: steps.detect.outputs.node
+        run: npm test --if-present
+      - name: audit (node)
+        if: steps.detect.outputs.node
+        run: npm audit --audit-level=high
+
+      # --- Rust -----------------------------------------------------------
+      - name: test (rust)
+        if: steps.detect.outputs.rust
+        # No --locked: a project whose CI commits a version bump without
+        # touching Cargo.lock has a lockfile permanently one behind, and
+        # --locked then fails every run on a meaningless mismatch.
+        run: cargo test
+      - name: audit (rust)
+        if: steps.detect.outputs.rust
+        run: |
+          cargo install cargo-audit --locked >/dev/null 2>&1 || cargo install cargo-audit --locked
+          cargo audit
+
+      - name: nothing to do
+        if: '!steps.detect.outputs.python && !steps.detect.outputs.node && !steps.detect.outputs.rust'
+        run: echo "no Python, Node or Rust manifest found — no tests or audit to run"
