@@ -63,6 +63,10 @@ impl RepoReport {
     }
 }
 
+/// Run git in `repo`. A git that will not spawn at all yields empty output with
+/// a failing status, which every caller already treats as "no evidence" — the
+/// alternative was a panic on a machine with no git, in a command whose whole
+/// job is to report rather than to crash.
 fn git(repo: &Path, args: &[&str]) -> std::process::Output {
     Command::new("git")
         .arg("-C")
@@ -72,9 +76,25 @@ fn git(repo: &Path, args: &[&str]) -> std::process::Output {
         .unwrap_or_else(|_| empty_output())
 }
 
+/// A failing, empty `Output` — the "could not run it at all" value.
+///
+/// `ExitStatusExt` is per-platform and **both** imports need their own `cfg`.
+/// The windows one was ungated, which compiles fine on Windows and fails on
+/// Linux with `cannot find windows in os` — caught by CI, not by the suite here,
+/// because the suite only ever runs on Windows on this machine. That is the
+/// exact gap the CI test job was added for.
+#[cfg(windows)]
 fn empty_output() -> std::process::Output {
     use std::os::windows::process::ExitStatusExt as _;
-    #[cfg(not(windows))]
+    std::process::Output {
+        status: std::process::ExitStatus::from_raw(1),
+        stdout: Vec::new(),
+        stderr: Vec::new(),
+    }
+}
+
+#[cfg(not(windows))]
+fn empty_output() -> std::process::Output {
     use std::os::unix::process::ExitStatusExt as _;
     std::process::Output {
         status: std::process::ExitStatus::from_raw(1),
