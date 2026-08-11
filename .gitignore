@@ -21,3 +21,4 @@ AUDIT-*.md
 # every time a hook ran.
 __pycache__/
 *.pyc
+claude-internal/
