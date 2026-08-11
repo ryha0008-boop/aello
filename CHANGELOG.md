@@ -149,6 +149,47 @@
   project's `AGENTS.md` (Cline's project-`CLAUDE.md` equivalent) and stops.
 
 ### Changed
+- **Voice hooks re-vendored at `HOOK_VERSION` 24, five bumps at once (19 → 24).**
+  `speak.py`, `duck.py`, `focus.py` and `notify.py` all moved; `win_audio.ps1` is
+  byte-identical and is re-vendored anyway, because "only some files changed" is
+  how a partial vendor gets rationalised. Every env picks it up on its next
+  `aello run`. The four that matter before you deploy:
+
+  - **A line that never played said nothing.** Both of the player's pipes are
+    `DEVNULL` and its exit code was discarded, while `record()` had already
+    written the turn to history as spoken — so a player exiting 1 in silence and
+    one reading the line out were the same thing to every reader. It lands in
+    the shared state as `play_error`, and **`aello voice status` now prints it**
+    as a `playback` line, the same treatment `telegram_error` got at 18 and for
+    the same reason: this command reads the same file as `speak.py --status` and
+    would otherwise be the one saying nothing is wrong.
+  - **`--sweep` from an incomplete copy answered "clean" without looking.** It
+    reaches for two `duck.py` functions the guarded-import stub never carried,
+    and the blanket `except` swallowed the `AttributeError`: two lines, exit 0,
+    the check never reached, output-identical to a healthy machine. So any sweep
+    reading taken from a partial copy below 24 is worthless in either direction.
+  - **One malformed key in `state.json` stopped every hook on the machine.**
+    `setdefault` cannot repair a key that is present with the wrong type;
+    measured with `{"leases": null}`, the integrity check passed, the lease scan
+    raised, and the top-level handler turned it into `sys.exit(0)` — silence in
+    every env with nothing said anywhere. Worth knowing here rather than only
+    upstream, because **aello writes to that file too**.
+  - **`duck.json`'s lock did not say who owned it.** It stole a stale lock by
+    stat-then-unlink with nothing tying the file it inspected to the file it
+    deleted, so two waiters that both judged it stale both won. Two holders of
+    `duck.json` is not a lost update — it is the only record of what normal was,
+    so it is permanent volume loss.
+
+  Also across 20–24: the `state.json` durability set (20) stops dropping writes
+  silently and stops reading a *denied* file as an empty one; `focus.py` (21) no
+  longer adopts any titled window when matching by pid, which could send the
+  user's prompt to `explorer.exe`; the sweep's live-session repair (22) matched
+  **0 of 49** stored entries against 6 live sessions and now matches 27, and it
+  no longer switches itself off whenever `duck.json` merely exists; and `tg_env`
+  (23) strips whitespace, without which a `TELEGRAM_BOT_TOKEN` carrying a
+  trailing space made `urllib` raise `InvalidURL` quoting **the whole URL, token
+  included**, into `state.json` where `--status` prints it.
+
 - **`docs/cline.md` no longer implies a Cline env touches nothing outside
   itself.** An isolated run does write one file into the shared tree —
   `~/.cline/cli-node-extra-ca-certs.pem`, a node CA bundle — whatever `--config`

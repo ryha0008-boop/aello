@@ -214,6 +214,15 @@ pub fn status() -> Result<()> {
     if let Some(line) = telegram_error_line(&state) {
         println!("telegram      : {line}");
     }
+    // From hook version 24, the same treatment for the half that had no record
+    // at all: both of the player's pipes are `DEVNULL` and its exit code used to
+    // be discarded, so a player that exited 1 in silence and one that read the
+    // line out looked identical — while `record()` had already written the turn
+    // to history as spoken. Same contract as above: absent is healthy, the next
+    // line that plays clears it, so this says "right now".
+    if let Some(line) = play_error_line(&state) {
+        println!("playback      : {line}");
+    }
     Ok(())
 }
 
@@ -225,6 +234,15 @@ fn telegram_error_line(state: &serde_json::Value) -> Option<String> {
     let reason = err.get("reason").and_then(|r| r.as_str()).unwrap_or("unknown");
     let project = err.get("project").and_then(|p| p.as_str()).unwrap_or("?");
     Some(format!("last send FAILED — {reason} ({project})"))
+}
+
+/// Render the hook's `play_error` record, or `None` when there isn't one.
+/// Owned by `speak.py` like `telegram_error`; aello only ever reads it.
+fn play_error_line(state: &serde_json::Value) -> Option<String> {
+    let err = state.get("play_error")?;
+    let code = err.get("code").map_or_else(|| "?".to_string(), |c| c.to_string());
+    let project = err.get("project").and_then(|p| p.as_str()).unwrap_or("?");
+    Some(format!("last line did NOT play — player exited {code} ({project})"))
 }
 
 /// Claim the toast identity for this machine.
@@ -311,6 +329,22 @@ mod tests {
         }))
         .expect("a recorded failure must be reported");
         assert!(line.contains("the API returned ok:false"), "{line}");
+        assert!(line.contains("aello"), "{line}");
+    }
+
+    /// The same argument one layer down: at hook version 23 a player that
+    /// exited nonzero produced nothing anywhere — both pipes are `DEVNULL` and
+    /// history had already recorded the turn as spoken — so a silent machine
+    /// and a working one read identically. Absent stays silent here too.
+    #[test]
+    fn a_line_that_never_played_shows_up_in_status() {
+        assert_eq!(play_error_line(&serde_json::json!({"global": false})), None);
+
+        let line = play_error_line(&serde_json::json!({
+            "play_error": {"at": 1.0, "code": 1, "project": "aello"}
+        }))
+        .expect("a recorded playback failure must be reported");
+        assert!(line.contains('1'), "{line}");
         assert!(line.contains("aello"), "{line}");
     }
 

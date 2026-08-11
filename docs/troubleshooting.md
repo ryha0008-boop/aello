@@ -115,6 +115,10 @@ The voice has its own troubleshooting section, including the partial-copy trap w
 
 Quick first checks: `aello voice status` (mute state and `HOOK_VERSION`), and whether the response actually ended with a `TL;DR:` line — that line is the only thing the hook speaks.
 
+From `HOOK_VERSION` **24**, `aello voice status` also prints a `playback` line when the last line failed to play — `last line did NOT play — player exited <code>`. Below 24 there was nothing to read: both of the player's pipes are `DEVNULL` and its exit code was discarded, while history had already recorded the turn as spoken, so a player exiting 1 in silence and one reading the line out were indistinguishable. Absent means healthy *right now*; the next line that plays clears it.
+
+**One malformed key in the shared `state.json` silences every env on the machine, and looks exactly like the hook not being installed.** Below 24 the hook repaired missing keys with `setdefault`, which cannot repair a key that is *present with the wrong type* — measured with `{"leases": null}`, the integrity check passed, the lease scan raised, and the top-level handler turned that into `sys.exit(0)`: silence everywhere, nothing said anywhere. 24 type-checks the containers and repairs them in memory. No writer produces that shape by itself; the file is hand-editable and **aello writes to it too** (`aello voice mute`), so if every env went quiet at once, read `state.json` before anything else.
+
 ## Telegram sends nothing
 
 Run `python <env>/hooks/speak.py --status` and read the `telegram` line — it names where each of the three values came from. **Run it from a terminal you already had open**, not a fresh one: a fresh shell inherits the variables either way, so it cannot tell a working setup from a broken one.

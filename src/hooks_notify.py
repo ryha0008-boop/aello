@@ -117,7 +117,10 @@ def register() -> str:
     except ImportError:                              # pragma: no cover
         return "winreg unavailable"
     argv = _handler_argv()
-    command = " ".join(f'"{a}"' if a != "%1" else '"%1"' for a in argv)
+    # Every argument is quoted, `%1` included - the conditional here had two
+    # branches that produced the same string, which reads as a rule about `%1`
+    # that does not exist.
+    command = " ".join(f'"{a}"' for a in argv)
     try:
         if serves_protocol():
             with winreg.CreateKey(winreg.HKEY_CURRENT_USER,
@@ -155,6 +158,21 @@ def registered() -> bool:
 
 # --- showing ---------------------------------------------------------------
 
+# What XML 1.0 forbids outright: the C0 controls bar tab, newline and carriage
+# return. `escape()` covers & < > and says nothing about these, and the failure
+# is total and silent - measured against the real WinRT parser, a body carrying
+# \x1b makes XmlDocument.LoadXml throw, win_audio.ps1 dies, no toast appears,
+# and show() has already returned True. It reaches here easily: `to_speakable`
+# unwraps inline code and keeps its contents, so one pasted escape sequence in a
+# TL;DR silences every notification that turn.
+_FORBIDDEN = {c: None for c in range(0x20) if c not in (0x09, 0x0A, 0x0D)}
+_FORBIDDEN.update({c: None for c in range(0x7F, 0xA0)})
+
+
+def _xml(s: str) -> str:
+    return (s or "").translate(_FORBIDDEN)
+
+
 def _toast_xml(title: str, body: str, buttons: list) -> str:
     """The toast document. `buttons` is [(label, uri), …].
 
@@ -162,13 +180,13 @@ def _toast_xml(title: str, body: str, buttons: list) -> str:
     of its own voice is the definition of annoying.
     """
     acts = "".join(
-        f"<action content={quoteattr(label)} activationType='protocol' "
+        f"<action content={quoteattr(_xml(label))} activationType='protocol' "
         f"arguments={quoteattr(uri)}/>"
         for label, uri in buttons)
     return (
         f"<toast activationType='protocol' launch={quoteattr(STATION)}>"
         f"<visual><binding template='ToastGeneric'>"
-        f"<text>{escape(title)}</text><text>{escape(body)}</text>"
+        f"<text>{escape(_xml(title))}</text><text>{escape(_xml(body))}</text>"
         f"</binding></visual>"
         f"<actions>{acts}</actions>"
         f"<audio silent='true'/></toast>")
@@ -186,7 +204,7 @@ def buttons_for(key: str, turn: str = "") -> list:
     Skip carries the turn it belongs to, and *this line* is meant literally: a
     toast stays in the notification centre for three days, so without the id the
     button dropped whatever happened to be speaking when it was finally pressed
-    - which, with 39 environments raising toasts, is usually somebody else.
+    - which, with 41 environments raising toasts, is usually somebody else.
     """
     if not key:
         return []

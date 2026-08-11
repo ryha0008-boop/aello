@@ -71,6 +71,10 @@ The wide default is deliberate and answers a hole the narrow rule has: the signa
 
 Ask a placed copy directly with `python <env>/hooks/speak.py --sweep`: it prints the duck level, the mode, every stored volume below full marked `CLAIM` or `kept `, and what it repaired. `speak.py --status` prints a `volume repairs` line summarising the last 50 turns — `none` is the healthy reading, and a count over turns is the only trustworthy form of it.
 
+⚠️ **A `--sweep` reading from a copy below 24 is worthless in either direction.** The command reaches for two `duck.py` functions that the guarded-import stub never carried, and the top-level `except Exception: sys.exit(0)` swallowed the resulting `AttributeError` — so an incomplete copy printed two lines, exited 0, and never ran the check at all, output-identical to a machine with nothing to repair. From 24 it names the missing sibling before printing any figure. Take the version first, then the sweep.
+
+Two more holes were open until 22, both of which made this path quieter than it looked: the live-session repair matched **0 of 49** stored entries against 6 live sessions (the two sides spell an endpoint differently and were compared by substring), so every repair fell through to the unverified registry write; and the sweep switched itself off whenever `duck.json` merely *existed*, which is exactly the state a failed restore leaves behind.
+
 Repairs go through the live session where there is one, because setting a session's volume writes through to every stored entry for that executable. Only where no session exists does the hook patch the persisted float itself, and **that half is unverified**: the value provably persists (measured 0.15 → 1.0, still 1.0 afterwards), but whether the audio engine honours it at that application's next launch, rather than overwriting it from a cached copy, is not known. If it does not, the registry fallback is decoration and only the session path is real.
 
 ## Telegram (opt-in, `HOOK_VERSION` 13 and up)

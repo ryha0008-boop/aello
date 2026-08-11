@@ -47,7 +47,7 @@ const WIN_AUDIO_SCRIPT: &str = include_str!("hooks_win_audio.ps1");
 /// rewritten. A recorded sha goes stale by itself; a recorded version cannot.
 /// Surfaced by `aello voice status`, so checking a machine does not mean
 /// finding an env dir and running Python in it.
-pub const HOOK_VERSION: u32 = 19;
+pub const HOOK_VERSION: u32 = 24;
 
 /// Starter memory seeded on first placement so a fresh env boots with the
 /// user's working-style note already loaded in `/context`. The body is bundled;
@@ -1534,7 +1534,7 @@ mod tests {
     /// normalised so a Windows checkout and Linux CI agree. Update it in the
     /// same commit as a re-vendor — and only together with `HOOK_VERSION`.
     const HOOK_FILES_DIGEST: &str =
-        "8060545076453a274d2c7eca313f061b6aae57e3783dfb3c76b34c2b9d2fd16b";
+        "d8aa37a6c158a6b31ca66308ceb3807fd9153690d1708f70bcd822e534142925";
 
     fn hook_files_digest() -> String {
         use sha2::{Digest, Sha256};

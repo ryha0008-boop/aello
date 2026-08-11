@@ -15,6 +15,7 @@ import json
 import os
 import struct
 import time
+import uuid
 from pathlib import Path
 
 STALE = 120.0  # seconds; a duck file older than this belongs to a dead worker
@@ -37,17 +38,43 @@ def _lock(store: Path):
     its own poll thread, every two seconds, holding nothing.
     """
     path = store.with_name("duck.lock")
+    # The lock says who owns it, for the reason `speak.lock` does and with the
+    # same two halves. Stealing was a stat and then an unlink with nothing tying
+    # the file it looked at to the file it deleted, so two waiters that both
+    # judged the lock stale both deleted and both created - and the outcome of
+    # two holders here is the permanent volume loss this file's own docstring
+    # describes. The steal is an `os.replace` of a uniquely named file, atomic
+    # on Windows and POSIX alike, so exactly one of them wins; and the release
+    # checks the token first, or a holder legitimately stolen from deletes its
+    # successor's live lock on the way out.
+    token = f"{os.getpid()}-{uuid.uuid4().hex}"
+
+    def owns() -> bool:
+        try:
+            return path.read_text(encoding="utf-8").strip() == token
+        except OSError:
+            return False
+
     held = False
     deadline = time.time() + 5.0
     while time.time() < deadline:
         try:
-            os.close(os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+            fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, token.encode("utf-8"))
+            os.close(fd)
             held = True
             break
         except FileExistsError:
             try:
                 if time.time() - path.stat().st_mtime > LOCK_STALE:
-                    path.unlink()
+                    mine = path.with_name(f"duck.{token}.steal")
+                    mine.write_text(token, encoding="utf-8")
+                    os.replace(mine, path)
+                    held = owns()
+                    if held:
+                        break
+                    # Nothing left to tidy: `os.replace` renamed `mine` away
+                    # whether or not this rename was the last one to land.
                     continue
             except OSError:
                 pass
@@ -59,7 +86,8 @@ def _lock(store: Path):
     finally:
         if held:
             try:
-                path.unlink()
+                if owns():
+                    path.unlink()
             except OSError:
                 pass
 
@@ -385,6 +413,31 @@ def is_duck(value: float, level: float) -> bool:
     return False
 
 
+def _app(ident: str) -> str:
+    """The executable's own name out of either endpoint string, lowercased.
+
+    A stored registry key and a live `InstanceIdentifier` name the same
+    application through two different endpoint representations, so nothing
+    either of them shares can be compared whole. Measured read-only on this
+    machine, the two strings for Wispr Flow:
+
+        stored = {2}.\\\\?\\hdaudio#func_01&ven_10ec…\\rearlineouttopohap/00010001
+                 |\\Device\\…\\app-1.5.1146\\Wispr Flow.exe%b{0000…}
+        live   = {0.0.0.00000000}.{e36d1d1a-…}
+                 |\\Device\\…\\app-1.6.447\\Wispr Flow.exe%b{0000…}|1%b21420
+
+    The prefixes differ, and so does the install directory, because the
+    application auto-updates - which is why this goes all the way down to the
+    basename rather than stopping at the first `|`. `speak.py` already computes
+    exactly this reduction to print a sweep's result; the matching did not.
+
+    Only a name ending `.exe` is allowed to pair, so the device-level entries
+    (`…/00010001|#`) cannot claim a session by accident.
+    """
+    name = ident.split("\\")[-1].split("%b")[0].lower()
+    return name if name.endswith(".exe") else ""
+
+
 def sweep(level: float, signature_only: bool = False) -> list:
     """Put back anything left quiet. Returns what it did.
 
@@ -418,6 +471,15 @@ def sweep(level: float, signature_only: bool = False) -> list:
     the whole point of the sweep and also the half that cannot be verified from
     here - the audio engine may hold a cached copy for an application that is
     running but silent.
+
+    That branch was dead for a release. It paired the two by substring, between
+    two endpoint representations that share nothing - **0 of 49** stored entries
+    matched any of the 6 live sessions here, including the four applications
+    this feature exists for. Every repair fell through to the registry, which is
+    the half whose write-through is *not* verified, and `fixed` reported them as
+    repaired either way. `_app` compares the executable's basename instead:
+    **27 of 49** on the same reading. Every session an application owns is put
+    back, not the first - a browser holds several.
     """
     if os.name != "nt":
         return []
@@ -434,7 +496,9 @@ def sweep(level: float, signature_only: bool = False) -> list:
     try:
         for s in _sessions():
             try:
-                live[_ident(s)] = _volume(s)
+                app = _app(_ident(s))
+                if app:            # "" is every session `_app` cannot name, and
+                    live.setdefault(app, []).append(_volume(s))
             except Exception:
                 continue
     except Exception:
@@ -442,14 +506,16 @@ def sweep(level: float, signature_only: bool = False) -> list:
 
     fixed = []
     for key, name, value in stored:
-        vol = next((v for ident, v in live.items() if name and name in ident), None)
-        if vol is not None:
+        vols = live.get(_app(name)) or []      # …a stored one would pair with it
+        for vol in vols:
             try:
                 vol.SetMasterVolume(1.0, None)
-                fixed.append((name, value, "session"))
-                continue
             except Exception:
-                pass
+                vols = []              # fall through to the registry instead
+                break
+        if vols:
+            fixed.append((name, value, "session"))
+            continue
         if _write_stored(key, 1.0):
             fixed.append((name, value, "registry"))
     return fixed

@@ -180,20 +180,36 @@ def _windows_of(pid: int = 0) -> list:
     otherwise every terminal on the desktop. The station has to ask without a
     pid - it is launched from its own console and shares no ancestry with the
     sessions. A tab's ConPTY window is hidden and untitled, so it never shows up.
+
+    The class check belongs to *both* branches, and for a release it was in the
+    `elif`. `_terminal_pid` walks ancestors until one owns a window, so with the
+    pid branch answering for any window at all the walk stopped at whatever
+    non-terminal was in the chain - and `terminal_window`'s "a single window
+    needs no name" shortcut then adopted it as the session's terminal.
+    `send_text` pastes the user's prompt into that window and presses Enter.
+    Measured on this desktop, read-only: `explorer.exe` owns exactly one visible
+    titled top-level window, `Progman` / "Program Manager" - so a session under
+    a shell whose ancestry runs through explorer recorded the Windows desktop,
+    where Enter launches the selected icon. A shell in VS Code's integrated
+    terminal is the mainstream shape of the same thing: the ConPTY console is
+    hidden and untitled, so the walk carried on to `Code.exe` and typed into the
+    open source file. With the check shared, an unrecognised chain finds nothing
+    and the feature declines - which is the direction a false answer has to fail
+    in here.
     """
     found = []
 
     def cb(hwnd, _):
         if not (u32.IsWindowVisible(hwnd) and not u32.GetParent(hwnd)
-                and u32.GetWindowTextLengthW(hwnd)):
+                and u32.GetWindowTextLengthW(hwnd)
+                and _class_of(hwnd) in _TERMINALS):
             return True
         if pid:
             owner = w.DWORD()
             u32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
-            if owner.value == pid:
-                found.append(hwnd)
-        elif _class_of(hwnd) in _TERMINALS:
-            found.append(hwnd)
+            if owner.value != pid:
+                return True
+        found.append(hwnd)
         return True
 
     u32.EnumWindows(ctypes.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)(cb), 0)
@@ -280,6 +296,31 @@ def terminal_windows() -> set:
         return set()
 
 
+def _best(fresh: list, named: list) -> int:
+    """Which window a poll should take: both, then named, then a lone new one.
+
+    Three loops here polled for "the window that just appeared" and each settled
+    ties differently - `named or fresh`, `fresh or named`, `named or fresh`
+    again with the intersection in front - and the order is the one thing they
+    have to share, because the difference only shows in the case that goes
+    wrong. A window that is new *and* carries the name is unambiguous. A named
+    one is the window that was asked for, however it got there - `code <folder>`
+    and Explorer both reuse a window instead of opening a second.
+
+    Novelty alone is a guess, so it answers only when there is exactly one new
+    window. Several, with no name to choose between them, is **no answer**: two
+    of the three callers resize and zoom whatever they are handed, and the
+    window most likely to be new and nameless is a terminal the user opened
+    while they were waiting.
+    """
+    both = [h for h in fresh if h in named]
+    if both:
+        return both[0]
+    if named:
+        return named[0]
+    return fresh[0] if len(fresh) == 1 else 0
+
+
 def new_window(before: set, title: str = "", wait: float = 6.0) -> int:
     """The terminal window that has appeared since `before` was taken, or 0.
 
@@ -287,6 +328,14 @@ def new_window(before: set, title: str = "", wait: float = 6.0) -> int:
     process and exits, so the pid we spawned is gone before its window exists.
     A second is normal. Nothing at all means wt opened a tab in a window that
     was already there - a setting of theirs, and nothing to place.
+
+    It used to answer the moment *anything* new turned up - `(named or fresh)[0]`
+    inside `if fresh` - and Windows Terminal titles a window after creating it,
+    so the unnamed case is the common one rather than the exception. Whatever
+    came back was then resized and zoomed by `launch.start`, including a
+    terminal the user opened during the wait. `_best` holds out for the name and
+    settles for novelty only when there is one candidate; the loop carries on
+    polling until the deadline rather than taking the first thing it sees.
     """
     if not IS_WIN:
         return 0
@@ -296,9 +345,10 @@ def new_window(before: set, title: str = "", wait: float = 6.0) -> int:
             fresh = [h for h in _windows_of() if h not in before]
         except OSError:
             return 0
-        if fresh:
-            named = [h for h in fresh if _clean(_title(h)) == _clean(title)]
-            return (named or fresh)[0]
+        named = [h for h in fresh if _clean(_title(h)) == _clean(title)]
+        hit = _best(fresh, named)
+        if hit:
+            return hit
         if time.monotonic() >= deadline:
             return 0
         time.sleep(0.1)
@@ -534,10 +584,13 @@ def raise_folder(before: set, name: str, wait: float = 5.0) -> bool:
         named = [h for h in now
                  if want in {_clean(f) for f in _folder_names(_title(h))}]
         # Exact names only, after the title is reduced to one: the near-match
-        # rule elsewhere would let `work` answer for `structuredwork`.
-        hit = ([h for h in fresh if h in named] or fresh or named)
+        # rule elsewhere would let `work` answer for `structuredwork`. The order
+        # is `_best`'s, shared with the other two polls here - this one had
+        # novelty ahead of the name, which is the opposite of what the editor's
+        # loop did with the same three lists.
+        hit = _best(fresh, named)
         if hit:
-            return raise_hwnd(hit[0])
+            return raise_hwnd(hit)
         if time.monotonic() >= deadline:
             return False
         time.sleep(0.1)
@@ -586,9 +639,9 @@ def new_editor_window(before: set, folder: str, wait: float = 30.0) -> int:
         fresh = [h for h in now if h not in before]
         named = [h for h in now
                  if want in {_clean(p) for p in (_title(h) or "").split(" - ")}]
-        hit = ([h for h in fresh if h in named] or named or fresh)
+        hit = _best(fresh, named)
         if hit:
-            return hit[0]
+            return hit
         if time.monotonic() >= deadline:
             return 0
         time.sleep(0.2)
@@ -629,21 +682,30 @@ def raise_hwnd(hwnd: int) -> bool:
     if not IS_WIN or not hwnd:
         return False
 
-    if u32.IsIconic(hwnd):
-        u32.ShowWindow(hwnd, SW_RESTORE)
-    fg = u32.GetForegroundWindow()
-    if fg == hwnd:
-        return True
-    mine = k32.GetCurrentThreadId()
-    theirs = u32.GetWindowThreadProcessId(fg, None) if fg else mine
-    attached = bool(u32.AttachThreadInput(theirs, mine, True)) if theirs != mine else False
-    try:
-        u32.BringWindowToTop(hwnd)
-        u32.SetForegroundWindow(hwnd)
-    finally:
-        if attached:
-            u32.AttachThreadInput(theirs, mine, False)
-    return u32.GetForegroundWindow() == hwnd
+    # The foreground is one per machine and the station answers every request on
+    # its own thread, so this is under the same lock `send_text` takes - four
+    # `serve.py` routes reach here and two of them (`/api/focus`, a card's
+    # double-click) are one press apart on the page. It is an `RLock`, so
+    # `send_text`'s own hold nests rather than deadlocks. The comment at the top
+    # of this file has said "anything that takes either one goes through this"
+    # since it was written; this function did not.
+    with _INPUT_LOCK:
+        if u32.IsIconic(hwnd):
+            u32.ShowWindow(hwnd, SW_RESTORE)
+        fg = u32.GetForegroundWindow()
+        if fg == hwnd:
+            return True
+        mine = k32.GetCurrentThreadId()
+        theirs = u32.GetWindowThreadProcessId(fg, None) if fg else mine
+        attached = (bool(u32.AttachThreadInput(theirs, mine, True))
+                    if theirs != mine else False)
+        try:
+            u32.BringWindowToTop(hwnd)
+            u32.SetForegroundWindow(hwnd)
+        finally:
+            if attached:
+                u32.AttachThreadInput(theirs, mine, False)
+        return u32.GetForegroundWindow() == hwnd
 
 
 def raise_window(info: dict, project: str = "") -> bool:
@@ -679,20 +741,46 @@ def zoom_out(hwnd: int, steps: int = 2) -> bool:
     """
     if not IS_WIN or not hwnd or steps <= 0:
         return False
-    for _ in range(steps):
-        if u32.GetForegroundWindow() != hwnd:
-            return False
-        if not _keys(_key(VK_CONTROL), _key(VK_OEM_MINUS),
-                     _key(VK_OEM_MINUS, up=True), _key(VK_CONTROL, up=True)):
-            return False
-        time.sleep(0.1)
+    # Under the machine-wide lock, like every other sender: this presses a key
+    # into whatever holds the foreground, and the re-check between presses is
+    # worth nothing if another thread can raise a window between them.
+    with _INPUT_LOCK:
+        for _ in range(steps):
+            if u32.GetForegroundWindow() != hwnd:
+                return False
+            if not _keys(_key(VK_CONTROL), _key(VK_OEM_MINUS),
+                         _key(VK_OEM_MINUS, up=True), _key(VK_CONTROL, up=True)):
+                return False
+            time.sleep(0.1)
     return True
 
 
-def _clip_get() -> str:
-    """Whatever text is on the clipboard now, so it can be put back."""
-    if not u32.OpenClipboard(None):
-        return ""
+def _clip_open(tries: int = 6) -> bool:
+    """Take the clipboard, retrying a refusal.
+
+    Exactly one process may hold it at a time, and Office, every browser and
+    every clipboard manager take it briefly whenever anything is copied - so a
+    refusal here is transient by construction, the same shape as the state
+    file's denied read, and one attempt was one attempt too few.
+    """
+    for attempt in range(tries):
+        if u32.OpenClipboard(None):
+            return True
+        if attempt < tries - 1:
+            time.sleep(0.02)
+    return False
+
+
+def _clip_get() -> str | None:
+    """The clipboard's text, `""` for none, or **None** for could-not-look.
+
+    Those last two used to be the same answer, and the difference decides
+    whether the `finally` in `send_text` is allowed to clear what is there: a
+    board we opened and found no text on is a board holding an image, and one we
+    were refused is a board we know nothing about.
+    """
+    if not _clip_open():
+        return None
     try:
         h = u32.GetClipboardData(CF_UNICODETEXT)
         if not h:
@@ -722,7 +810,7 @@ def _clip_had_anything() -> bool:
 
 
 def _clip_clear() -> None:
-    if not u32.OpenClipboard(None):
+    if not _clip_open():
         return
     try:
         u32.EmptyClipboard()
@@ -731,19 +819,33 @@ def _clip_clear() -> None:
 
 
 def _clip_set(text: str) -> bool:
+    """Put one line on the clipboard. False means it is unchanged, or empty.
+
+    `EmptyClipboard` has to come first - Windows requires it to take ownership
+    before `SetClipboardData` - so a failure between the two leaves the board
+    cleared and cannot be otherwise. What it must not also do is leak: on that
+    path the clipboard did *not* take the handle, so this frees it, and a
+    `GlobalLock` that answers null is no longer memmove'd to address zero.
+    """
     buf = ctypes.create_unicode_buffer(text)
     h = k32.GlobalAlloc(GMEM_MOVEABLE, ctypes.sizeof(buf))
     if not h:
         return False
     p = k32.GlobalLock(h)
+    if not p:
+        k32.GlobalFree(h)
+        return False
     ctypes.memmove(p, buf, ctypes.sizeof(buf))
     k32.GlobalUnlock(h)
-    if not u32.OpenClipboard(None):
+    if not _clip_open():
         k32.GlobalFree(h)
         return False
     try:
         u32.EmptyClipboard()
-        return bool(u32.SetClipboardData(CF_UNICODETEXT, h))   # clipboard owns h
+        if u32.SetClipboardData(CF_UNICODETEXT, h):
+            return True                    # the clipboard owns h from here
+        k32.GlobalFree(h)                  # it does not, and nobody else will
+        return False
     finally:
         u32.CloseClipboard()
 
@@ -787,6 +889,11 @@ def send_text(info: dict, project: str, text: str) -> bool:
         had = _clip_had_anything()
         saved = _clip_get()
         if not _clip_set(line):
+            # `_clip_set` empties before it stores, because Windows makes that
+            # the order, so a failure here has already cleared the board. Put
+            # back what was read rather than leaving the user with nothing.
+            if saved:
+                _clip_set(saved)
             return False
         try:
             if not raise_hwnd(hwnd):
@@ -813,8 +920,13 @@ def send_text(info: dict, project: str, text: str) -> bool:
             time.sleep(0.15)   # paste has to read it before it is taken away
             if saved:
                 _clip_set(saved)
-            elif had:
+            elif had and saved == "":
                 # Something was there that we could not carry - an image, a file
                 # selection, a spreadsheet range. Leaving our line behind would
                 # be a silent substitution; an empty clipboard is at least true.
+                #
+                # `saved == ""` and not `saved is None`: None means the board
+                # was never opened, so "there was something" and "there was no
+                # *text*" have not been told apart, and clearing on that is a
+                # transient refusal deciding to throw the user's work away.
                 _clip_clear()

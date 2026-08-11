@@ -66,10 +66,18 @@ try:
     import duck as ducking
 except ImportError:
     MISSING.append("duck")
+    # Every name the rest of this file reaches for, including the two `--sweep`
+    # asks for directly. They were absent, and the top-level `except Exception:
+    # sys.exit(0)` swallowed the AttributeError - measured with speak.py alone
+    # on the path, the check never ran and the command exited 0, which reads
+    # exactly like a machine with nothing to repair. A diagnostic that cannot
+    # fail loudly is worse than no diagnostic: it answers "clean" either way.
     ducking = SimpleNamespace(duck=lambda *a, **k: False,
                               restore=lambda *a, **k: None,
                               recover=lambda *a, **k: None,
-                              sweep=lambda *a, **k: [])
+                              sweep=lambda *a, **k: [],
+                              _stored=lambda *a, **k: [],
+                              is_duck=lambda *a, **k: False)
 try:
     import focus as focusing
 except ImportError:
@@ -96,12 +104,17 @@ IS_MAC = sys.platform == "darwin"
 # you were doing, every single time. Every subprocess here is headless.
 NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if IS_WIN else {}
 
-# Bumped whenever anything on the hook path changes - this file, duck.py or
-# win_audio.ps1. aello vendors those three and records the value it copied, so
+# Bumped whenever anything on the hook path changes - which is every file aello
+# vendors, currently five: this one, duck.py, focus.py, notify.py and
+# win_audio.ps1. `.github/workflows/hook-version.yml` holds that list and is the
+# control; this comment said *three* for months, and someone editing focus.py
+# who read it here would correctly conclude no bump was needed and ship a stale
+# copy to 41 environments that compare equal forever - the exact false-healthy
+# reading the constant exists to prevent. aello records the value it copied, so
 # comparing it against the value here is how a vendored copy learns it has
 # fallen behind. Station-only changes leave it alone: a version that moves for
 # reasons the hook never executes trains everyone to ignore the warning.
-HOOK_VERSION = 19
+HOOK_VERSION = 24
 
 
 def _num(name: str, default, cast=int):
@@ -218,11 +231,6 @@ def lock(name: str, stale: float = 5.0, timeout: float = 600.0):
     token = f"{os.getpid()}-{uuid.uuid4().hex}"
     deadline = time.time() + timeout
     held = False
-    # Which locks *this thread* holds, so write_state can refuse an unlocked
-    # write. Thread-local because the station serves every request on a new one.
-    names = getattr(_HELD, "names", None)
-    if names is None:
-        names = _HELD.names = set()
     while time.time() < deadline:
         try:
             fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
@@ -241,23 +249,43 @@ def lock(name: str, stale: float = 5.0, timeout: float = 600.0):
                     held = _owns(path, token)
                     if held:
                         break
-                    mine.unlink(missing_ok=True)
+                    # Nothing to clean up: `os.replace` renamed `mine` away
+                    # whether or not this rename was the last one to land.
                     continue
             except OSError:
                 pass
             time.sleep(0.2)
     if held:
-        names.add(name)
+        _held()[name] = (path, token)
     try:
         yield held
     finally:
         if held:
-            names.discard(name)
+            if _held().get(name) == (path, token):
+                _held().pop(name, None)
             try:
                 if _owns(path, token):
                     path.unlink()
             except OSError:
                 pass
+
+
+def _held() -> dict:
+    """Which locks *this thread* holds, and on what token.
+
+    A bare set of names was enough to catch an unlocked write and not enough to
+    catch a robbed one: a holder that ran long enough to be legitimately stolen
+    from still had "state" in its set, so `write_state` let it publish its
+    12-second-old snapshot straight over the thief's. Staged across two threads
+    and reproduced - the thief wrote, the victim wrote, the thief's change was
+    gone. Carrying the token means the guard can ask the *file* who owns it.
+
+    Thread-local because the station serves every request on a new thread.
+    """
+    d = getattr(_HELD, "locks", None)
+    if d is None:
+        d = _HELD.locks = {}
+    return d
 
 
 def _owns(path: Path, token: str) -> bool:
@@ -275,6 +303,16 @@ def touch(name: str) -> None:
 
 
 # --- state -----------------------------------------------------------------
+# Windows opens files without FILE_SHARE_DELETE, so a reader and a publisher's
+# os.replace lock each other out - and there are always readers: /api/state
+# reads this file every two seconds for as long as a tab is open, and 41 hooks
+# read it three times a turn. The collision is transient by construction, which
+# is why a couple of retries is the whole fix; what it must never do is degrade
+# quietly, so both sides now report instead of guessing.
+_READ_TRIES = 3
+_REPLACE_TRIES = 4
+_RETRY_PAUSE = 0.02
+
 
 def read_state() -> dict:
     # "Absent" and "there but unreadable" are two different answers and used to
@@ -282,34 +320,76 @@ def read_state() -> dict:
     # defaults, and the next of the twenty-odd writers persisted those defaults
     # over the real file - every preset, pin, lease, colour and mute gone, with
     # no error anywhere. `_intact` is what write_state refuses to overwrite on.
-    s, intact = {}, True
-    try:
-        s = json.loads(STATE.read_text(encoding="utf-8"))
-        if not isinstance(s, dict):
-            s, intact = {}, False
-    except OSError:
-        pass                      # no file yet, which is a legitimate empty
-    except ValueError:
-        intact = False            # present and corrupt: defaults are not the truth
+    #
+    # There is a third answer and it used to land in the *absent* arm. Python's
+    # open() does not ask for FILE_SHARE_DELETE, so while another writer's
+    # os.replace is landing, reading this file raises PermissionError - an
+    # OSError, filed under "no file yet". Measured: 275 of 22,453 unlocked reads
+    # against one publisher came back with an empty pool, global mute reported
+    # OFF, and `_intact` still True, which licenses a mutate_state block that
+    # read on a bad instant to publish those defaults over the real file. That
+    # is the erase `_intact` exists to prevent, reached through OSError instead
+    # of ValueError. Absent, corrupt and denied are three answers now.
+    s, intact, raw, denied = {}, True, None, None
+    for _ in range(_READ_TRIES):
+        try:
+            raw, denied = STATE.read_text(encoding="utf-8"), None
+            break
+        except FileNotFoundError:
+            raw, denied = None, None      # legitimately empty; nothing to retry
+            break
+        except OSError as e:
+            denied = e                    # transient by construction: retry
+            time.sleep(_RETRY_PAUSE)
+    if denied is not None:
+        intact = False
+    elif raw is not None:
+        try:
+            s = json.loads(raw)
+            if not isinstance(s, dict):
+                s, intact = {}, False
+        except ValueError:
+            s, intact = {}, False   # present and corrupt: defaults are not the truth
     s["_intact"] = intact
     s.setdefault("global", False)
-    s.setdefault("projects", {})
-    s.setdefault("presets", [])
-    s.setdefault("leases", {})
     s.setdefault("duck", 15)      # percent to drop other audio to; 100 = off
-    s.setdefault("windows", {})   # cwd -> terminal window title, when guessing is wrong
-    s.setdefault("voices", {})    # cwd -> preset id, pinned for good
-    s.setdefault("images", {})    # cwd -> picture filename under images/
-    s.setdefault("colors", {})    # cwd -> that picture's accent colour
-    s.setdefault("prompts", {})   # cwd -> {subject, style, energy, palette, extra}
     s.setdefault("promptbase", "")  # the tail every generated prompt ends with
-    s.setdefault("profiles", {})  # env dir -> {name, cwd, blueprint, launch, pid}
     s.setdefault("spoken", 0)     # turns ever spoken; survives the history trim
+    # The containers are checked by *type*, not merely defaulted: `setdefault`
+    # cannot repair a key that is present with the wrong one, and every consumer
+    # of these iterates or calls `.items()`. Measured with `{"leases": null}` on
+    # disk - `_intact` came back True, `dead_leases` raised AttributeError, and
+    # the hook's top-level handler turns any exception into `sys.exit(0)`, so
+    # every response in every env silently stops speaking with nothing said
+    # anywhere. No writer here produces that shape; this file is hand-edited,
+    # shared with aello, and one bad key is not worth the whole fleet.
+    #
+    # Repaired in memory rather than refused: `_intact` is what blocks writing,
+    # and blocking it here would leave the file broken for good with no way back
+    # through the station. What the wrong-typed key held is unreadable either
+    # way.
+    for name, empty in (("projects", {}),   # key -> muted
+                        ("presets", []),
+                        ("leases", {}),     # session -> lease
+                        ("windows", {}),    # cwd -> terminal window title
+                        ("voices", {}),     # cwd -> preset id, pinned for good
+                        ("images", {}),     # cwd -> picture filename
+                        ("colors", {}),     # cwd -> that picture's accent colour
+                        ("prompts", {}),    # cwd -> {subject, style, …}
+                        ("profiles", {})):  # env dir -> {name, cwd, …}
+        if not isinstance(s.get(name), type(empty)):
+            s[name] = type(empty)()
     return s
 
 
-def write_state(state: dict) -> None:
-    """Publish state.json, or decline to.
+def write_state(state: dict) -> bool:
+    """Publish state.json, or decline to. True only when it actually landed.
+
+    It returned None on every path, including the three that drop the write, so
+    a caller could not tell a publish from a refusal - and every mutating
+    station route answered `{"ok": true}` regardless, all the way out to the
+    board saying an afternoon's drawing was saved. The return is the whole
+    point: `mutate_state` carries it to the caller as `st.saved`.
 
     Three ways this used to lose everything in the file:
 
@@ -327,20 +407,33 @@ def write_state(state: dict) -> None:
     unparseable, writing it is how a corrupt file becomes a lost one.
     """
     if not state.pop("_intact", True):
-        return
-    if "state" not in getattr(_HELD, "names", ()):
-        # Every one of the twenty-odd call sites is inside lock("state"), but
-        # lock() yields False on timeout rather than raising and not one site
-        # checked - so a starve turned the project's central invariant off
-        # silently. Refusing here costs one dropped write and cannot corrupt.
-        return
+        return False
+    # Every one of the twenty-odd call sites is inside lock("state"), but lock()
+    # yields False on timeout rather than raising and not one site checked - so
+    # a starve turned the project's central invariant off silently. Asking the
+    # lock *file* rather than a name in a thread-local set is what also catches
+    # the robbed holder: see _held().
+    mine = _held().get("state")
+    if not mine or not _owns(*mine):
+        return False
     tmp = STATE.with_name(f"state.{os.getpid()}-{uuid.uuid4().hex}.tmp")
     try:
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(state, fh, indent=2, allow_nan=False)
             fh.flush()
             os.fsync(fh.fileno())
-        os.replace(tmp, STATE)
+        for attempt in range(_REPLACE_TRIES):
+            try:
+                os.replace(tmp, STATE)
+                return True
+            except OSError:
+                # Somebody has the file open for reading, which on Windows
+                # denies the rename outright. Measured: 177 of 300 writes lost
+                # this way against one busy reader, every one reported as a
+                # success. It clears on its own, so wait and go again.
+                if attempt == _REPLACE_TRIES - 1:
+                    raise
+                time.sleep(_RETRY_PAUSE)
     except (OSError, ValueError):
         # allow_nan=False raises on a NaN that reached state some other way:
         # json.dumps would happily emit a literal NaN, which every browser's
@@ -350,6 +443,19 @@ def write_state(state: dict) -> None:
             tmp.unlink(missing_ok=True)
         except OSError:
             pass
+    return False
+
+
+class _State(dict):
+    """The state, plus whether the block that changed it got published.
+
+    `saved` is None while the block is still running, True once the change is on
+    disk - or when there was nothing to write - and False when the publish was
+    dropped: a lock that was never acquired, a lock that was stolen, a corrupt
+    file we refuse to overwrite, or a rename Windows denied four times running.
+    A dict subclass so none of the twenty-odd existing call sites change.
+    """
+    saved = None
 
 
 @contextmanager
@@ -373,13 +479,20 @@ def mutate_state(stale: float = 5.0, timeout: float = 15.0):
 
     An exception inside the block skips the write, which is what you want:
     half-applied is worse than not applied.
+
+    What it yields is a plain dict with one attribute on it, `saved`, so a
+    caller that cares whether the change reached disk can ask - and one that
+    does not is unchanged. Every mutating route used to answer `{"ok": true}`
+    off a write that had been dropped.
     """
     with lock("state", stale=stale, timeout=timeout):
-        st = read_state()
+        st = _State(read_state())
         before = _fingerprint(st)
         yield st
         if before is None or _fingerprint(st) != before:
-            write_state(st)
+            st.saved = write_state(st)
+        else:
+            st.saved = True     # nothing to publish is not a failure to publish
 
 
 def _fingerprint(state: dict):
@@ -451,12 +564,35 @@ def identity(cwd: str, profiles: dict) -> tuple:
 # The key is a profile's env dir where one is declared, and the working
 # directory otherwise - see identity().
 
-def pin_preset(key: str, presets: list, pins: dict) -> str:
-    """The preset id pinned to this project, claiming one if it has none."""
+def pin_preset(key: str, presets: list, pins: dict, live: set = None) -> str:
+    """The preset id pinned to this project, claiming one if it has none.
+
+    `live` is which keys count as occupying a preset: the declared profiles,
+    plus anything holding a lease, because `identity()` falls back to the
+    working directory and an unprofiled session is a real agent with a real
+    voice. Everything else in `pins` is a fossil - measured here, 17 of 45 keys
+    were not profiles, 3 of them naming directories that no longer exist and
+    several naming a scratchpad from an afternoon's test. A fossil that counts
+    is a voice nobody can be given.
+
+    Passing nothing counts every key, which is what the station's own callers
+    want when there is no state to ask.
+
+    This does not buy headroom and must not be sold as if it did. Measured on
+    this machine before the change: 28 presets, 28 profiles, 45 pins, and both
+    rules mark the same 28 ids used - so a new project shares a live voice
+    either way, because the pool is genuinely full. What changes is *which* one
+    it shares, and that is the point: `used` is a list and the fallback shares
+    out the least-used preset, so counting fossils meant a folder from an
+    afternoon's test could push a real agent's voice up the queue. Measured
+    after: a new key is offered a different preset from the one the old rule
+    picked. The full pool is a decision for the user, not a bug here.
+    """
     by_id = {p["id"]: p for p in presets}
     if pins.get(key) in by_id:
         return pins[key]
-    used = [pins[c] for c in pins if c != key]
+    used = [pins[c] for c in pins
+            if c != key and (live is None or c in live)]
     free = [p for p in presets if p["id"] not in used]
     # More projects than voices: share out the one fewest projects already use.
     chosen = free[0] if free else min(presets, key=lambda p: used.count(p["id"]))
@@ -569,7 +705,12 @@ def lease_preset(session: str, key: str, project: str, cwd: str = "",
                     and (l.get("key") or l.get("cwd")) == key]:
             leases.pop(sid)
 
-        chosen = pin_preset(key, presets, st["voices"])
+        # Profiles and lease-holders only. A pin under any other key is left
+        # over from a folder nobody stands in any more, and counting it holds a
+        # preset against a project that does not exist.
+        chosen = pin_preset(key, presets, st["voices"],
+                            set(st.get("profiles") or {})
+                            | {l.get("key") for l in leases.values()})
         prev = leases.get(session, {})
         leases[session] = {"preset": chosen, "key": key, "cwd": cwd or key,
                            "project": project, "pid": pid,
@@ -940,39 +1081,79 @@ def count_spoken(seed: int) -> None:
     said before this existed was trimmed away and is not recoverable, so the
     count starts as a floor rather than as a fiction or a zero.
 
-    Taken inside lock("history"), which is a new order - nothing anywhere takes
-    the history lock while holding state, so it cannot cycle.
+    Called *outside* lock("history") and deliberately: it only needs the line
+    count, which record() captures and hands over once it has let go. Nested, it
+    was a 15-second wait on lock("state") inside a lock whose own stale window
+    is 10 - so a busy machine robbed the history lock out from under a turn that
+    was still holding it, and the robbed holder then trimmed the file back to
+    its own stale snapshot. Staged: two holders at once, the second turn erased
+    from history, its mp3 swept, and `spoken` still counting it.
     """
     with mutate_state() as st:
         counted = int(st.get("spoken") or 0)
         st["spoken"] = counted + 1 if counted else seed
 
 
+def _write_history(lines: list) -> None:
+    """Republish history.jsonl through a temp name, the way state already is.
+
+    `write_text` truncates in place, and `/api/state` reads this whole file
+    every two seconds: measured on a 1.27MB file, a concurrent reader saw a
+    short file on 141 of 297 reads and a completely empty one on 126, each of
+    which hands the page `entries: []` and empties knownProjects. Unique name
+    per writer, fsync before the rename, and the same retry state uses - the
+    rename is what a reader denies, and it clears on its own.
+    """
+    tmp = HISTORY.with_name(f"history.{os.getpid()}-{uuid.uuid4().hex}.tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        for attempt in range(_REPLACE_TRIES):
+            try:
+                return os.replace(tmp, HISTORY)
+            except OSError:
+                if attempt == _REPLACE_TRIES - 1:
+                    raise
+                time.sleep(_RETRY_PAUSE)
+    except OSError:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def record(entry: dict) -> None:
+    seed = 0
     with lock("history", stale=10.0, timeout=15.0):
         with HISTORY.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(entry) + "\n")
         try:
             lines = HISTORY.read_text(encoding="utf-8").splitlines()
         except OSError:
-            return
-        count_spoken(len(lines))
-        if len(lines) <= KEEP:
-            return
-        lines = lines[-KEEP:]
-        HISTORY.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        live = set()
-        for line in lines:
-            try:
-                live.add(json.loads(line.lstrip("﻿"))["id"])
-            except (ValueError, KeyError):
-                pass
-        for f in AUDIO.glob("*.mp3"):
-            if f.stem not in live:
+            lines = []
+        seed = len(lines)
+        if seed and seed > KEEP:
+            lines = lines[-KEEP:]
+            _write_history(lines)
+            live = set()
+            for line in lines:
                 try:
-                    f.unlink()
-                except OSError:
-                    pass  # being played right now (Windows locks open files)
+                    live.add(json.loads(line.lstrip("﻿"))["id"])
+                except (ValueError, KeyError):
+                    pass
+            for f in AUDIO.glob("*.mp3"):
+                if f.stem not in live:
+                    try:
+                        f.unlink()
+                    except OSError:
+                        pass  # being played right now (Windows locks open files)
+    # Outside the history lock on purpose - see count_spoken. Everything above
+    # needed the lock; this needs a number, and taking a 15s wait on another
+    # lock while holding one with a 10s stale window is how a turn gets erased.
+    if seed:
+        count_spoken(seed)
 
 
 def read_history() -> list:
@@ -1005,7 +1186,7 @@ def entry_age(entry: dict) -> float:
 def recent_repairs(hist: list, hours: float = 24.0) -> list:
     """Volume repairs within `hours`, oldest first, as (age, description).
 
-    A window in *entries* was the wrong shape on a fleet: 39 environments
+    A window in *entries* was the wrong shape on a fleet: 41 environments
     append to one `history.jsonl`, so the last 50 entries are a few minutes of
     everyone's activity and a repair from an hour ago had already fallen off
     the end - "none" then reads as a clean machine when it only means the
@@ -1031,25 +1212,33 @@ def recent_repairs(hist: list, hours: float = 24.0) -> list:
 # new value when its turn comes and is untouched.
 
 def _sweep_tokens(keep: float = 172800.0) -> None:
-    """Drop session claim files nobody can ever read again.
+    """Drop the run-directory files nobody can ever read again.
 
-    One is written per session and removed by nothing, so they accumulate for
-    the life of the machine - 135 were on disk against four live leases. Inert,
-    because `session_token` looks one up by exact uuid and a stale file can
-    never collide with a new session. But a directory that only grows is a leak
-    whoever reads it next has to reason about, and two days is far longer than
-    any session that could still be claimed.
+    One session claim is written per session and removed by nothing, so they
+    accumulate for the life of the machine - 135 were on disk against four live
+    leases. Inert, because `session_token` looks one up by exact uuid and a
+    stale file can never collide with a new session. But a directory that only
+    grows is a leak whoever reads it next has to reason about, and two days is
+    far longer than any session that could still be claimed.
+
+    All three shapes, not just the first: the argument above covers `<job>.job`,
+    which orphans whenever the worker Popen fails, and `retry-<session>`, which
+    orphans on a turn that was interrupted between writing it and reading it
+    back. This globbed `session-*.job` alone and left the other two growing for
+    the same reason it was written to stop.
     """
     cut = time.time() - keep
     try:
-        for f in RUN.glob("session-*.job"):
-            try:
-                if f.stat().st_mtime < cut:
-                    f.unlink()
-            except OSError:
-                pass       # in use, or already gone; the next turn tries again
+        stale = [f for pattern in ("*.job", "retry-*")
+                 for f in RUN.glob(pattern)]
     except OSError:
-        pass
+        return
+    for f in stale:
+        try:
+            if f.stat().st_mtime < cut:
+                f.unlink()
+        except OSError:
+            pass           # in use, or already gone; the next turn tries again
 
 
 def session_token(session: str) -> str:
@@ -1074,7 +1263,18 @@ def skip_token() -> str:
 
 
 def run_cancellable(cmd: list, job_id: str, session: str, stop_at_start: str,
-                    skip_at_start: str) -> None:
+                    skip_at_start: str) -> int | None:
+    """Play it, and say how it went: the exit code, or None if we stood down.
+
+    The code used to be thrown away, and both pipes are DEVNULL - so a player
+    that exited 1 without making a sound and one that read the line out were the
+    same thing from here, while `record()` had already claimed the turn was
+    spoken. "Silent fallbacks need loud records" was applied to synthesis and
+    not to the half that actually reaches the user's ears.
+
+    None for a cancellation, and it is not the same answer: `terminate()` leaves
+    a nonzero code behind, so reporting that would file every Skip as a failure.
+    """
     kwargs = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
     if IS_WIN:
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
@@ -1095,7 +1295,8 @@ def run_cancellable(cmd: list, job_id: str, session: str, stop_at_start: str,
                 proc.wait(timeout=3)
             except subprocess.TimeoutExpired:
                 proc.kill()
-            return
+            return None
+    return proc.returncode
 
 
 # --- telegram --------------------------------------------------------------
@@ -1130,11 +1331,18 @@ def tg_env(name: str, default: str = "") -> str:
     a change on the next response either way; the station is not, and a registry
     hit on every send would be paid forty-one times a turn for an answer that
     changes about once a month.
+
+    Stripped, and that is the security half rather than tidiness. A token set
+    with a trailing space builds a URL with a space in it, `urllib` raises
+    `InvalidURL` *carrying the whole URL*, and `_tg_failed` writes the exception
+    text into `state.json` - measured, the entire token, inside the `[:200]`
+    truncation and printed by `--status`. Whitespace round a credential is what
+    a paste into a settings box leaves behind, so it is the ordinary case.
     """
     got = os.environ.get(name)
     if got is not None:
-        return got
-    return _PERSISTED.get(name, default)
+        return got.strip()
+    return _PERSISTED.get(name, default).strip()
 
 
 def _user_env() -> dict:
@@ -1252,9 +1460,22 @@ def telegram_send(project: str, text: str, mp3: Path | None) -> bool:
 # time the send is attempted - deliberately, because a 30s upload must not sit
 # between a finished turn and the station showing it - so putting it on the
 # entry would mean rewriting the whole file on the hook path, once per turn,
-# across 39 environments. `mutate_state` publishes only on a change, so a
+# across 41 environments. `mutate_state` publishes only on a change, so a
 # machine where Telegram works never writes this at all.
+#
+# And what goes in is redacted, because the token is *in the URL* every one of
+# these exceptions was raised about. Stripping `tg_env` removes the trigger that
+# was measured; this removes the class - `HTTPError`, a proxy error, anything
+# that quotes what it was asked for. The two are not the same guard and the
+# cheap one is the one that does not need every exception shape known first.
 def _tg_failed(reason: str, project: str) -> bool:
+    # Long enough to be a token, or the redaction is the bug. A real one is
+    # `<digits>:<35 chars>`; the suite's stub is "t", and blanket-replacing that
+    # turned "TimeoutError: timed out" into "Timeou<token>Error: <token>imed
+    # ou<token>". A guard that eats the diagnosis is worse than the leak.
+    token = tg_env("TELEGRAM_BOT_TOKEN", "")
+    if len(token) > 8:
+        reason = reason.replace(token, "<token>")
     with mutate_state() as st:
         st["telegram_error"] = {"at": time.time(), "reason": reason[:200],
                                 "project": project}
@@ -1268,6 +1489,24 @@ def _tg_ok() -> bool:
     with mutate_state() as st:
         st.pop("telegram_error", None)
     return True
+
+
+def _play_note(code: int | None, project: str) -> None:
+    """Record a playback that failed, and clear the record when one works.
+
+    The same shape as `telegram_error`, for the same reason and with the same
+    two properties: it means *right now* rather than *ever*, and the ordinary
+    path writes nothing at all, because `mutate_state` publishes only on a
+    change and popping an absent key is not one. `--status` prints it.
+    """
+    if code is None:
+        return                      # cancelled: Stop or Skip, not a failure
+    with mutate_state() as st:
+        if code:
+            st["play_error"] = {"at": time.time(), "code": code,
+                                "project": project}
+        else:
+            st.pop("play_error", None)
 
 
 def sweep_ducks() -> list:
@@ -1288,7 +1527,23 @@ def sweep_ducks() -> list:
             return []
     except OSError:
         pass                          # no lock at all, so nobody is speaking
-    if (RUN / "duck.json").exists():
+    # The record, not merely the file. `_restore` leaves behind what it could
+    # not reach, at `"at": 0`, which duck.py documents as reading like a duck
+    # that is over - and a chat app that ducks and then goes quiet without
+    # exiting leaves one all day. `.exists()` read that as a duck in progress
+    # and switched the sweep off entirely, which after the match fix above is
+    # the only path left to permanent damage. Anything unreadable counts as a
+    # duck: the one mistake worth avoiding is sweeping over a live one.
+    try:
+        # An explicit 0 is the only thing that lets this through, because
+        # `_restore` is the only writer of one. A record with no `at` at all is
+        # a duck, not a leftover.
+        if float(json.loads((RUN / "duck.json").read_text(
+                encoding="utf-8")).get("at", 1)):
+            return []
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError, TypeError, AttributeError):
         return []
     level = float(read_state().get("duck", 15)) / 100.0
     # A duck of 100% is ducking switched off; there is no signature to look for
@@ -1427,8 +1682,12 @@ def worker(job_file: Path) -> None:
             notifying.show(job["project"], job["text"],
                            job.get("key") or job["cwd"], job["id"])
             touch("speaker")
-            run_cancellable(cmd, job["id"], job["session"], stop_at_start,
-                            skip_at_start)
+            code = run_cancellable(cmd, job["id"], job["session"],
+                                   stop_at_start, skip_at_start)
+            # Nonzero means the player refused the file, or was not there at
+            # all, and nothing was heard - while history has already recorded
+            # the turn as spoken. None is a cancellation and is not a failure.
+            _play_note(code, job["project"])
         finally:
             playing.unlink(missing_ok=True)
             ducking.restore(duck_file)
@@ -1548,6 +1807,21 @@ def hook() -> None:
 
 # --- cli -------------------------------------------------------------------
 
+def _landed(state, said: str) -> str:
+    """What to print after a `mutate_state` block, from whether it published.
+
+    These lines were printed off the in-memory dict, which is the one thing
+    guaranteed to say what you asked for: a lock never acquired, a lock stolen,
+    a `state.json` too corrupt to overwrite and a rename Windows denied all
+    printed `muted` and changed nothing. `--mute` in particular writes the stop
+    token *outside* the block, so the line being spoken really does stop - you
+    hear silence, read "muted", and the next turn speaks.
+    """
+    if getattr(state, "saved", True) is False:
+        return f"NOT SAVED - {said} was not written to {STATE}"
+    return said
+
+
 def main() -> None:
     args = sys.argv[1:]
     if not args:
@@ -1596,7 +1870,7 @@ def main() -> None:
             state["global"] = cmd == "--mute"
         if cmd == "--mute":
             (RUN / "stop").write_text(uuid.uuid4().hex, encoding="utf-8")
-        print("muted" if state["global"] else "unmuted")
+        print(_landed(state, "muted" if state["global"] else "unmuted"))
     elif cmd in ("--mute-project", "--unmute-project"):
         target = str(Path(args[1]).resolve()) if len(args) > 1 else os.getcwd()
         with mutate_state() as state:
@@ -1604,7 +1878,8 @@ def main() -> None:
                 state["projects"][target] = True
             else:
                 state["projects"].pop(target, None)
-        print(f"{'muted' if cmd == '--mute-project' else 'unmuted'}: {target}")
+        print(_landed(state,
+                      f"{'muted' if cmd == '--mute-project' else 'unmuted'}: {target}"))
     elif cmd == "--presets":
         if not state["presets"]:
             print("pool empty - using the built-in default voice")
@@ -1632,7 +1907,7 @@ def main() -> None:
             else:
                 state["voices"].pop(target, None)
                 pid = ""
-        print(f"{'pinned ' + pid if pid else 'unpinned'}: {target}")
+        print(_landed(state, f"{'pinned ' + pid if pid else 'unpinned'}: {target}"))
     elif cmd == "--leases":
         if not state["leases"]:
             print("no voices are currently leased")
@@ -1646,6 +1921,14 @@ def main() -> None:
               + ("  INCOMPLETE COPY - no "
                  + ", ".join(f"{m}.py" for m in MISSING) + " beside it"
                  if MISSING else ""))
+        # A corrupt or unreadable state.json prints as a clean empty install -
+        # no pool, no pins, mute off - and every write is refused from then on,
+        # so it is permanent and nothing anywhere said so. `_intact` had exactly
+        # one consumer, which was write_state refusing. Now it has two.
+        if not state.get("_intact", True):
+            print(f"state file    : UNREADABLE - {STATE}")
+            print("                every figure below is a default, not a "
+                  "reading, and no write will be accepted until it is fixed")
         print(f"global mute   : {state['global']}")
         print(f"muted projects: {[p for p, v in state['projects'].items() if v] or 'none'}")
         print(f"pool          : {len(state['presets'])} preset(s), "
@@ -1695,6 +1978,16 @@ def main() -> None:
             mins = (time.time() - float(err.get("at", 0))) / 60
             print(f"  last failure: {err.get('reason')} "
                   f"({err.get('project', '?')}, {mins:.0f}m ago)")
+        # The same record for the half nobody could see: a player that exits
+        # nonzero says nothing and writes nothing to either pipe, and history
+        # has already recorded the turn as spoken, so a broken player is
+        # indistinguishable from a quiet afternoon. Cleared by the next line
+        # that plays, so absent is the healthy reading here too.
+        bad = state.get("play_error")
+        if bad:
+            mins = (time.time() - float(bad.get("at", 0))) / 60
+            print(f"playback      : last failure exit {bad.get('code')} "
+                  f"({bad.get('project', '?')}, {mins:.0f}m ago)")
     elif cmd == "--sweep":
         # "Is this machine clean, right now." The hook does this once a turn and
         # says nothing when there is nothing to do, so this is the only way to
@@ -1703,6 +1996,12 @@ def main() -> None:
         level = float(state.get("duck", 15)) / 100.0
         mode = ("off" if not SWEEP else
                 "signature only" if SWEEP_SIGNATURE else "everything below full")
+        # Said first, because the stub answers "nothing stored, nothing
+        # repaired" and that is the same output a healthy machine gives. This
+        # command's whole job is to be believed.
+        if "duck" in MISSING:
+            print("duck.py       : NOT BESIDE THIS COPY - nothing below is a "
+                  "reading, and this hook has never repaired anything")
         print(f"duck level    : {level:.2f}")
         print(f"sweep claims  : {mode}")
         for key, name, value in ducking._stored():
