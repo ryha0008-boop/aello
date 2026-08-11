@@ -3,6 +3,17 @@
 ## [Unreleased]
 
 ### Added
+- **`tools/check-integrations.py` — verify every aello integration in a repo,
+  by proving each one rather than reading a file.** It executes the voice hook to
+  ask its version, fires the `pre-commit` hook at a real staged key and requires a
+  refusal, reads CI's last actual run, and judges a lockfile on whether the
+  *transitive* set is pinned. Renovate is reported as **seeded, not confirmed
+  running** unless a PR or dependency dashboard proves the App is installed, and a
+  tracked mirror in a repo GitHub reports as `PUBLIC` is a FAIL. Exit code 1 on
+  any failure, so it loops over a fleet. Every check is shaped so that "silently
+  absent" cannot read as "fine" — a hook git never runs, a workflow never
+  committed, and a manifest listing only direct imports all look correct in a file
+  listing.
 - **`aello tokens` and a `T` tab in the TUI — token usage and estimated cost per
   env.** Input / output / cache-write / cache-read kept apart, because they price
   as much as 20x apart; per-model split, per-session breakdown (`--sessions`), and

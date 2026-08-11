@@ -2,6 +2,26 @@
 
 Failure modes and what they actually mean. Most of these look like something else first — that's why they're here.
 
+
+## Checking a repo's integrations
+
+`python tools/check-integrations.py [repo-path]` (default: the current directory) verifies everything aello seeds into a project and **proves each one rather than reading a file**:
+
+| Check | How it is proven |
+|---|---|
+| voice hook version | by **executing** `speak.py --hook-version`, which a partial copy still answers |
+| hooks registered | all six events present in the env's `settings.json` |
+| `pre-commit` | staged with a real armored key and required to **refuse**; also reports whether it is *tracked*, since an untracked hook leaves a fresh clone unguarded |
+| CI | the **last actual run's** conclusion, not the file existing |
+| Renovate | reported as *seeded, not confirmed running* unless a Renovate PR or dependency-dashboard issue is visible |
+| lockfile | whether the **transitive** set is pinned — a hand-written `requirements.txt` fails, a `--generate-hashes` one passes |
+| env mirror | **fails** if mirror files are tracked in a repo GitHub reports as `PUBLIC` |
+| `.gitignore` | the `.claude-env-*` line is present |
+
+Exit code is 1 on any FAIL, so it drops into a loop over every repo. `WARN` does not fail.
+
+Each check is written so **"silently absent" cannot read as "fine"** — that is the whole point. A hook that exists but is never run by git, a workflow that was never committed, a lockfile that lists only direct imports, and a Renovate config with no App installed all look correct from a file listing and are all caught here.
+
 ## Where things live
 
 Knowing these three paths resolves a lot on its own.
