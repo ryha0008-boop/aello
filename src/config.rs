@@ -29,7 +29,7 @@ pub fn home_dir() -> Option<PathBuf> {
 /// Expand a leading `~` to the home directory; otherwise pass through. Splits
 /// the remainder on both separators so the result uses native components (no
 /// mixed `C:\Users\H\aello/contextdb`).
-fn expand_home(p: &str) -> PathBuf {
+pub fn expand_home(p: &str) -> PathBuf {
     if p == "~" {
         return home_dir().unwrap_or_else(|| PathBuf::from(p));
     }

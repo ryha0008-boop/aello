@@ -141,7 +141,7 @@ version.*
 /// blueprint gets no git/commit/push talk at all. `name` is the blueprint name,
 /// used for the `Env:` commit trailer. Caller seeds it only when at least one
 /// capability is enabled (`Capabilities::any`).
-pub fn render_sync_skill(caps: &Capabilities, name: &str) -> String {
+pub fn render_sync_skill(caps: &Capabilities, name: &str, mirror_root: Option<&str>) -> String {
     let manual = manual_only("sync");
     let tools = if caps.github {
         "Bash, Read, Edit, Write, Grep, Glob"
@@ -221,10 +221,26 @@ Version-control this env's internal config by mirroring it into the tracked `cla
 - Snapshot `.claude-env-{name}/CLAUDE.md` → `claude-internal/{name}/persona.CLAUDE.md` — **keep this exact name**, never `CLAUDE.md`, so Claude Code does not auto-load the snapshot as a second persona.
 - If `{name}.HANDOFF.md` exists at the project root, snapshot it → `claude-internal/{name}/handoff.md`. **Lowercase `handoff.md`, and this copy IS committed** — it is the only way the resume note reaches another machine, since the root file is gitignored in some repos and deleted on the next boot in all of them. So run `/handoff` **before** `/sync`, not after: a note written afterwards misses this step and stays on this machine. Absent means nothing was written this session — leave the existing snapshot alone rather than deleting it.
 - **Read what you are about to publish, before you stage it.** This folder is your memory and your handoff, and it is the one part of this commit that nobody wrote for a reader. Memory notes are exactly where a session writes down a credential it just used — a provider API key, an OAuth token, an SSH key, a database password, the contents of a `.env`. Grep the mirror for them (`sk-ant-`, `ghp_`, `AKIA`, `BEGIN .* PRIVATE KEY`, `password`, `api_key`, `token`) and **read the hits**. If one is real key material: **stop, do not stage, do not commit**, remove it from the env's memory note as well as the mirror, and tell the user which note it was in. Do not note it and carry on — a commit is published the moment it is pushed, and rewriting history is not a fix once it is.
-- **Assume this repo is public unless you have checked.** `gh repo view --json visibility` answers it in one call. Identifiers are not the concern — IPs, hostnames, machine paths and domains are all fine — credentials and passwords are.
-- Stage it by explicit path: `git add claude-internal/{name}`. This folder is tracked on purpose — it is *not* covered by the `.claude-env-*` gitignore line.
-- A `pre-commit` hook in `.githooks/` refuses the commit if key material reaches the index anyway; the check above is so you find it *before* you have written it into a commit message and a mirror. **Never pass `--no-verify`.** If the hook fires, it found something real — read what it named.
-"
+- Identifiers are not the concern — IPs, hostnames, machine paths and domains are all fine — credentials and passwords are.
+{destination}- A `pre-commit` hook in `.githooks/` refuses the commit if key material reaches the index anyway; the check above is so you find it *before* you have written it into a commit message and a mirror. **Never pass `--no-verify`.** If the hook fires, it found something real — read what it named.
+",
+            destination = match mirror_root {
+                // The mirror goes to another repo's working tree, because this
+                // one is public. Staging it here would publish exactly what the
+                // destination exists to keep private, so the skill must not
+                // contain the in-project `git add` line at all.
+                Some(root) => format!(
+                    "- **This blueprint's mirror does NOT live in this repo.** It goes to `{root}/{name}/`, which is a working tree of a *separate, private* repo — this project is public, and the mirror is your memory. **Do not `git add claude-internal/` here**; if that folder exists in this repo it is a leftover and should be `git rm -r --cached`'d and gitignored.\n\
+                     - Commit and push it in the destination repo, as its own step: `git -C {root} add {name}` → `git -C {root} commit -m \"memory: <what changed>\"` → `git -C {root} pull --rebase` → `git -C {root} push`. If the destination does not exist or is not a git repo, **stop and tell the user** — do not fall back to mirroring into this repo, which is the failure this setting exists to prevent.\n"
+                ),
+                // The default. The check is the safe-by-default half: a mirror
+                // in a public repo is a publish, and nothing else in the chain
+                // would notice.
+                None => format!(
+                    "- **Check this repo's visibility before staging: `gh repo view --json visibility`.** If it comes back `PUBLIC`, **stop**. Publishing this env's memory, persona and handoff to the world is a decision the user makes, not a side effect of `/sync`. Tell them, and point at `aello edit {name} --mirror-dir <path>`, which sends the mirror to a working tree of a private repo instead and leaves this repo's code public. If `gh` is missing or the repo has no GitHub remote, say which and treat it as unanswered rather than assuming private.\n\
+                     - Stage it by explicit path: `git add claude-internal/{name}`. This folder is tracked on purpose — it is *not* covered by the `.claude-env-*` gitignore line.\n"
+                ),
+            }
         ));
         s.push_str(&format!(
             "
@@ -429,7 +445,7 @@ mod tests {
     #[test]
     fn sync_skill_omits_git_when_no_github() {
         let caps = Capabilities { project_md: true, ..Default::default() };
-        let s = render_sync_skill(&caps, "coder");
+        let s = render_sync_skill(&caps, "coder", None);
         assert!(s.contains("CLAUDE.md"));
         assert!(!s.contains("git "));
         assert!(!s.contains("commit and push"));
@@ -442,7 +458,7 @@ mod tests {
     #[test]
     fn sync_skill_includes_git_and_only_selected_docs() {
         let caps = Capabilities { github: true, changelog: true, ..Default::default() };
-        let s = render_sync_skill(&caps, "coder");
+        let s = render_sync_skill(&caps, "coder", None);
         assert!(s.contains("Repo health"));
         assert!(s.contains("Commit + push"));
         assert!(s.contains("git pull --rebase origin")); // rebase before push, so the next push fast-forwards
@@ -455,7 +471,7 @@ mod tests {
     #[test]
     fn sync_skill_reconciles_memory_before_docs() {
         let caps = Capabilities { changelog: true, ..Default::default() };
-        let s = render_sync_skill(&caps, "coder");
+        let s = render_sync_skill(&caps, "coder", None);
         let mem = s.find("Memory first").expect("memory step present");
         let doc = s.find("CHANGELOG.md").expect("doc role present");
         assert!(mem < doc, "memory must be reconciled before the docs");
@@ -501,7 +517,7 @@ mod tests {
     #[test]
     fn sync_skill_excludes_the_transient_env_files_from_staging() {
         let caps = Capabilities { github: true, ..Default::default() };
-        let s = render_sync_skill(&caps, "coder");
+        let s = render_sync_skill(&caps, "coder", None);
         // "stage what you created this session" would otherwise sweep in the
         // handoff/note files, which are transient and deleted on next boot.
         assert!(s.contains("HANDOFF.md"));
@@ -513,7 +529,7 @@ mod tests {
     fn every_generated_skill_is_marked_user_only() {
         let caps = Capabilities { github: true, ..Default::default() };
         for (s, cmd) in [
-            (render_sync_skill(&caps, "coder"), "sync"),
+            (render_sync_skill(&caps, "coder", None), "sync"),
             (render_handoff_skill("coder"), "handoff"),
             (render_note_skill("coder"), "note"),
             (render_twosentences_skill(), "twosentences"),
@@ -530,7 +546,7 @@ mod tests {
     fn every_generated_skill_documents_the_keep_marker() {
         let caps = Capabilities { github: true, ..Default::default() };
         for (s, dir) in [
-            (render_sync_skill(&caps, "coder"), "sync"),
+            (render_sync_skill(&caps, "coder", None), "sync"),
             (render_handoff_skill("coder"), "handoff"),
             (render_note_skill("coder"), "note"),
             (render_twosentences_skill(), "twosentences"),
@@ -551,7 +567,7 @@ mod tests {
     #[test]
     fn sync_skill_mirrors_internal_before_commit() {
         let caps = Capabilities { github: true, ..Default::default() };
-        let s = render_sync_skill(&caps, "reviewer");
+        let s = render_sync_skill(&caps, "reviewer", None);
         // Mirror step names the per-blueprint tracked folder, the env source,
         // the renamed persona snapshot, and self-heals the folder.
         assert!(s.contains("claude-internal/reviewer/")); // namespaced per blueprint
@@ -573,7 +589,7 @@ mod tests {
     #[test]
     fn sync_reads_the_mirror_before_it_publishes_it() {
         let caps = Capabilities { github: true, ..Default::default() };
-        let s = render_sync_skill(&caps, "reviewer");
+        let s = render_sync_skill(&caps, "reviewer", None);
 
         let check = s.find("before you stage it").expect("mirror must be reviewed before staging");
         let stage = s.find("git add claude-internal/reviewer").expect("stage step");
@@ -590,6 +606,50 @@ mod tests {
         );
     }
 
+    /// The default is safe-by-default rather than merely configurable: a mirror
+    /// staged into a public repo publishes the env's memory, and nothing else in
+    /// the chain would ever notice. `/sync` has to check and stop.
+    #[test]
+    fn sync_stops_before_publishing_a_mirror_into_a_public_repo() {
+        let caps = Capabilities { github: true, ..Default::default() };
+        let s = render_sync_skill(&caps, "reviewer", None);
+        assert!(s.contains("gh repo view --json visibility"));
+        assert!(s.contains("If it comes back `PUBLIC`, **stop**"));
+        // It must name the way out, or the only available action is to give up.
+        assert!(s.contains("aello edit reviewer --mirror-dir"));
+        // And it must not treat "cannot tell" as "private".
+        assert!(s.contains("treat it as unanswered rather than assuming private"));
+    }
+
+    /// With a destination set, the in-project `git add claude-internal/…` line
+    /// must be **gone**, not merely accompanied by a warning. Leaving it in is
+    /// how the mirror ends up in both places — and the public one is the one
+    /// that matters.
+    #[test]
+    fn a_configured_mirror_destination_replaces_the_in_project_stage() {
+        let caps = Capabilities { github: true, ..Default::default() };
+        let s = render_sync_skill(&caps, "reviewer", Some("/srv/private-mirror"));
+
+        assert!(
+            !s.contains("git add claude-internal/reviewer"),
+            "the in-project stage must not survive alongside a destination"
+        );
+        // …and the section says so outright. Note that a bare grep for
+        // `git add claude-internal` still matches — on this prohibition — so
+        // that is not a usable check on a rendered skill.
+        assert!(s.contains("Do not `git add claude-internal/` here"));
+        assert!(s.contains("git -C /srv/private-mirror add reviewer"));
+        assert!(s.contains("git -C /srv/private-mirror push"));
+        // A missing destination must not silently fall back to publishing here.
+        assert!(
+            s.contains("do not fall back to mirroring into this repo"),
+            "a fallback is the exact failure the destination exists to prevent"
+        );
+        // The public-repo check belongs to the default branch only — with a
+        // destination configured, this repo being public is the expected case.
+        assert!(!s.contains("If it comes back `PUBLIC`, **stop**"));
+    }
+
     #[test]
     fn sync_carries_the_handoff_across_machines_without_committing_the_root_file() {
         // Two rules that read as contradictions unless both are spelled out: the
@@ -597,7 +657,7 @@ mod tests {
         // always is. Without the second the note cannot reach a second machine at
         // all — which is how it worked until now.
         let caps = Capabilities { github: true, ..Default::default() };
-        let s = render_sync_skill(&caps, "reviewer");
+        let s = render_sync_skill(&caps, "reviewer", None);
         assert!(s.contains("claude-internal/reviewer/handoff.md"));
         assert!(s.contains("reviewer.HANDOFF.md"));
         // The ordering is the whole flow: a note written after /sync misses the snapshot.

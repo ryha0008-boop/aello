@@ -192,6 +192,11 @@ struct EditArgs {
     /// New role: maintainer, contributor, or standalone.
     #[arg(long, value_enum)]
     role: Option<Role>,
+    /// Send the `claude-internal/` mirror to a working tree of another repo —
+    /// use when this project is public and its memory should not be. `-` clears
+    /// it back to the in-project default.
+    #[arg(long)]
+    mirror_dir: Option<String>,
 }
 
 /// Off switch for the voice. State is machine-wide, so these apply
@@ -368,6 +373,8 @@ fn cmd_add(
     cfg.blueprints.push(Blueprint {
         name: name.clone(),
         model,
+        // Set with `aello edit --mirror-dir`; absent is the in-project mirror.
+        mirror_root: None,
         agent,
         claude_md,
         role,
@@ -515,6 +522,36 @@ fn cmd_edit(args: EditArgs) -> Result<()> {
         bp.role = role;
     }
 
+    if let Some(dir) = args.mirror_dir {
+        // `-` clears it. An empty string would be the obvious spelling, but a
+        // shell eats `--mirror-dir ""` into nothing on some setups, and silently
+        // not clearing is worse than a slightly odd sentinel.
+        if dir == "-" {
+            changed |= bp.mirror_root.is_some();
+            bp.mirror_root = None;
+        } else {
+            // Fail now rather than at the next placement. A mirror that silently
+            // goes nowhere looks exactly like one that worked: `/sync` would copy
+            // into a fresh directory, commit nothing (it is not a repo) and the
+            // memory would stop crossing machines with nothing said.
+            let path = config::expand_home(&dir);
+            if !path.is_dir() {
+                bail!(
+                    "--mirror-dir '{dir}' is not an existing directory. Clone the private \
+                     repo first, then point at its working tree."
+                );
+            }
+            if !path.join(".git").exists() {
+                bail!(
+                    "--mirror-dir '{dir}' is not a git repo. The mirror is only useful if \
+                     it can be committed and pulled on another machine."
+                );
+            }
+            changed |= bp.mirror_root.as_deref() != Some(dir.as_str());
+            bp.mirror_root = Some(dir);
+        }
+    }
+
     // Rename last: move on-disk artifacts for this project, then the config name.
     if let Some(new) = args.rename {
         let project = std::env::current_dir().context("could not determine current directory")?;
@@ -539,7 +576,9 @@ fn cmd_edit(args: EditArgs) -> Result<()> {
     }
 
     if !changed {
-        bail!("nothing to change — pass --rename, --model, --claude-md, or --role");
+        bail!(
+            "nothing to change — pass --rename, --model, --claude-md, --role, or --mirror-dir"
+        );
     }
 
     let name = bp.name.clone();
@@ -598,7 +637,11 @@ pub(crate) fn run_blueprint(
     }
 
     let env = project::env_dir(&project, &bp.name);
-    let inst = Instance { name: bp.name.clone(), model: bp.model.clone() };
+    let inst = Instance {
+        name: bp.name.clone(),
+        model: bp.model.clone(),
+        mirror_root: bp.mirror_root.clone(),
+    };
 
     // Resolve the global persona: a built-in template name or a file path.
     // Fail rather than warn. `add` and `edit` both reject an unresolvable
@@ -822,6 +865,8 @@ fn cmd_init() -> Result<()> {
     cfg.blueprints.push(Blueprint {
         name: name.clone(),
         model,
+        // Set with `aello edit --mirror-dir`; absent is the in-project mirror.
+        mirror_root: None,
         // The first-run wizard makes Claude blueprints only. A Cline env needs a
         // metered provider key, which is not a thing to ask for before someone
         // has run aello once.
@@ -982,7 +1027,7 @@ fn cmd_restore(name: String, project: Option<PathBuf>) -> Result<()> {
         );
     }
 
-    let r = project::restore(&project, &env, &bp_name)?;
+    let r = project::restore(&project, &env, &bp_name, bp.mirror_root.as_deref())?;
     println!("Restored '{bp_name}' from claude-internal/{bp_name}/:");
     println!("  {} memory note(s) → {}", r.memory, project::memory_dir(&env, &project).display());
     println!("  {} skill(s) → {}", r.skills, env.join("skills").display());

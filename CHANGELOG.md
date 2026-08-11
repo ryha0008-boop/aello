@@ -149,6 +149,35 @@
   project's `AGENTS.md` (Cline's project-`CLAUDE.md` equivalent) and stops.
 
 ### Added
+- **`/sync`'s mirror has a destination now — `aello edit <name> --mirror-dir
+  <path>`.** The mirror is an env's memory, persona and handoff, and in a public
+  repo staging it is a publish rather than a backup. Deleting it is not the fix:
+  being in git is exactly what makes an env restorable from a second machine. So
+  the destination moves — point it at a working tree of a **private** repo and
+  the product stays public while the memory does not.
+
+  It takes a **path to an existing git working tree**, not a URL: aello never
+  clones or pushes on your behalf, `/sync` is what commits. `edit` rejects a
+  missing directory or a non-repo up front, because a mirror writing into a plain
+  folder is indistinguishable from one that worked — files appear, nothing is
+  ever committed, and the memory silently stops crossing machines. `--mirror-dir
+  -` clears it. The `<blueprint>/` component is still appended, so one
+  destination can hold several blueprints.
+
+  With a destination set the generated `/sync` **drops the in-project `git add
+  claude-internal/…` line entirely** rather than warning next to it, and grows a
+  commit-and-push step against the destination repo. It does **not** fall back to
+  mirroring into the project when the destination is missing — it stops and says
+  so, since that fallback is the leak the setting exists to prevent.
+
+  Without a destination, `/sync` now runs `gh repo view --json visibility` before
+  staging and **stops if the repo is public**, naming `--mirror-dir` as the way
+  forward; "cannot tell" is reported as unanswered rather than assumed private.
+  That is the safe-by-default half — a future public repo is covered without
+  anyone having to remember. `#[serde(default)]` on both new fields is the whole
+  migration: every existing config and `.aello.toml` loads with the in-project
+  mirror it already had.
+
 - **A `pre-commit` hook is now seeded alongside the other `github` scaffolding,
   and `/sync` reads the mirror before it publishes it.** `/sync` mirrors an env's
   memory, persona and handoff into the tracked `claude-internal/<name>/` folder

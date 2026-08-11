@@ -363,6 +363,8 @@ pub fn place(env_dir: &Path, bp: &Blueprint, persona: Option<&str>) -> Result<()
     let inst = toml::to_string_pretty(&crate::models::Instance {
         name: bp.name.clone(),
         model: bp.model.clone(),
+        // A Cline env writes no mirror at all, so there is no destination to carry.
+        mirror_root: None,
     })?;
     std::fs::write(env_dir.join(".aello.toml"), inst)
         .context("could not write the Cline instance file")?;
@@ -569,6 +571,7 @@ mod tests {
             agent: Agent::Cline,
             claude_md: None,
             role: Role::Standalone,
+            mirror_root: None,
             legacy_caps: None,
         }
     }

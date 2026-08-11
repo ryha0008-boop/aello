@@ -772,6 +772,8 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                         cfg.blueprints.push(Blueprint {
                             name: name.clone(),
                             model: model.clone(),
+                            // Set with `aello edit --mirror-dir`; absent is the in-project mirror.
+                            mirror_root: None,
                             agent: app.add_agent,
                             claude_md: persona.clone(),
                             role,
@@ -2154,6 +2156,7 @@ mod tests {
                 agent: Agent::Cline,
                 claude_md: None,
                 role: crate::models::Role::Standalone,
+                mirror_root: None,
                 legacy_caps: None,
             },
             Blueprint {
@@ -2162,6 +2165,7 @@ mod tests {
                 agent: Agent::Claude,
                 claude_md: None,
                 role: crate::models::Role::Standalone,
+                mirror_root: None,
                 legacy_caps: None,
             },
         ];

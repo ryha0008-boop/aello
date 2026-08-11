@@ -232,6 +232,23 @@ pub struct Blueprint {
     /// What this blueprint is responsible for. See [`Role`].
     #[serde(default)]
     pub role: Role,
+    /// Where `/sync`'s `claude-internal/<name>/` mirror is written. Absent — the
+    /// normal case — means inside the project, which is what every blueprint did
+    /// before this existed.
+    ///
+    /// It exists for one situation: **a public repo**. The mirror is this env's
+    /// memory, persona and handoff, and `/sync` stages it by path, so in a public
+    /// repo it is a publish rather than a backup. Deleting the mirror is not the
+    /// answer — being in git is exactly what makes an env restorable from another
+    /// machine — so the destination moves instead. Point it at a working tree of
+    /// a **private** repo and the product stays public while the memory does not.
+    ///
+    /// A path, not a git URL: aello never clones or pushes on the user's behalf,
+    /// and `/sync` is the thing that commits. `~` is expanded. The
+    /// `<blueprint>/` component is still appended, so several blueprints can
+    /// share one destination without clobbering each other.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mirror_root: Option<String>,
     /// Pre-0.2 configs stored five capability booleans here. Read once by
     /// [`Config::migrate_roles`], folded into `role`, and never written back —
     /// so the key disappears from `config.toml` on the next save.
@@ -252,6 +269,12 @@ impl Blueprint {
 pub struct Instance {
     pub name: String,
     pub model: String,
+    /// Carried down from [`Blueprint::mirror_root`] so `place` can resolve the
+    /// mirror without reaching back into `config.toml`. `#[serde(default)]` is
+    /// the whole migration: every `.aello.toml` written before this loads with
+    /// `None`, which is the in-project mirror they already had.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mirror_root: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -340,6 +363,7 @@ mod tests {
             agent: Agent::Claude,
             claude_md: None,
             role: Role::Standalone,
+            mirror_root: None,
             legacy_caps: None,
         }
     }

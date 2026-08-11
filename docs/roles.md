@@ -104,6 +104,24 @@ Two guards, deliberately narrow:
 - **A `pre-commit` hook**, seeded to `.githooks/pre-commit` alongside the other `github` scaffolding, which blocks armored private keys, PuTTY keys, real `.env` files (`.env.example` passes), certificate and keystore bundles, `.netrc`/`.pgpass`/`.htpasswd`, port-knock sequences, and non-placeholder provider API keys. It is enabled with `git config core.hooksPath .githooks`, which aello re-runs **on every placement** — that setting is per-clone local config and does not travel with a pull, so a fresh clone otherwise has the file and no guard. If the repo already points `core.hooksPath` somewhere else, aello leaves it alone.
 - **A step in `/sync`** telling the agent to read the mirror for credentials *before* staging it and to refuse rather than warn — the hook catches what reaches the index, but by then the finding is already in a commit message and a mirror refresh.
 
+### Sending the mirror somewhere else
+
+The guards above stop a *credential* reaching git. They do nothing about the rest of the mirror, which is the whole of an env's memory, persona and handoff — and in a **public** repo that is a publish, not a backup.
+
+Deleting the mirror is not the answer: being in git is exactly what makes an env restorable from a second machine (`aello restore`). So the destination moves instead.
+
+```sh
+git clone git@github.com:you/aello-internal.git ~/aello-internal   # private
+aello edit TechnicalDirector --mirror-dir ~/aello-internal
+aello edit TechnicalDirector --mirror-dir -                        # back to the default
+```
+
+`--mirror-dir` takes a **path to an existing git working tree**, not a URL — aello never clones or pushes on your behalf, `/sync` is what commits. It is rejected at `edit` time if the path is missing or is not a git repo, because a mirror writing into a plain directory looks identical to one that worked: files appear, nothing is ever committed, and the memory quietly stops crossing machines. The `<blueprint>/` component is still appended, so several blueprints can share one destination.
+
+With a destination set, the generated `/sync` **drops the in-project `git add claude-internal/…` line entirely** and grows a commit-and-push step against the destination repo instead. It does not fall back to mirroring here if the destination is missing — it stops and says so, since a fallback is the exact leak the setting exists to prevent. Add `claude-internal/` to the public repo's `.gitignore` and `git rm -r --cached` whatever is already tracked; existing history is unaffected, so check it separately if that matters.
+
+Without a destination, `/sync` runs `gh repo view --json visibility` before staging and **stops if the repo is public**, naming `--mirror-dir` as the way forward. "Cannot tell" — no `gh`, no GitHub remote — is reported as unanswered rather than assumed private. That is the safe-by-default half: a future public repo is covered without anyone having to remember.
+
 **What they deliberately do not check: IP addresses, hostnames, machine paths and domains.** Those are identifiers, not secrets, and flagging them produces a long report that gets skimmed once and then bypassed with `--no-verify` — at which point the real check is gone too. The scope is credentials that spend money and passwords whose only value is being unknown.
 
 The hook file carries an `aello-pre-commit v<N>` marker. A copy with an older marker is upgraded on the next placement, so a widened pattern reaches projects scaffolded months ago; a `pre-commit` **without** the marker is somebody's own hook and is never touched. It is written with LF regardless of your checkout, and `.githooks/* text eol=lf` is appended to the project's `.gitattributes` — hooks are run by `sh`, a CRLF one silently fails to execute, and the file has no extension so a `*.sh` rule does not cover it.

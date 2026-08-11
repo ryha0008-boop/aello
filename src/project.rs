@@ -121,8 +121,21 @@ pub fn memory_dir(env_dir: &Path, project: &Path) -> PathBuf {
 }
 
 /// Where the tracked mirror of a blueprint's env lives.
-pub fn mirror_dir(project: &Path, blueprint: &str) -> PathBuf {
-    project.join("claude-internal").join(blueprint)
+///
+/// `root` is [`Instance::mirror_root`] — normally `None`, meaning the project's
+/// own `claude-internal/`. When set it points at a working tree of some *other*
+/// repo, which is how a public project keeps its product public and its memory
+/// private. The `<blueprint>/` component is appended either way, so one
+/// destination can hold several blueprints without them clobbering each other.
+///
+/// Resolved on every call rather than stored: the destination is a path on this
+/// machine and the second machine spells it differently, exactly like
+/// [`memory_dir`]'s `<encoded-cwd>`.
+pub fn mirror_dir(project: &Path, blueprint: &str, root: Option<&str>) -> PathBuf {
+    match root {
+        Some(r) => crate::config::expand_home(r).join(blueprint),
+        None => project.join("claude-internal").join(blueprint),
+    }
 }
 
 /// The mirror's snapshot of the resume note. Deliberately **not** named
@@ -295,7 +308,7 @@ pub fn place(
     // Before anything is seeded: a tracked mirror with no env dir beside it is a
     // fresh clone, and the mirror is the only copy of this blueprint's skills,
     // memory and persona on the machine.
-    restore_from_mirror(env_dir, &inst.name)?;
+    restore_from_mirror(env_dir, &inst.name, inst.mirror_root.as_deref())?;
 
     std::fs::create_dir_all(env_dir).context("could not create env dir")?;
 
@@ -387,7 +400,7 @@ pub fn place(
     } else if caps.any() {
         std::fs::create_dir_all(skill.parent().unwrap())
             .context("could not create skills dir")?;
-        std::fs::write(&skill, crate::templates::render_sync_skill(caps, &inst.name))
+        std::fs::write(&skill, crate::templates::render_sync_skill(caps, &inst.name, inst.mirror_root.as_deref()))
             .context("could not write sync SKILL.md")?;
     } else if let Err(e) = std::fs::remove_file(&skill) {
         // A stale /sync skill left behind (blueprint dropped all caps) would keep
@@ -419,7 +432,7 @@ pub fn place(
 
     // Scaffold the project-dir files this blueprint maintains (only if missing),
     // and mirror this env's internal config into the tracked claude-internal/.
-    scaffold_project(project, env_dir, &inst.name, caps)?;
+    scaffold_project(project, env_dir, &inst.name, caps, inst.mirror_root.as_deref())?;
 
     Ok(())
 }
@@ -484,6 +497,7 @@ fn scaffold_project(
     env_dir: &Path,
     blueprint: &str,
     caps: &Capabilities,
+    mirror_root: Option<&str>,
 ) -> Result<()> {
     let name = project
         .file_name()
@@ -555,7 +569,7 @@ fn scaffold_project(
     // stopped tracking the env, with `remove --purge` the only way to clear it.
     // With the cap off there is nothing to mirror *into* git, so the pass runs in
     // prune-only mode and clears what a previous github placement left behind.
-    mirror_env_internal(project, env_dir, blueprint, caps.github)?;
+    mirror_env_internal(project, env_dir, blueprint, caps.github, mirror_root)?;
     Ok(())
 }
 
@@ -575,8 +589,9 @@ fn mirror_env_internal(
     env_dir: &Path,
     blueprint: &str,
     track: bool,
+    root: Option<&str>,
 ) -> Result<()> {
-    let dest = project.join("claude-internal").join(blueprint);
+    let dest = mirror_dir(project, blueprint, root);
     if !track {
         if dest.exists() {
             std::fs::remove_dir_all(&dest)
@@ -596,8 +611,9 @@ fn mirror_env_internal(
         .context("could not mirror memory into claude-internal")?;
     if !orphaned.is_empty() {
         println!(
-            "note: {} memory note(s) in claude-internal/{blueprint}/memory/ are not in this env:",
-            orphaned.len()
+            "note: {} memory note(s) in {}/memory/ are not in this env:",
+            orphaned.len(),
+            dest.display()
         );
         for name in &orphaned {
             println!("  {name}");
@@ -638,12 +654,12 @@ fn mirror_env_internal(
 /// Everything below still gets rewritten by the rest of `place` — a regenerated
 /// `/sync`, a persona the config would seed — so this restores what nothing else
 /// can: memory, hand-kept skills, and a `custom` persona.
-fn restore_from_mirror(env_dir: &Path, blueprint: &str) -> Result<()> {
+fn restore_from_mirror(env_dir: &Path, blueprint: &str, root: Option<&str>) -> Result<()> {
     if env_dir.exists() {
         return Ok(());
     }
     let project = env_dir.parent().unwrap_or(env_dir);
-    let src = project.join("claude-internal").join(blueprint);
+    let src = mirror_dir(project, blueprint, root);
     if !src.exists() {
         return Ok(());
     }
@@ -700,8 +716,13 @@ pub struct Restored {
 /// machine already snapshotted into the mirror and committed, so it is recoverable
 /// from git history, while the mirror's copy is the one just pulled — the whole
 /// reason for running this.
-pub fn restore(project: &Path, env_dir: &Path, blueprint: &str) -> Result<Restored> {
-    let src = mirror_dir(project, blueprint);
+pub fn restore(
+    project: &Path,
+    env_dir: &Path,
+    blueprint: &str,
+    mirror_root: Option<&str>,
+) -> Result<Restored> {
+    let src = mirror_dir(project, blueprint, mirror_root);
     if !src.exists() {
         anyhow::bail!(
             "no mirror at {} — nothing to restore from. It is written by the `github` \
@@ -1449,7 +1470,7 @@ mod tests {
     fn place_seeds_session_end_hook_and_script() {
         let proj = tempfile::tempdir().unwrap();
         let env = env_dir(proj.path(), "coder");
-        let inst = Instance { name: "coder".into(), model: "opus".into() };
+        let inst = Instance { name: "coder".into(), model: "opus".into(), mirror_root: None };
 
         place(&env, &inst, None, &Capabilities::default()).unwrap();
 
@@ -1602,7 +1623,7 @@ mod tests {
     fn every_env_seeds_all_five_scripts_and_the_tldr_instruction() {
         let proj = tempfile::tempdir().unwrap();
         let env = env_dir(proj.path(), "coder");
-        let inst = Instance { name: "coder".into(), model: "opus".into() };
+        let inst = Instance { name: "coder".into(), model: "opus".into(), mirror_root: None };
         // No capabilities at all: the voice is not one of them any more.
         let caps = Capabilities::default();
 
@@ -1700,7 +1721,7 @@ mod tests {
     fn voice_hooks_self_heal_into_an_env_placed_before_they_existed() {
         let proj = tempfile::tempdir().unwrap();
         let env = env_dir(proj.path(), "coder");
-        let inst = Instance { name: "coder".into(), model: "opus".into() };
+        let inst = Instance { name: "coder".into(), model: "opus".into(), mirror_root: None };
         let caps = Capabilities::default();
 
         // An env as they existed before the voice was universal: a settings.json
@@ -1746,7 +1767,7 @@ mod tests {
 
         // Placed on sonnet, then edited to opus (`aello edit coder --model opus`,
         // which rewrites the blueprint and re-places on the next run).
-        place(&env, &Instance { name: "coder".into(), model: "sonnet".into() }, None, &caps)
+        place(&env, &Instance { name: "coder".into(), model: "sonnet".into(), mirror_root: None }, None, &caps)
             .unwrap();
         // A key the user added by hand: a regenerate would destroy it.
         let settings = env.join("settings.json");
@@ -1755,7 +1776,7 @@ mod tests {
         v.as_object_mut().unwrap().insert("effortLevel".into(), "high".into());
         std::fs::write(&settings, serde_json::to_string_pretty(&v).unwrap()).unwrap();
 
-        place(&env, &Instance { name: "coder".into(), model: "opus".into() }, None, &caps).unwrap();
+        place(&env, &Instance { name: "coder".into(), model: "opus".into(), mirror_root: None }, None, &caps).unwrap();
 
         let v: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
@@ -1786,7 +1807,7 @@ mod tests {
         )
         .unwrap();
 
-        let inst = Instance { name: "coder".into(), model: "opus".into() };
+        let inst = Instance { name: "coder".into(), model: "opus".into(), mirror_root: None };
         place(&env, &inst, None, &Capabilities::default()).unwrap();
         place(&env, &inst, None, &Capabilities::default()).unwrap(); // and again
 
@@ -1814,7 +1835,7 @@ mod tests {
         )
         .unwrap();
 
-        let inst = Instance { name: "coder".into(), model: "opus".into() };
+        let inst = Instance { name: "coder".into(), model: "opus".into(), mirror_root: None };
         place(&env, &inst, Some("# persona\n"), &Capabilities::default()).unwrap();
 
         let v: serde_json::Value =
@@ -1834,7 +1855,7 @@ mod tests {
     fn place_seeds_sync_and_scaffolds_selected_files() {
         let proj = tempfile::tempdir().unwrap();
         let env = env_dir(proj.path(), "coder");
-        let inst = Instance { name: "coder".into(), model: "opus".into() };
+        let inst = Instance { name: "coder".into(), model: "opus".into(), mirror_root: None };
         let caps = Capabilities { changelog: true, github: true, ..Default::default() };
 
         place(&env, &inst, Some("# persona"), &caps).unwrap();
@@ -1868,7 +1889,7 @@ mod tests {
         for (role, changelog, readme, docs) in cases {
             let proj = tempfile::tempdir().unwrap();
             let env = env_dir(proj.path(), "r");
-            let inst = Instance { name: "r".into(), model: "opus".into() };
+            let inst = Instance { name: "r".into(), model: "opus".into(), mirror_root: None };
             place(&env, &inst, None, &role.caps()).unwrap();
 
             let label = role.as_str();
@@ -1901,7 +1922,7 @@ mod tests {
         use crate::models::Role;
         let proj = tempfile::tempdir().unwrap();
         let env = env_dir(proj.path(), "c");
-        let inst = Instance { name: "c".into(), model: "opus".into() };
+        let inst = Instance { name: "c".into(), model: "opus".into(), mirror_root: None };
         place(&env, &inst, None, &Role::Contributor.caps()).unwrap();
 
         let skill = std::fs::read_to_string(env.join("skills/sync/SKILL.md")).unwrap();
@@ -1915,7 +1936,7 @@ mod tests {
     fn github_cap_gitignores_env_dirs_idempotently() {
         let proj = tempfile::tempdir().unwrap();
         let env = env_dir(proj.path(), "demo");
-        let inst = Instance { name: "demo".into(), model: "haiku".into() };
+        let inst = Instance { name: "demo".into(), model: "haiku".into(), mirror_root: None };
         let caps = Capabilities { github: true, ..Default::default() };
         let gi = proj.path().join(".gitignore");
 
@@ -1933,6 +1954,42 @@ mod tests {
         place(&env, &inst, None, &caps).unwrap();
         let after_second = std::fs::read_to_string(&gi).unwrap();
         assert_eq!(after_second.matches(".claude-env-*").count(), 1);
+    }
+
+    /// The whole point of the destination is that the mirror stops being written
+    /// into the public project. A test that only checks the new path exists
+    /// would pass while the old one was still being filled in too — and the old
+    /// one is the one that publishes.
+    #[test]
+    fn a_mirror_destination_moves_the_mirror_out_of_the_project() {
+        let proj = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let root = elsewhere.path().to_string_lossy().into_owned();
+
+        let env = env_dir(proj.path(), "demo");
+        let inst = Instance {
+            name: "demo".into(),
+            model: "haiku".into(),
+            mirror_root: Some(root.clone()),
+        };
+        let caps = Capabilities { github: true, ..Default::default() };
+        place(&env, &inst, None, &caps).unwrap();
+
+        // The memory the mirror is meant to carry landed in the destination…
+        let moved = elsewhere.path().join("demo").join("memory").join("MEMORY.md");
+        assert!(moved.exists(), "the mirror must be written to the configured destination");
+        // …and nothing was written into the public project.
+        assert!(
+            !proj.path().join("claude-internal").exists(),
+            "the in-project mirror must not be written as well — that is the leak"
+        );
+
+        // And it is the same path the read-back half resolves, or a restore on
+        // the second machine looks at an empty folder and reports success.
+        assert_eq!(
+            mirror_dir(proj.path(), "demo", Some(&root)),
+            elsewhere.path().join("demo")
+        );
     }
 
     /// The version constant and the marker inside the script are two halves of
@@ -1969,7 +2026,7 @@ mod tests {
             return; // no git available; nothing to assert
         }
         let env = env_dir(proj.path(), "demo");
-        let inst = Instance { name: "demo".into(), model: "haiku".into() };
+        let inst = Instance { name: "demo".into(), model: "haiku".into(), mirror_root: None };
         place(&env, &inst, None, &Capabilities { github: true, ..Default::default() }).unwrap();
 
         let hook = proj.path().join(".githooks").join("pre-commit");
@@ -2045,7 +2102,7 @@ mod tests {
     fn github_cap_scaffolds_release_hygiene() {
         let proj = tempfile::tempdir().unwrap();
         let env = env_dir(proj.path(), "demo");
-        let inst = Instance { name: "demo".into(), model: "haiku".into() };
+        let inst = Instance { name: "demo".into(), model: "haiku".into(), mirror_root: None };
         let caps = Capabilities { github: true, ..Default::default() };
 
         place(&env, &inst, None, &caps).unwrap();
@@ -2064,7 +2121,7 @@ mod tests {
         // A no-github blueprint seeds none of these in a fresh project.
         let fresh = tempfile::tempdir().unwrap();
         let fenv = env_dir(fresh.path(), "bare");
-        place(&fenv, &Instance { name: "bare".into(), model: "haiku".into() }, None,
+        place(&fenv, &Instance { name: "bare".into(), model: "haiku".into(), mirror_root: None }, None,
               &Capabilities { changelog: true, ..Default::default() }).unwrap();
         assert!(!fresh.path().join(".gitattributes").exists());
         assert!(!fresh.path().join("VERSION").exists());
@@ -2075,7 +2132,7 @@ mod tests {
     fn github_cap_seeds_tracked_claude_internal_mirror() {
         let proj = tempfile::tempdir().unwrap();
         let env = env_dir(proj.path(), "demo");
-        let inst = Instance { name: "demo".into(), model: "haiku".into() };
+        let inst = Instance { name: "demo".into(), model: "haiku".into(), mirror_root: None };
         let caps = Capabilities { github: true, ..Default::default() };
 
         place(&env, &inst, Some("# persona snapshot"), &caps).unwrap();
@@ -2096,7 +2153,7 @@ mod tests {
         // A no-github blueprint seeds no claude-internal mirror.
         let fresh = tempfile::tempdir().unwrap();
         let fenv = env_dir(fresh.path(), "bare");
-        place(&fenv, &Instance { name: "bare".into(), model: "haiku".into() }, Some("# p"),
+        place(&fenv, &Instance { name: "bare".into(), model: "haiku".into(), mirror_root: None }, Some("# p"),
               &Capabilities { changelog: true, ..Default::default() }).unwrap();
         assert!(!fresh.path().join("claude-internal").exists());
     }
@@ -2110,10 +2167,10 @@ mod tests {
         let caps = Capabilities { github: true, ..Default::default() };
 
         let env_a = env_dir(proj.path(), "core");
-        place(&env_a, &Instance { name: "core".into(), model: "opus".into() },
+        place(&env_a, &Instance { name: "core".into(), model: "opus".into(), mirror_root: None },
               Some("# core persona"), &caps).unwrap();
         let env_b = env_dir(proj.path(), "frontend");
-        place(&env_b, &Instance { name: "frontend".into(), model: "sonnet".into() },
+        place(&env_b, &Instance { name: "frontend".into(), model: "sonnet".into(), mirror_root: None },
               Some("# frontend persona"), &caps).unwrap();
 
         // Both mirrors coexist under their own namespace.
@@ -2140,7 +2197,7 @@ mod tests {
         let proj = tempfile::tempdir().unwrap();
         let env = env_dir(proj.path(), "demo");
         let caps = Capabilities { github: true, ..Default::default() };
-        place(&env, &Instance { name: "demo".into(), model: "haiku".into() }, Some("# p"), &caps).unwrap();
+        place(&env, &Instance { name: "demo".into(), model: "haiku".into(), mirror_root: None }, Some("# p"), &caps).unwrap();
 
         let ci = proj.path().join("claude-internal").join("demo");
         assert!(ci.join("skills/sync/SKILL.md").exists());
@@ -2148,7 +2205,7 @@ mod tests {
         // Stand in for a note this env has never seen by writing it straight into
         // the mirror — which is what `git pull` does.
         std::fs::write(ci.join("memory").join("from-laptop.md"), "other machine\n").unwrap();
-        place(&env, &Instance { name: "demo".into(), model: "haiku".into() }, Some("# p"), &caps).unwrap();
+        place(&env, &Instance { name: "demo".into(), model: "haiku".into(), mirror_root: None }, Some("# p"), &caps).unwrap();
 
         assert!(
             ci.join("memory/from-laptop.md").exists(),
@@ -2166,12 +2223,12 @@ mod tests {
         let proj = tempfile::tempdir().unwrap();
         let env = env_dir(proj.path(), "demo");
         let caps = Capabilities { github: true, ..Default::default() };
-        place(&env, &Instance { name: "demo".into(), model: "haiku".into() }, Some("# p"), &caps).unwrap();
+        place(&env, &Instance { name: "demo".into(), model: "haiku".into(), mirror_root: None }, Some("# p"), &caps).unwrap();
 
         let ci = proj.path().join("claude-internal").join("demo");
         std::fs::create_dir_all(ci.join("skills").join("retired")).unwrap();
         std::fs::write(ci.join("skills").join("retired").join("SKILL.md"), "# old\n").unwrap();
-        place(&env, &Instance { name: "demo".into(), model: "haiku".into() }, Some("# p"), &caps).unwrap();
+        place(&env, &Instance { name: "demo".into(), model: "haiku".into(), mirror_root: None }, Some("# p"), &caps).unwrap();
 
         assert!(!ci.join("skills/retired").exists(), "stale skill should be pruned");
         assert!(ci.join("skills/sync/SKILL.md").exists(), "live skills survive");
@@ -2186,7 +2243,7 @@ mod tests {
         let proj = tempfile::tempdir().unwrap();
         let env = env_dir(proj.path(), "demo");
         let caps = Capabilities { github: true, ..Default::default() };
-        let inst = Instance { name: "demo".into(), model: "haiku".into() };
+        let inst = Instance { name: "demo".into(), model: "haiku".into(), mirror_root: None };
         place(&env, &inst, Some("# p"), &caps).unwrap();
 
         let root_note = proj.path().join("demo.HANDOFF.md");
@@ -2205,7 +2262,7 @@ mod tests {
         place(&env, &inst, Some("# p"), &caps).unwrap();
         assert!(mirrored.exists(), "an absent root note must not delete the snapshot");
 
-        let r = restore(proj.path(), &env, "demo").unwrap();
+        let r = restore(proj.path(), &env, "demo", None).unwrap();
         assert!(r.handoff);
         assert_eq!(
             std::fs::read_to_string(&root_note).unwrap(),
@@ -2222,7 +2279,7 @@ mod tests {
         let proj = tempfile::tempdir().unwrap();
         let env = env_dir(proj.path(), "demo");
         let caps = Capabilities { github: true, ..Default::default() };
-        let inst = Instance { name: "demo".into(), model: "haiku".into() };
+        let inst = Instance { name: "demo".into(), model: "haiku".into(), mirror_root: None };
         place(&env, &inst, Some("# persona from here"), &caps).unwrap();
 
         let mem = memory_dir(&env, proj.path());
@@ -2233,7 +2290,7 @@ mod tests {
         std::fs::write(ci.join("memory").join("from-laptop.md"), "the other machine\n").unwrap();
         std::fs::write(ci.join("persona.CLAUDE.md"), "# a different persona\n").unwrap();
 
-        let r = restore(proj.path(), &env, "demo").unwrap();
+        let r = restore(proj.path(), &env, "demo", None).unwrap();
 
         assert!(mem.join("from-laptop.md").exists(), "the pulled note lands where memory is read");
         assert!(mem.join("local-only.md").exists(), "an unsynced local note survives");
@@ -2255,7 +2312,7 @@ mod tests {
         std::fs::write(ci.join("persona.CLAUDE.md"), "# the snapshot\n").unwrap();
         std::fs::create_dir_all(&env).unwrap();
 
-        let r = restore(proj.path(), &env, "demo").unwrap();
+        let r = restore(proj.path(), &env, "demo", None).unwrap();
         assert_eq!(std::fs::read_to_string(env.join("CLAUDE.md")).unwrap(), "# the snapshot\n");
         assert!(!r.persona_differs, "seeding an absent persona is not a conflict");
     }
@@ -2279,12 +2336,12 @@ mod tests {
         std::fs::write(env.join("CLAUDE.md"), text).unwrap();
         std::fs::write(ci.join("persona.CLAUDE.md"), text.replace('\n', "\r\n")).unwrap();
 
-        let r = restore(proj.path(), &env, "demo").unwrap();
+        let r = restore(proj.path(), &env, "demo", None).unwrap();
         assert!(!r.persona_differs, "newlines alone must not read as a divergence");
 
         // A real difference still does.
         std::fs::write(ci.join("persona.CLAUDE.md"), "# Persona\r\nsomething else\r\n").unwrap();
-        let r = restore(proj.path(), &env, "demo").unwrap();
+        let r = restore(proj.path(), &env, "demo", None).unwrap();
         assert!(r.persona_differs, "a genuine edit must still be reported");
     }
 
@@ -2295,7 +2352,7 @@ mod tests {
         let proj = tempfile::tempdir().unwrap();
         let env = env_dir(proj.path(), "demo");
         std::fs::create_dir_all(&env).unwrap();
-        let err = restore(proj.path(), &env, "demo").unwrap_err();
+        let err = restore(proj.path(), &env, "demo", None).unwrap_err();
         assert!(format!("{err}").contains("no mirror at"), "got: {err}");
     }
 
@@ -2314,7 +2371,7 @@ mod tests {
         let foreign = env.join("projects").join("C--Users-someone-else-repo").join("memory");
         std::fs::create_dir_all(&foreign).unwrap();
 
-        restore(proj.path(), &env, "demo").unwrap();
+        restore(proj.path(), &env, "demo", None).unwrap();
 
         let here = memory_dir(&env, proj.path());
         assert!(here.join("MEMORY.md").exists(), "restored into this machine's encoded dir");
@@ -2329,7 +2386,7 @@ mod tests {
         // blueprint no longer has. `remove --purge` was the only way out.
         let proj = tempfile::tempdir().unwrap();
         let env = env_dir(proj.path(), "demo");
-        let inst = Instance { name: "demo".into(), model: "haiku".into() };
+        let inst = Instance { name: "demo".into(), model: "haiku".into(), mirror_root: None };
         let ci = proj.path().join("claude-internal").join("demo");
 
         place(&env, &inst, Some("# p"), &Capabilities { github: true, ..Default::default() }).unwrap();
@@ -2358,7 +2415,7 @@ mod tests {
     fn a_fresh_clone_is_restored_from_the_mirror_not_erased_by_it() {
         let proj = tempfile::tempdir().unwrap();
         let env = env_dir(proj.path(), "demo");
-        let inst = Instance { name: "demo".into(), model: "haiku".into() };
+        let inst = Instance { name: "demo".into(), model: "haiku".into(), mirror_root: None };
         let caps = Capabilities { github: true, ..Default::default() };
         let mirror = proj.path().join("claude-internal").join("demo");
 
@@ -2409,7 +2466,7 @@ mod tests {
         std::fs::write(mirror_mem.join("MEMORY.md"), "- [a](a.md)").unwrap();
 
         // No `projects/<encoded>/memory` in the env at all.
-        mirror_env_internal(proj.path(), &env, "demo", true).unwrap();
+        mirror_env_internal(proj.path(), &env, "demo", true, None).unwrap();
 
         assert!(
             mirror_mem.join("MEMORY.md").exists(),
@@ -2425,7 +2482,7 @@ mod tests {
     fn every_role_gitignores_its_env_dir() {
         let proj = tempfile::tempdir().unwrap();
         let env = env_dir(proj.path(), "bare");
-        let inst = Instance { name: "bare".into(), model: "haiku".into() };
+        let inst = Instance { name: "bare".into(), model: "haiku".into(), mirror_root: None };
 
         // standalone: no caps at all.
         place(&env, &inst, None, &Capabilities::default()).unwrap();
@@ -2465,7 +2522,7 @@ mod tests {
     fn place_seeds_starter_memory_and_never_clobbers_it() {
         let proj = tempfile::tempdir().unwrap();
         let env = env_dir(proj.path(), "coder");
-        let inst = Instance { name: "coder".into(), model: "opus".into() };
+        let inst = Instance { name: "coder".into(), model: "opus".into(), mirror_root: None };
 
         place(&env, &inst, None, &Capabilities::default()).unwrap();
 
@@ -2498,7 +2555,7 @@ mod tests {
         // both platforms aello ships binaries for.
         let proj = tempfile::tempdir().unwrap();
         let env = env_dir(proj.path(), "coder");
-        let inst = Instance { name: "coder".into(), model: "opus".into() };
+        let inst = Instance { name: "coder".into(), model: "opus".into(), mirror_root: None };
         place(&env, &inst, Some("# p"), &Capabilities { github: true, ..Default::default() }).unwrap();
 
         assert!(rename_placed(proj.path(), crate::models::Agent::Claude, "coder", "Coder").unwrap());
@@ -2522,7 +2579,7 @@ mod tests {
         // one, so a note left under the old name has no producer and no reader.
         let proj = tempfile::tempdir().unwrap();
         let env = env_dir(proj.path(), "coder");
-        place(&env, &Instance { name: "coder".into(), model: "opus".into() }, None, &Capabilities::default())
+        place(&env, &Instance { name: "coder".into(), model: "opus".into(), mirror_root: None }, None, &Capabilities::default())
             .unwrap();
         std::fs::write(proj.path().join("coder.HANDOFF.md"), "resume me\n").unwrap();
         std::fs::write(proj.path().join("coder.NOTE.md"), "inbox\n").unwrap();
@@ -2544,7 +2601,7 @@ mod tests {
     fn rename_never_clobbers_another_envs_inbox() {
         let proj = tempfile::tempdir().unwrap();
         let env = env_dir(proj.path(), "coder");
-        place(&env, &Instance { name: "coder".into(), model: "opus".into() }, None, &Capabilities::default())
+        place(&env, &Instance { name: "coder".into(), model: "opus".into(), mirror_root: None }, None, &Capabilities::default())
             .unwrap();
         std::fs::write(proj.path().join("coder.NOTE.md"), "mine\n").unwrap();
         std::fs::write(proj.path().join("reviewer.NOTE.md"), "theirs\n").unwrap();
@@ -2562,7 +2619,7 @@ mod tests {
     fn place_registers_the_session_start_hook_and_script() {
         let proj = tempfile::tempdir().unwrap();
         let env = env_dir(proj.path(), "coder");
-        let inst = Instance { name: "coder".into(), model: "opus".into() };
+        let inst = Instance { name: "coder".into(), model: "opus".into(), mirror_root: None };
 
         // An env from before SessionStart existed: settings.json is never
         // clobbered, so the hook has to be healed into it.
@@ -2581,7 +2638,7 @@ mod tests {
     fn a_user_prompt_submit_hook_replaces_the_persona_tldr_section() {
         let proj = tempfile::tempdir().unwrap();
         let env = env_dir(proj.path(), "coder");
-        let inst = Instance { name: "coder".into(), model: "opus".into() };
+        let inst = Instance { name: "coder".into(), model: "opus".into(), mirror_root: None };
 
         // The hook is bundled, so a fresh env carries the instruction per turn
         // and the persona is left exactly as the blueprint wrote it.
@@ -2607,7 +2664,7 @@ mod tests {
     fn accepting_a_persona_overwrites_it_and_bumps_the_generation() {
         let proj = tempfile::tempdir().unwrap();
         let env = env_dir(proj.path(), "coder");
-        let inst = Instance { name: "coder".into(), model: "opus".into() };
+        let inst = Instance { name: "coder".into(), model: "opus".into(), mirror_root: None };
         place(&env, &inst, Some("# stock\n"), &Capabilities::default()).unwrap();
 
         assert_eq!(persona_generation(&env), 0); // nothing accepted yet
@@ -2646,7 +2703,7 @@ mod tests {
     fn place_registers_the_user_prompt_submit_hook_and_script() {
         let proj = tempfile::tempdir().unwrap();
         let env = env_dir(proj.path(), "coder");
-        let inst = Instance { name: "coder".into(), model: "opus".into() };
+        let inst = Instance { name: "coder".into(), model: "opus".into(), mirror_root: None };
 
         // An env placed before the hook existed: settings.json is never
         // clobbered, so the registration has to be healed into it.
@@ -2668,7 +2725,7 @@ mod tests {
     fn place_registers_the_plan_mode_block_with_a_matcher() {
         let proj = tempfile::tempdir().unwrap();
         let env = env_dir(proj.path(), "coder");
-        let inst = Instance { name: "coder".into(), model: "opus".into() };
+        let inst = Instance { name: "coder".into(), model: "opus".into(), mirror_root: None };
 
         std::fs::create_dir_all(&env).unwrap();
         std::fs::write(env.join("settings.json"), r#"{"model":"opus"}"#).unwrap();
@@ -2750,7 +2807,7 @@ mod tests {
     fn a_kept_skill_survives_placement() {
         let proj = tempfile::tempdir().unwrap();
         let env = env_dir(proj.path(), "coder");
-        let inst = Instance { name: "coder".into(), model: "opus".into() };
+        let inst = Instance { name: "coder".into(), model: "opus".into(), mirror_root: None };
         let caps = Capabilities { github: true, ..Default::default() };
 
         // First placement generates the skills.
@@ -2774,7 +2831,7 @@ mod tests {
     fn a_kept_sync_is_not_removed_when_caps_go_empty() {
         let proj = tempfile::tempdir().unwrap();
         let env = env_dir(proj.path(), "coder");
-        let inst = Instance { name: "coder".into(), model: "opus".into() };
+        let inst = Instance { name: "coder".into(), model: "opus".into(), mirror_root: None };
 
         place(&env, &inst, None, &Capabilities { github: true, ..Default::default() }).unwrap();
         let sync = env.join("skills/sync/SKILL.md");
@@ -2792,7 +2849,7 @@ mod tests {
         let proj = tempfile::tempdir().unwrap();
         let caps = Capabilities { github: true, ..Default::default() };
         let old_env = env_dir(proj.path(), "old");
-        place(&old_env, &Instance { name: "old".into(), model: "opus".into() },
+        place(&old_env, &Instance { name: "old".into(), model: "opus".into(), mirror_root: None },
               Some("# p"), &caps).unwrap();
         assert!(old_env.exists());
         assert!(proj.path().join("claude-internal/old").exists());
@@ -2816,7 +2873,7 @@ mod tests {
 
         // A destination env dir that already exists is refused, not clobbered.
         let taken = env_dir(proj.path(), "taken");
-        place(&taken, &Instance { name: "taken".into(), model: "haiku".into() },
+        place(&taken, &Instance { name: "taken".into(), model: "haiku".into(), mirror_root: None },
               None, &caps).unwrap();
         assert!(rename_placed(proj.path(), crate::models::Agent::Claude, "new", "taken").is_err());
     }
@@ -2829,7 +2886,7 @@ mod tests {
         let proj = tempfile::tempdir().unwrap();
         let caps = Capabilities { github: true, ..Default::default() };
         let src_env = env_dir(proj.path(), "src");
-        place(&src_env, &Instance { name: "src".into(), model: "opus".into() },
+        place(&src_env, &Instance { name: "src".into(), model: "opus".into(), mirror_root: None },
               Some("# p"), &caps).unwrap();
         // A stray mirror at the destination, with no matching env dir.
         std::fs::create_dir_all(proj.path().join("claude-internal/dest")).unwrap();
@@ -2855,7 +2912,7 @@ mod tests {
     fn place_without_caps_seeds_no_sync_skill() {
         let proj = tempfile::tempdir().unwrap();
         let env = env_dir(proj.path(), "bare");
-        let inst = Instance { name: "bare".into(), model: "sonnet".into() };
+        let inst = Instance { name: "bare".into(), model: "sonnet".into(), mirror_root: None };
 
         place(&env, &inst, None, &Capabilities::default()).unwrap();
 
@@ -2867,7 +2924,7 @@ mod tests {
     fn place_always_seeds_universal_skills_even_with_no_caps() {
         let proj = tempfile::tempdir().unwrap();
         let env = env_dir(proj.path(), "bare");
-        let inst = Instance { name: "bare".into(), model: "sonnet".into() };
+        let inst = Instance { name: "bare".into(), model: "sonnet".into(), mirror_root: None };
 
         // No caps at all — /sync is skipped, but /handoff and /twosentences are
         // universal.
