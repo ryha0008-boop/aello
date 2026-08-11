@@ -139,6 +139,7 @@ aello run [name] [--resume [id]] [-p <prompt>] [-- <extra args for the agent>]
 aello login [--agent claude|cline]             # store a shared login (asks which, if unsaid)
 aello github-setup [--name <repo>] [--public] [--yes]   # create + push the repo via gh
 aello docs [name]                              # print bundled reference docs (no name lists them)
+aello check [path] [--all] [--root <dir>] [--json]      # verify a repo's integrations (exit 1 on failure)
 aello tokens [name] [--sessions] [--json]      # token usage + estimated cost per env
 aello voice <mute|unmute|stop|status> [--project]       # off switch for the voice
 aello completions <bash|zsh|fish|powershell|elvish>     # print a shell completion script

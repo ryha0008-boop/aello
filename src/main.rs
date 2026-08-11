@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 mod auth;
+mod check;
 mod cline;
 mod config;
 mod docs;
@@ -149,6 +150,29 @@ enum Commands {
         #[arg(long)]
         project: Option<PathBuf>,
     },
+    /// Verify a repo's aello integrations — by proving each one, not reading files.
+    ///
+    /// Every integration aello seeds has a failure mode indistinguishable from
+    /// success in a file listing: a pre-commit hook git never runs, a workflow
+    /// that was never committed, a Renovate config with no App behind it, a
+    /// requirements.txt listing only direct imports, a mirror tracked in a
+    /// public repo. So this executes the voice hook for its version, fires the
+    /// pre-commit hook at a real staged key, and reads CI's last actual run.
+    /// Exits 1 if anything FAILs.
+    #[command(alias = "toolcheck")]
+    Check {
+        /// Repo to check (default: the current directory).
+        path: Option<PathBuf>,
+        /// Every repo holding a placed env, under --root.
+        #[arg(long)]
+        all: bool,
+        /// Where --all starts looking (default: your home directory).
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
     /// Token usage and estimated cost, per env.
     ///
     /// Read back out of the transcripts contextdb already archives — no new
@@ -259,6 +283,7 @@ fn main() {
         Some(Commands::Docs { name }) => cmd_docs(name),
         Some(Commands::Restore { name, project }) => cmd_restore(name, project),
         Some(Commands::Persona { name, from, project }) => cmd_persona(name, from, project),
+        Some(Commands::Check { path, all, root, json }) => cmd_check(path, all, root, json),
         Some(Commands::Tokens { name, sessions, json }) => cmd_tokens(name, sessions, json),
         Some(Commands::Voice { action }) => match action {
             VoiceAction::Mute { project } => voice::mute(project),
@@ -1114,6 +1139,64 @@ fn cmd_docs(name: Option<String>) -> Result<()> {
                 bail!("no doc '{slug}'. Available: {}", avail.join(", "));
             }
         },
+    }
+    Ok(())
+}
+
+/// Verify a repo's aello integrations.
+///
+/// Exits **1** when anything failed, so `aello check --all` drops into a script
+/// or a CI step. A `WARN` does not fail the run — it marks something that could
+/// not be proven rather than something known broken, and the two must not be
+/// conflated or the exit code stops meaning anything.
+fn cmd_check(
+    path: Option<PathBuf>,
+    all: bool,
+    root: Option<PathBuf>,
+    json: bool,
+) -> Result<()> {
+    let repos = if all {
+        let root = root
+            .or_else(config::home_dir)
+            .context("could not determine a home directory — pass --root")?;
+        if !json {
+            println!("scanning {} for placed envs…", root.display());
+        }
+        let found = check::find_repos(&root);
+        if found.is_empty() {
+            bail!("no repos with a placed env under {}", root.display());
+        }
+        found
+    } else {
+        if root.is_some() {
+            bail!("--root only applies with --all");
+        }
+        vec![match path {
+            Some(p) => p,
+            None => std::env::current_dir().context("could not determine current directory")?,
+        }]
+    };
+
+    let reports: Vec<check::RepoReport> =
+        repos.iter().map(|r| check::check_repo(r)).collect();
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&reports)?);
+    } else {
+        for rep in &reports {
+            check::print_report(rep);
+        }
+        if reports.len() > 1 {
+            let bad: Vec<&check::RepoReport> = reports.iter().filter(|r| r.failed() > 0).collect();
+            println!("\n{} repos checked, {} with failures", reports.len(), bad.len());
+            for rep in &bad {
+                println!("  {} FAIL  {}", rep.failed(), rep.repo);
+            }
+        }
+    }
+
+    if reports.iter().any(|r| r.failed() > 0) {
+        std::process::exit(1);
     }
     Ok(())
 }

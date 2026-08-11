@@ -3,17 +3,26 @@
 ## [Unreleased]
 
 ### Added
-- **`tools/check-integrations.py` — verify every aello integration in a repo,
-  by proving each one rather than reading a file.** It executes the voice hook to
-  ask its version, fires the `pre-commit` hook at a real staged key and requires a
-  refusal, reads CI's last actual run, and judges a lockfile on whether the
+- **`aello check [path]` / `aello check --all` — verify a repo's aello
+  integrations by proving each one rather than reading a file.** It executes the
+  voice hook to ask its version, fires the `pre-commit` hook at a real staged
+  key, reads CI's last actual run, and judges a lockfile on whether the
   *transitive* set is pinned. Renovate is reported as **seeded, not confirmed
-  running** unless a PR or dependency dashboard proves the App is installed, and a
-  tracked mirror in a repo GitHub reports as `PUBLIC` is a FAIL. Exit code 1 on
-  any failure, so it loops over a fleet. Every check is shaped so that "silently
-  absent" cannot read as "fine" — a hook git never runs, a workflow never
-  committed, and a manifest listing only direct imports all look correct in a file
-  listing.
+  running** unless a PR or dependency dashboard proves the App is installed, and
+  an env mirror tracked in a repo GitHub reports as `PUBLIC` is a FAIL. `--all`
+  sweeps every repo holding a placed env; `--json` prints the report; exit code
+  is 1 on any failure. Aliased as `toolcheck`.
+
+  **Every check is shaped so that "silently absent" cannot read as "fine"** — a
+  hook git never runs because `core.hooksPath` is unset, a workflow that exists
+  on disk and was never committed, and a manifest listing only direct imports all
+  look correct in a file listing. Where evidence cannot be obtained the row is
+  WARN and says so; an inability to test is never a pass.
+
+  The `pre-commit` check stages its canary into a **throwaway index** and runs
+  the hook via `git hook run`, never `git commit` — a checker that commits is one
+  that lands a canary commit on the single repo where the guard is broken, which
+  is the exact case it exists to find.
 - **`aello tokens` and a `T` tab in the TUI — token usage and estimated cost per
   env.** Input / output / cache-write / cache-read kept apart, because they price
   as much as 20x apart; per-model split, per-session breakdown (`--sessions`), and

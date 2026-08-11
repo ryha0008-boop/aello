@@ -5,7 +5,7 @@ Failure modes and what they actually mean. Most of these look like something els
 
 ## Checking a repo's integrations
 
-`python tools/check-integrations.py [repo-path]` (default: the current directory) verifies everything aello seeds into a project and **proves each one rather than reading a file**:
+`aello check [path]` (default: the current directory) or `aello check --all` (every repo holding a placed env, under your home dir or `--root`) verifies everything aello seeds into a project and **proves each one rather than reading a file**:
 
 | Check | How it is proven |
 |---|---|
@@ -18,7 +18,9 @@ Failure modes and what they actually mean. Most of these look like something els
 | env mirror | **fails** if mirror files are tracked in a repo GitHub reports as `PUBLIC` |
 | `.gitignore` | the `.claude-env-*` line is present |
 
-Exit code is 1 on any FAIL, so it drops into a loop over every repo. `WARN` does not fail.
+Exit code is **1** on any FAIL, so it drops into a script or a CI step. A `WARN` does not fail the run — it marks something that could not be *proven*, not something known broken, and conflating the two would make the exit code meaningless. `--json` prints the whole report.
+
+The pre-commit check stages its canary into a **throwaway index** and runs the hook through `git hook run`, never `git commit`. A checker that commits is one that lands a canary commit on the single repo where the guard is broken — exactly the case it exists to find. Nothing it does touches the real index, the worktree or HEAD. It needs git 2.36+; an older git reports the check as UNKNOWN rather than passing it.
 
 Each check is written so **"silently absent" cannot read as "fine"** — that is the whole point. A hook that exists but is never run by git, a workflow that was never committed, a lockfile that lists only direct imports, and a Renovate config with no App installed all look correct from a file listing and are all caught here.
 
