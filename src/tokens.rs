@@ -123,6 +123,126 @@ pub struct Record {
     pub usage: Usage,
 }
 
+/// What the sessions were *doing*, as opposed to what they spent.
+///
+/// Collected in the same pass as usage, because the transcripts are already
+/// being read and a second walk over a gigabyte to count tool calls would be
+/// pure waste. Every counter is deduplicated on the id its own record carries
+/// (`uuid` for an event, the `toolu_…` id for a tool call) rather than on
+/// `message.id`: an archived session can be read twice, a live env overlaps its
+/// own archive, and one message is written as several records — one per content
+/// block — so a message-level key would drop most of the tool calls.
+#[derive(Default, Clone, Debug)]
+pub struct Activity {
+    /// One entry per completed turn, in milliseconds. Claude Code times its own
+    /// turns and writes a `turn_duration` system record, so this is measured
+    /// wall clock rather than a difference between timestamps that happens to
+    /// include however long the user was away.
+    pub turn_ms: Vec<u64>,
+    /// When turns happen: hour of day (UTC) and weekday (0 = Monday).
+    pub turn_hour: [u64; 24],
+    pub turn_weekday: [u64; 7],
+    /// Tool calls by name, deduplicated by the tool-use id.
+    pub tools: BTreeMap<String, u64>,
+    /// Which skill the harness attributed an assistant message to — the only
+    /// evidence that a seeded skill was actually *run* rather than merely
+    /// seeded. Counted two ways because they answer different questions: the
+    /// messages are how much work the skill did, the sessions are how often it
+    /// was reached for.
+    pub skills: BTreeMap<String, u64>,
+    pub skill_sessions: BTreeMap<String, BTreeSet<String>>,
+    /// Basename → edits. The path is dropped deliberately: the same file is
+    /// edited from two checkouts of one repo and they are the same file.
+    pub files: BTreeMap<String, u64>,
+    /// First word of a shell command, lowercased.
+    pub shell: BTreeMap<String, u64>,
+    /// `[Request interrupted by user]` markers — the times a turn was stopped
+    /// mid-flight, which is the closest thing to a "wrong direction" signal.
+    pub interrupts: u64,
+    /// Prompts queued while a turn was running, and queued prompts withdrawn
+    /// before they ran.
+    pub queued: u64,
+    pub unqueued: u64,
+}
+
+impl Activity {
+    pub fn turns(&self) -> u64 {
+        self.turn_ms.len() as u64
+    }
+
+    /// Median turn, in seconds. The mean is far higher and far less useful — a
+    /// handful of 90-minute turns drag it away from anything typical.
+    pub fn median_turn_secs(&self) -> f64 {
+        percentile_secs(&self.turn_ms, 0.5)
+    }
+
+    pub fn p90_turn_secs(&self) -> f64 {
+        percentile_secs(&self.turn_ms, 0.9)
+    }
+
+    pub fn longest_turn_secs(&self) -> f64 {
+        self.turn_ms.iter().max().copied().unwrap_or(0) as f64 / 1000.0
+    }
+
+    /// Hours actually spent inside turns. **Not** elapsed session time: the
+    /// gaps between turns are the user reading, typing and being elsewhere, and
+    /// counting them would turn a lunch break into work.
+    pub fn turn_hours(&self) -> f64 {
+        self.turn_ms.iter().sum::<u64>() as f64 / 3_600_000.0
+    }
+
+    pub fn tool_calls(&self) -> u64 {
+        self.tools.values().sum()
+    }
+
+    /// Tool calls per turn — how much of a turn is the agent working versus
+    /// answering.
+    pub fn tools_per_turn(&self) -> f64 {
+        match self.turns() {
+            0 => 0.0,
+            n => self.tool_calls() as f64 / n as f64,
+        }
+    }
+
+    pub fn busiest_weekday(&self) -> Option<usize> {
+        (0..7).max_by_key(|&d| self.turn_weekday[d]).filter(|&d| self.turn_weekday[d] > 0)
+    }
+
+    /// Skills ranked by how many sessions reached for them: name, sessions,
+    /// assistant messages.
+    pub fn skill_ranking(&self) -> Vec<(String, u64, u64)> {
+        let mut v: Vec<(String, u64, u64)> = self
+            .skills
+            .iter()
+            .map(|(k, msgs)| {
+                let s = self.skill_sessions.get(k).map(|s| s.len() as u64).unwrap_or(0);
+                (k.clone(), s, *msgs)
+            })
+            .collect();
+        v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.2.cmp(&a.2)).then_with(|| a.0.cmp(&b.0)));
+        v
+    }
+
+    /// Top `n` entries of a counter, biggest first, ties broken by name so the
+    /// output is stable between runs.
+    pub fn top(map: &BTreeMap<String, u64>, n: usize) -> Vec<(String, u64)> {
+        let mut v: Vec<(String, u64)> = map.iter().map(|(k, c)| (k.clone(), *c)).collect();
+        v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        v.truncate(n);
+        v
+    }
+}
+
+fn percentile_secs(ms: &[u64], q: f64) -> f64 {
+    if ms.is_empty() {
+        return 0.0;
+    }
+    let mut v = ms.to_vec();
+    v.sort_unstable();
+    let i = ((v.len() - 1) as f64 * q).round() as usize;
+    v[i] as f64 / 1000.0
+}
+
 /// A priced roll-up: totals plus whatever couldn't be priced.
 #[derive(Default, Clone, Debug)]
 pub struct Priced {
@@ -190,6 +310,8 @@ pub struct Report {
     /// the statusline sums "since the plan's own window opened", and a block
     /// straddling that instant would be counted whole.
     pub records: Vec<Record>,
+    /// What the sessions were doing, from the same pass over the same files.
+    pub activity: Activity,
     pub envs: Vec<EnvRoll>,
     /// Every 5-hour block across all envs, oldest first. The quota is
     /// machine-wide (one shared subscription token), so blocks are global.
@@ -327,6 +449,8 @@ pub fn collect_sources(cwd: &Path) -> Vec<Source> {
 /// Read every transcript under `sources`, deduplicate, and roll up.
 pub fn scan(sources: &[Source]) -> Report {
     let mut seen: HashSet<String> = HashSet::new();
+    let mut seen_events: HashSet<String> = HashSet::new();
+    let mut activity = Activity::default();
     let mut records: Vec<Record> = Vec::new();
     let mut files = 0usize;
     let mut raw = 0usize;
@@ -359,7 +483,14 @@ pub fn scan(sources: &[Source]) -> Report {
                 continue;
             }
             files += 1;
-            raw += read_transcript(&path, src, &mut seen, &mut records);
+            raw += read_transcript(
+                &path,
+                src,
+                &mut seen,
+                &mut records,
+                &mut activity,
+                &mut seen_events,
+            );
         }
     }
 
@@ -370,6 +501,7 @@ pub fn scan(sources: &[Source]) -> Report {
 
     Report {
         records,
+        activity,
         envs,
         blocks,
         unknown_models,
@@ -387,16 +519,36 @@ fn read_transcript(
     src: &Source,
     seen: &mut HashSet<String>,
     out: &mut Vec<Record>,
+    act: &mut Activity,
+    seen_events: &mut HashSet<String>,
 ) -> usize {
     let Ok(text) = std::fs::read_to_string(path) else { return 0 };
     let mut raw = 0usize;
     for line in text.lines() {
-        // Cheap gate: most lines are user turns and tool results with no usage
-        // at all, and JSON-parsing 322 MB of them would dominate the run.
-        if !line.contains("\"usage\"") {
+        // Cheap gates: most lines are tool results with nothing we want, and
+        // JSON-parsing a gigabyte of them would dominate the run. Each gate is
+        // a substring no other record shape carries, and the line is parsed
+        // once for whichever of them hit.
+        let has_usage = line.contains("\"usage\"");
+        // `"tool_use"` and not `tool_use_id` — the closing quote is what keeps
+        // a tool *result* out of the tool-call count.
+        let has_tool = line.contains("\"tool_use\"");
+        let has_event = line.contains("turn_duration")
+            || line.contains("attributionSkill")
+            || line.contains("[Request interrupted by user")
+            || line.contains("queue-operation");
+        if !(has_usage || has_tool || has_event) {
             continue;
         }
         let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+
+        if has_tool || has_event {
+            read_activity(&v, act, seen_events);
+        }
+        if !has_usage {
+            continue;
+        }
+
         let msg = &v["message"];
         let Some(usage) = msg.get("usage").filter(|u| u.is_object()) else { continue };
         raw += 1;
@@ -424,6 +576,125 @@ fn read_transcript(
     }
     raw
 }
+
+/// Pull the non-usage signal out of one already-parsed record.
+///
+/// Every branch deduplicates on an id the record carries, because the same
+/// session is read more than once — a live env overlaps its own archive, and 17
+/// of 122 archives on the machine this was written on are one session archived
+/// twice.
+fn read_activity(
+    v: &serde_json::Value,
+    act: &mut Activity,
+    seen: &mut HashSet<String>,
+) -> Option<()> {
+    let uuid = v["uuid"].as_str();
+    let mut fresh = |key: &str| -> bool { seen.insert(key.to_string()) };
+
+    match v["type"].as_str() {
+        // Claude Code times its own turns. Prefer that to a difference between
+        // timestamps, which would silently include however long the user spent
+        // reading the last answer.
+        Some("system") if v["subtype"].as_str() == Some("turn_duration") => {
+            let ms = v["durationMs"].as_u64()?;
+            if uuid.is_some_and(&mut fresh) {
+                act.turn_ms.push(ms);
+                if let Some(ts) = v["timestamp"].as_str().and_then(parse_iso8601) {
+                    act.turn_hour[(ts.rem_euclid(86400) / 3600).clamp(0, 23) as usize] += 1;
+                    // 1970-01-01 was a Thursday, which is index 3 counting from
+                    // Monday.
+                    act.turn_weekday[(ts.div_euclid(86400) + 3).rem_euclid(7) as usize] += 1;
+                }
+            }
+            return Some(());
+        }
+        // A queue record carries **no uuid** — keying on one silently counted
+        // zero of 665, which looked exactly like a user who never queues.
+        // Session + timestamp + operation is unique enough to dedup a
+        // twice-archived session, which is all the key is for.
+        Some("queue-operation") => {
+            let op = v["operation"].as_str()?;
+            let key = format!(
+                "q:{}:{}:{op}",
+                v["sessionId"].as_str().unwrap_or(""),
+                v["timestamp"].as_str().unwrap_or(""),
+            );
+            if fresh(&key) {
+                match op {
+                    "enqueue" => act.queued += 1,
+                    "remove" => act.unqueued += 1,
+                    _ => {}
+                }
+            }
+            return Some(());
+        }
+        _ => {}
+    }
+
+    if let (Some(skill), Some(id)) = (v["attributionSkill"].as_str(), uuid) {
+        if fresh(id) {
+            *act.skills.entry(skill.to_string()).or_default() += 1;
+            if let Some(s) = v["sessionId"].as_str() {
+                act.skill_sessions
+                    .entry(skill.to_string())
+                    .or_default()
+                    .insert(s.to_string());
+            }
+        }
+    }
+
+    let content = &v["message"]["content"];
+    // An interrupt lands either as a bare string or as a text block, depending
+    // on whether anything else was attached to the same user turn.
+    if content.as_str().is_some_and(|t| t.contains(INTERRUPT_MARKER))
+        && uuid.is_some_and(&mut fresh)
+    {
+        act.interrupts += 1;
+    }
+    let content = content.as_array()?;
+    for b in content {
+        match b["type"].as_str() {
+            Some("tool_use") => {
+                // The tool-use id, not the message id: one message is written
+                // as several records, one per content block, so keying on the
+                // message would keep the first block and drop every tool call.
+                let Some(id) = b["id"].as_str() else { continue };
+                if !fresh(id) {
+                    continue;
+                }
+                let name = b["name"].as_str().unwrap_or("unknown");
+                *act.tools.entry(name.to_string()).or_default() += 1;
+                let input = &b["input"];
+                if matches!(name, "Edit" | "Write" | "NotebookEdit") {
+                    if let Some(p) = input["file_path"].as_str() {
+                        let base = p.rsplit(['/', '\\']).next().unwrap_or(p);
+                        *act.files.entry(base.to_string()).or_default() += 1;
+                    }
+                }
+                if matches!(name, "Bash" | "PowerShell") {
+                    if let Some(c) = input["command"].as_str() {
+                        if let Some(w) = c.split_whitespace().next() {
+                            *act.shell.entry(w.to_lowercase()).or_default() += 1;
+                        }
+                    }
+                }
+            }
+            // An interrupt is written as a plain text block on a user record.
+            Some("text") => {
+                if b["text"].as_str().is_some_and(|t| t.contains(INTERRUPT_MARKER))
+                    && uuid.is_some_and(&mut fresh)
+                {
+                    act.interrupts += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(())
+}
+
+/// What Claude Code writes into the transcript when a turn is stopped.
+const INTERRUPT_MARKER: &str = "[Request interrupted by user";
 
 pub fn parse_usage(u: &serde_json::Value) -> Usage {
     let n = |k: &str| u[k].as_u64().unwrap_or(0);
@@ -776,6 +1047,17 @@ pub fn fmt_cost(c: f64) -> String {
     }
 }
 
+/// A duration where the seconds matter. `fmt_duration` has minute resolution,
+/// which renders a typical 90-second turn as "1m" and a 20-second one as "0m".
+pub fn fmt_secs(secs: f64) -> String {
+    let s = secs.max(0.0).round() as i64;
+    match (s / 3600, (s % 3600) / 60, s % 60) {
+        (0, 0, sec) => format!("{sec}s"),
+        (0, m, sec) => format!("{m}m{sec:02}s"),
+        (h, m, _) => format!("{h}h{m:02}m"),
+    }
+}
+
 pub fn fmt_duration(secs: i64) -> String {
     let s = secs.max(0);
     let (h, m) = (s / 3600, (s % 3600) / 60);
@@ -858,6 +1140,100 @@ mod tests {
             Source { dir: dir.path().into(), blueprint: "Bp".into(), project: "proj".into() },
         ]);
         assert_eq!(again.envs[0].priced.usage.output, 200);
+    }
+
+    /// Activity has to be keyed on the *block*, not the message. Claude Code
+    /// writes one record per content block and repeats `message.id` on each, so
+    /// a message-level key keeps the first block — usually `thinking` — and
+    /// drops every tool call the turn made.
+    #[test]
+    fn tool_calls_are_counted_per_block_not_per_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("20260809_120000_abc_transcript.jsonl");
+        let block = |uuid: &str, body: &str| {
+            format!(
+                r#"{{"timestamp":"2026-08-09T18:15:28.917Z","sessionId":"s1","uuid":"{uuid}","type":"assistant","message":{{"id":"msg_a","model":"claude-opus-5","usage":{{"input_tokens":2,"output_tokens":100}},"content":[{body}]}}}}"#
+            )
+        };
+        std::fs::write(
+            &f,
+            format!(
+                "{}\n{}\n{}\n",
+                block("u1", r#"{"type":"thinking","thinking":"…"}"#),
+                block("u2", r#"{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"git status"}}"#),
+                block("u3", r#"{"type":"tool_use","id":"toolu_2","name":"Edit","input":{"file_path":"C:\\repo\\src\\main.rs"}}"#),
+            ),
+        )
+        .unwrap();
+
+        let src = Source {
+            dir: dir.path().to_path_buf(),
+            blueprint: "Bp".into(),
+            project: "proj".into(),
+        };
+        let a = scan(std::slice::from_ref(&src)).activity;
+        assert_eq!(a.tools.get("Bash"), Some(&1));
+        assert_eq!(a.tools.get("Edit"), Some(&1));
+        assert_eq!(a.shell.get("git"), Some(&1));
+        // Basename only — the same file edited from two checkouts is one file.
+        assert_eq!(a.files.get("main.rs"), Some(&1));
+
+        // Reading the same directory twice (an archive plus the live copy it
+        // came from) must not double the tool calls either.
+        let twice = scan(&[
+            Source { dir: dir.path().into(), blueprint: "Bp".into(), project: "proj".into() },
+            Source { dir: dir.path().into(), blueprint: "Bp".into(), project: "proj".into() },
+        ]);
+        assert_eq!(twice.activity.tools.get("Bash"), Some(&1));
+    }
+
+    /// A queue record carries no `uuid`. Keying the dedup on one counted zero
+    /// of 665 real records — a silent zero indistinguishable from a user who
+    /// never queues a prompt, which is exactly how this repo goes wrong.
+    #[test]
+    fn events_without_a_uuid_are_still_counted() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("20260809_120000_abc_transcript.jsonl");
+        std::fs::write(
+            &f,
+            concat!(
+                r#"{"type":"queue-operation","operation":"enqueue","timestamp":"2026-08-01T13:14:31.767Z","sessionId":"s1","content":"do the thing"}"#,
+                "\n",
+                r#"{"type":"queue-operation","operation":"remove","timestamp":"2026-08-01T13:14:37.093Z","sessionId":"s1","content":"do the thing"}"#,
+                "\n",
+                r#"{"type":"system","subtype":"turn_duration","uuid":"u1","durationMs":93728,"timestamp":"2026-08-01T13:20:00.000Z","sessionId":"s1"}"#,
+                "\n",
+                r#"{"type":"user","uuid":"u2","timestamp":"2026-08-01T13:21:00.000Z","sessionId":"s1","message":{"role":"user","content":"[Request interrupted by user]"}}"#,
+                "\n",
+                r#"{"type":"assistant","uuid":"u3","attributionSkill":"sync","timestamp":"2026-08-01T13:22:00.000Z","sessionId":"s1","message":{"id":"m1","model":"claude-opus-5","usage":{"output_tokens":1}}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+
+        let src = Source {
+            dir: dir.path().to_path_buf(),
+            blueprint: "Bp".into(),
+            project: "proj".into(),
+        };
+        let a = scan(std::slice::from_ref(&src)).activity;
+        assert_eq!(a.queued, 1, "an enqueue with no uuid must still count");
+        assert_eq!(a.unqueued, 1);
+        assert_eq!(a.turns(), 1);
+        assert_eq!(a.median_turn_secs(), 93.728);
+        assert_eq!(a.interrupts, 1);
+        assert_eq!(a.skill_ranking(), vec![("sync".to_string(), 1, 1)]);
+        // 2026-08-01 was a Saturday; the histogram is Monday-first.
+        assert_eq!(a.turn_weekday[5], 1, "turn_weekday: {:?}", a.turn_weekday);
+        assert_eq!(a.turn_hour[13], 1);
+    }
+
+    #[test]
+    fn turn_lengths_keep_their_seconds() {
+        // fmt_duration would render every one of these as "0m" or "1m".
+        assert_eq!(fmt_secs(9.0), "9s");
+        assert_eq!(fmt_secs(93.728), "1m34s");
+        assert_eq!(fmt_secs(5462.0), "1h31m");
     }
 
     #[test]
@@ -967,6 +1343,7 @@ mod tests {
     fn report_of(records: Vec<Record>) -> Report {
         Report {
             records,
+            activity: Activity::default(),
             envs: Vec::new(),
             blocks: Vec::new(),
             unknown_models: BTreeSet::new(),

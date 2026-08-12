@@ -2283,6 +2283,139 @@ fn draw_token_stats(f: &mut Frame, app: &App, scroll: u16) {
         "  00  03  06  09  12  15  18  21".to_string(),
         Style::default().fg(DIM),
     )));
+    lines.push(Line::from(""));
+
+    // ── What the sessions did ───────────────────────────────────────────────
+    let a = &report.activity;
+    if a.turns() > 0 {
+        let hours = a.turn_hours();
+        lines.push(section("WHAT THE SESSIONS DID"));
+        lines.push(Line::from(vec![
+            Span::styled("  ", Style::default()),
+            Span::styled(
+                format!("{} turns", a.turns()),
+                Style::default().fg(AMBER).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(
+                    " · median {} · p90 {} · longest {}",
+                    tokens::fmt_secs(a.median_turn_secs()),
+                    tokens::fmt_secs(a.p90_turn_secs()),
+                    tokens::fmt_secs(a.longest_turn_secs()),
+                ),
+                Style::default().fg(TEXT),
+            ),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {hours:.1}h inside turns · "), Style::default().fg(TEXT)),
+            Span::styled(
+                format!(
+                    "{} per hour of it",
+                    tokens::fmt_cost(if hours > 0.0 { total.cost / hours } else { 0.0 })
+                ),
+                Style::default().fg(ORANGE_HOT),
+            ),
+            Span::styled(
+                format!(
+                    " · {:.1} tool calls per turn · {} interrupted ({:.1}%)",
+                    a.tools_per_turn(),
+                    a.interrupts,
+                    a.interrupts as f64 / a.turns() as f64 * 100.0,
+                ),
+                Style::default().fg(TEXT),
+            ),
+        ]));
+        lines.push(note(
+            "turn time as Claude Code measured it, not elapsed session time — the gaps between \
+             turns are you reading and typing"
+                .into(),
+        ));
+        lines.push(Line::from(""));
+
+        // Tools and skills side by side: what the agent reached for, and what
+        // the user did.
+        lines.push(section("TOOLS  ·  SKILLS ACTUALLY RUN  (sessions · messages)"));
+        let tools = tokens::Activity::top(&a.tools, 8);
+        let skills = tokens::Activity::skill_ranking(a);
+        let calls = a.tool_calls().max(1) as f64;
+        let top_call = tools.first().map(|t| t.1).unwrap_or(1).max(1) as f64;
+        for i in 0..tools.len().max(skills.len().min(8)) {
+            let mut spans = match tools.get(i) {
+                Some((name, n)) => vec![
+                    Span::styled(format!("  {:<16}", truncate(name, 15)), Style::default().fg(TEXT)),
+                    Span::styled(
+                        format!("{n:>7}{:>6.1}%", *n as f64 / calls * 100.0),
+                        Style::default().fg(AMBER),
+                    ),
+                    Span::styled(
+                        format!(" {}", hbar(*n as f64 / top_call, 8)),
+                        Style::default().fg(AMBER),
+                    ),
+                ],
+                None => vec![Span::styled(" ".repeat(40), Style::default())],
+            };
+            if let Some((name, sess, msgs)) = skills.get(i) {
+                spans.push(Span::styled(
+                    format!("   {:<26}", truncate(name, 25)),
+                    Style::default().fg(TEXT),
+                ));
+                spans.push(Span::styled(format!("{sess:>5}"), Style::default().fg(ORANGE_HOT)));
+                spans.push(Span::styled(format!("{msgs:>8}"), Style::default().fg(MUTED)));
+            }
+            lines.push(Line::from(spans));
+        }
+        lines.push(note(
+            "a skill here is one the harness attributed work to — evidence it RAN, not that it \
+             was seeded"
+                .into(),
+        ));
+        lines.push(Line::from(""));
+
+        // Weekday, files and shell.
+        lines.push(section("TURNS BY WEEKDAY  ·  MOST-EDITED FILES"));
+        let files = tokens::Activity::top(&a.files, 7);
+        let peak_day = a.turn_weekday.iter().copied().max().unwrap_or(1).max(1);
+        for (i, name) in ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].iter().enumerate() {
+            let n = a.turn_weekday[i];
+            let mut spans = vec![
+                Span::styled(format!("  {name}  "), Style::default().fg(TEXT)),
+                Span::styled(format!("{n:>5} "), Style::default().fg(MUTED)),
+                Span::styled(
+                    hbar(n as f64 / peak_day as f64, 14),
+                    Style::default().fg(if a.busiest_weekday() == Some(i) { ORANGE_HOT } else { AMBER }),
+                ),
+            ];
+            if let Some((file, count)) = files.get(i) {
+                spans.push(Span::styled(
+                    format!("   {:<26}", truncate(file, 25)),
+                    Style::default().fg(TEXT),
+                ));
+                spans.push(Span::styled(format!("{count:>6}"), Style::default().fg(MUTED)));
+            }
+            lines.push(Line::from(spans));
+        }
+        lines.push(Line::from(""));
+
+        lines.push(section("SHELL COMMANDS  (first word)"));
+        let shell = tokens::Activity::top(&a.shell, 8);
+        lines.push(Line::from(Span::styled(
+            format!(
+                "  {}",
+                shell
+                    .iter()
+                    .map(|(n, c)| format!("{n} {c}"))
+                    .collect::<Vec<_>>()
+                    .join("  ·  ")
+            ),
+            Style::default().fg(MUTED),
+        )));
+        if a.queued > 0 {
+            lines.push(note(format!(
+                "{} prompts queued mid-turn, {} withdrawn before they ran",
+                a.queued, a.unqueued
+            )));
+        }
+    }
 
     let viewport = inner.height.saturating_sub(1);
     app.tokens_scroll_max.set((lines.len() as u16).saturating_sub(viewport));
@@ -2391,6 +2524,34 @@ mod tests {
                 rec(now - 3_000, "aello", "c95944da"),
                 rec(now - 1_000, "revoiced", "aa11bb22"),
             ],
+            // Likewise for activity: an all-zero default renders the whole
+            // "what the sessions did" half as nothing, which would pass every
+            // assertion below by simply not being there.
+            activity: tokens::Activity {
+                // Odd count, so the median is one of the samples rather than a
+                // choice between two.
+                turn_ms: vec![9_000, 93_728, 5_462_642],
+                turn_hour: { let mut h = [0u64; 24]; h[15] = 3; h },
+                turn_weekday: [2, 0, 0, 1, 0, 0, 0],
+                tools: BTreeMap::from([
+                    ("Bash".to_string(), 20),
+                    ("Edit".to_string(), 12),
+                    ("Read".to_string(), 8),
+                ]),
+                skills: BTreeMap::from([
+                    ("sync".to_string(), 88),
+                    ("handoff".to_string(), 11),
+                ]),
+                skill_sessions: BTreeMap::from([
+                    ("sync".to_string(), BTreeSet::from(["s1".to_string()])),
+                    ("handoff".to_string(), BTreeSet::from(["s1".to_string(), "s2".to_string()])),
+                ]),
+                files: BTreeMap::from([("CLAUDE.md".to_string(), 6)]),
+                shell: BTreeMap::from([("git".to_string(), 9)]),
+                interrupts: 1,
+                queued: 4,
+                unqueued: 2,
+            },
             envs: vec![env],
             blocks: vec![block],
             unknown_models: BTreeSet::new(),
@@ -2467,6 +2628,39 @@ mod tests {
         // page rather than left for the reader to discover.
         assert!(text.contains("count as ZERO"), "pointer-only archives must be named: {text}");
         assert!(text.contains("THIS directory"), "the live half is cwd-scoped: {text}");
+    }
+
+    /// The activity half of the page: what the sessions did, as opposed to what
+    /// they spent. Rendered tall enough to reach it, and asserted on the parts
+    /// that carry meaning rather than on the layout.
+    #[test]
+    fn token_stats_page_shows_what_the_sessions_did() {
+        let mut app = bare_app();
+        app.tokens = Some(sample_report());
+        let mut term =
+            Terminal::new(ratatui::backend::TestBackend::new(140, 90)).expect("test terminal");
+        term.draw(|f| draw_token_stats(f, &app, 0)).expect("draw");
+        let text: String = term
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<Vec<_>>()
+            .concat();
+
+        assert!(text.contains("WHAT THE SESSIONS DID"), "{text}");
+        assert!(text.contains("3 turns"), "turn count: {text}");
+        // Seconds, not `fmt_duration`'s minute resolution — the median turn is
+        // 94 seconds and "1m" would be a worse answer than none.
+        assert!(text.contains("1m34s"), "median turn keeps its seconds: {text}");
+        assert!(text.contains("Bash"), "the tool mix is the point: {text}");
+        assert!(text.contains("SKILLS ACTUALLY RUN"), "{text}");
+        assert!(text.contains("handoff"), "{text}");
+        assert!(text.contains("CLAUDE.md"), "most-edited files: {text}");
+        // Turn time is measured, not inferred, and the page has to say so —
+        // otherwise it reads as elapsed session time and the $/hour is wrong.
+        assert!(text.contains("not elapsed session time"), "{text}");
     }
 
     /// The stats page must survive being opened before the scan finishes —

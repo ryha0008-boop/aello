@@ -1413,6 +1413,8 @@ fn print_stats(report: &tokens::Report) {
         );
     }
 
+    print_activity(&report.activity, total.cost);
+
     if let Some(d) = s.busiest_day() {
         println!(
             "\nBusiest day {} — {} · {}",
@@ -1425,6 +1427,74 @@ fn print_stats(report: &tokens::Report) {
         println!("Busiest hour {h:02}:00 UTC");
     }
     println!("\nCosts are list API rates applied to subscription usage — a what-if, not a bill.");
+}
+
+/// The other half of the same scan: what the sessions *did*, not what they
+/// spent. Everything here is counted from the transcripts, so it carries the
+/// same caveats as the totals above.
+fn print_activity(a: &tokens::Activity, total_cost: f64) {
+    let turns = a.turns();
+    if turns == 0 {
+        return;
+    }
+    let hours = a.turn_hours();
+    println!("\nWHAT THE SESSIONS DID");
+    println!(
+        "  {turns} turns · median {} · p90 {} · longest {}",
+        tokens::fmt_secs(a.median_turn_secs()),
+        tokens::fmt_secs(a.p90_turn_secs()),
+        tokens::fmt_secs(a.longest_turn_secs()),
+    );
+    // Turn time, not elapsed session time: the gaps between turns are the user
+    // reading and typing, and counting them would price a lunch break.
+    println!(
+        "  {:.1}h inside turns ({} per hour of it) · {:.1} tool calls per turn",
+        hours,
+        tokens::fmt_cost(if hours > 0.0 { total_cost / hours } else { 0.0 }),
+        a.tools_per_turn(),
+    );
+    println!(
+        "  {} interrupted ({:.1}% of turns) · {} prompts queued, {} withdrawn before running",
+        a.interrupts,
+        a.interrupts as f64 / turns as f64 * 100.0,
+        a.queued,
+        a.unqueued,
+    );
+
+    let calls = a.tool_calls().max(1) as f64;
+    println!("\nTOOLS  ({} calls)", a.tool_calls());
+    for (name, n) in tokens::Activity::top(&a.tools, 10) {
+        println!("  {:<18}{:>8}{:>7.1}%", name, n, n as f64 / calls * 100.0);
+    }
+
+    let skills = a.skill_ranking();
+    if !skills.is_empty() {
+        println!("\nSKILLS ACTUALLY RUN  (sessions · messages)");
+        for (name, sess, msgs) in skills.iter().take(10) {
+            println!("  {:<32}{:>6}{:>9}", name, sess, msgs);
+        }
+    }
+
+    if !a.files.is_empty() {
+        println!("\nMOST-EDITED FILES");
+        for (name, n) in tokens::Activity::top(&a.files, 10) {
+            println!("  {:<32}{:>6}", name, n);
+        }
+    }
+    if !a.shell.is_empty() {
+        println!("\nSHELL COMMANDS  (first word)");
+        for (name, n) in tokens::Activity::top(&a.shell, 10) {
+            println!("  {:<32}{:>6}", name, n);
+        }
+    }
+
+    let peak = a.turn_weekday.iter().copied().max().unwrap_or(0).max(1);
+    println!("\nTURNS BY WEEKDAY");
+    for (i, name) in ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].iter().enumerate() {
+        let n = a.turn_weekday[i];
+        let bar = "█".repeat((n * 24 / peak) as usize);
+        println!("  {name}  {n:>5}  {bar}");
+    }
 }
 
 fn print_session_table(envs: &[&tokens::EnvRoll]) {

@@ -211,6 +211,42 @@ a chart that closes it invents a month of steady work. **Hour of day** is
 bucketed in **UTC** — there is no timezone crate here and guessing an offset
 would silently shift every bar.
 
+### What the sessions *did*
+
+The same scan also reads the half of the transcript that has nothing to do with
+money, because the files are open anyway and a second walk over a gigabyte to
+count tool calls would be pure waste.
+
+**Turns** come from Claude Code's own `turn_duration` records, so the length of
+a turn is measured wall clock and not a difference between two timestamps —
+which would quietly include however long you spent reading the last answer. That
+is also why the page reports **hours inside turns** rather than elapsed session
+time, and prices per hour of *that*. Measured here: 2,786 turns, median 1m44s,
+p90 10m09s, longest 1h31m, 193 hours inside turns.
+
+**Tool mix, most-edited files and shell verbs** come from the `tool_use` blocks.
+**Skills actually run** comes from `attributionSkill`, which the harness stamps
+on assistant messages — it is the only evidence a seeded skill was *run* rather
+than merely seeded, and it is counted two ways because they answer different
+questions: sessions (how often it was reached for) and messages (how much work
+it did). Here: `/handoff` in 213 sessions, `/sync` in 207, `/twosentences` in 19.
+
+**Interrupts** (`[Request interrupted by user]`) and **queued prompts** are the
+friction signals — 7.4% of turns interrupted, and 277 of 528 queued prompts
+withdrawn before they ran.
+
+Every counter deduplicates on an id its own record carries, and the key matters
+more than it looks:
+
+- **Tool calls key on the `toolu_…` id, not `message.id`.** Claude Code writes
+  one record per content block and repeats the message id on each, so a
+  message-level key keeps the first block — usually `thinking` — and drops every
+  tool call the turn made.
+- **A queue record has no `uuid` at all.** Keying on one counted **0 of 665**,
+  which is indistinguishable from a user who never queues a prompt. It was
+  caught by comparing the output against a hand count of the same files, which
+  is the only reason it is not still reading zero.
+
 ### Two ways these totals are incomplete, both stated on the page
 
 - **Pointer-only archives.** SessionEnd used to record only a *path* to the

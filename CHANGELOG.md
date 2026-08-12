@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+### Added
+- **The statistics page now reports what the sessions *did*, not only what they
+  spent** — `S` in the TUI and `aello tokens --stats` both gain it, from the
+  same scan, with no new hook and retroactively over all of history.
+
+  Turns (count, median, p90, longest, and hours spent *inside* turns), tool mix,
+  skills actually run, most-edited files, shell verbs, turns by weekday, and the
+  two friction signals: interrupted turns and queued-then-withdrawn prompts.
+  Turn length comes from Claude Code's own `turn_duration` records, so it is
+  measured wall clock rather than a gap between timestamps that would count the
+  time you spent reading.
+
+  Skills are counted from `attributionSkill`, which is the only evidence a
+  seeded skill was actually **run** rather than merely seeded — `/handoff` in
+  213 sessions here, `/sync` in 207, `/twosentences` in 19.
+
+  Two dedup keys were load-bearing and neither was obvious: tool calls key on
+  the `toolu_…` id rather than `message.id`, because one message is written as
+  several records and a message-level key keeps the `thinking` block and drops
+  every tool call; and queue records carry **no uuid at all**, so keying on one
+  counted 0 of 665 — a silent zero that reads exactly like a user who never
+  queues. Both are pinned by tests.
+
 ### Fixed
 - **A long report piped into `head` no longer ends in a panic dump.**
   `println!` panics when its pipe is gone, so `aello tokens --stats | head` could
