@@ -211,6 +211,7 @@ fn check_envs(repo: &Path, r: &mut RepoReport) {
             );
         }
         check_settings_hooks(env, &name, r);
+        check_statusline(env, &name, r);
     }
 }
 
@@ -245,6 +246,71 @@ fn check_settings_hooks(env: &Path, name: &str, r: &mut RepoReport) {
             format!("missing: {}", missing.join(", "))
         },
     );
+}
+
+/// The in-session usage readout: registered, and — the half that can't be read
+/// off disk — actually able to run.
+///
+/// A statusLine that fails produces no error anywhere: Claude Code logs the
+/// exit status to a debug log nobody opens and renders the previous line, so a
+/// registration pointing at an `aello` that is not on PATH looks exactly like
+/// one that works. So this feeds the real binary a real payload and reads what
+/// comes back.
+fn check_statusline(env: &Path, name: &str, r: &mut RepoReport) {
+    let check = format!("statusline [{name}]");
+    let path = env.join("settings.json");
+    let registered = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| {
+            serde_json::from_str::<serde_json::Value>(t.trim_start_matches('\u{feff}')).ok()
+        })
+        .is_some_and(|v| {
+            v["statusLine"]["command"]
+                .as_str()
+                .is_some_and(|c| c.contains(crate::project::STATUSLINE_COMMAND))
+        });
+    if !registered {
+        r.add(Status::Warn, check, "not registered in settings.json (next `aello run` adds it)");
+        return;
+    }
+
+    // A payload with no transcript: enough to render, and it touches no
+    // transcripts, so the check costs nothing on a machine with a big
+    // contextdb.
+    let payload = serde_json::json!({
+        "model": {"display_name": "check"},
+        "rate_limits": {"five_hour": {"used_percentage": 1, "resets_at": 0}}
+    })
+    .to_string();
+
+    let mut child = match std::process::Command::new("aello")
+        .arg("statusline")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            r.add(Status::Fail, check, format!("`aello` is not runnable from PATH: {e}"));
+            return;
+        }
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        let _ = stdin.write_all(payload.as_bytes());
+    }
+    match child.wait_with_output() {
+        Ok(o) if o.status.success() && !o.stdout.is_empty() => {
+            r.add(Status::Pass, check, "renders (executed with a real payload)")
+        }
+        Ok(o) => r.add(
+            Status::Fail,
+            check,
+            format!("exit {:?}, {} bytes out", o.status.code(), o.stdout.len()),
+        ),
+        Err(e) => r.add(Status::Fail, check, format!("could not run: {e}")),
+    }
 }
 
 /// The `pre-commit` guard: present, wired, committed, and — the only check that

@@ -521,6 +521,9 @@ pub fn place(
         ensure_model(&settings, &inst.model)?;
         // Stop Claude Code deleting the transcripts contextdb points at.
         ensure_cleanup_period(&settings)?;
+        // The in-session usage readout, so an env placed before it existed
+        // starts showing the plan limits and its own token spend.
+        ensure_statusline(&settings)?;
     }
 
     // Global persona — set once, never clobbered (the user may have edited it).
@@ -1249,6 +1252,7 @@ pub fn settings_json(model: &str) -> String {
   "permissions": {{
     "defaultMode": "bypassPermissions"
   }},
+  "statusLine": {{"type": "command", "command": "{STATUSLINE_COMMAND}"}},
   "hooks": {{{stop}
     "SessionStart": [{{"hooks":[{{"type":"command","command":"{py} \"$CLAUDE_CONFIG_DIR/hooks/session-start.py\""}}]}}],
     "UserPromptSubmit": [{{"hooks":[{{"type":"command","command":"{py} \"$CLAUDE_CONFIG_DIR/hooks/user-prompt-submit.py\""}}]}}],
@@ -1368,11 +1372,35 @@ fn sync_voice_hooks(settings: &Path) -> Result<()> {
 /// (6–14% dead under 30 days, 44% at 30–39). The archive now copies the
 /// transcript too, so this is belt-and-braces — but it also keeps `--resume`
 /// working on old sessions, which the copy does not.
-const CLEANUP_PERIOD_DAYS: u32 = 365;
+/// How long Claude Code keeps its own session files.
+///
+/// This was **365** while a recorded path was the only archive: the transcript
+/// had to outlive the pointer. It no longer is — SessionEnd copies the file and
+/// verifies the copy — so the number flipped from "keep it long enough to
+/// survive" to "get it out of the working tree fast". contextdb is the store;
+/// Claude Code's copy is a temporary that a session with a handoff note deletes
+/// outright, and this is the backstop for the ones that don't.
+///
+/// 10 days, not 3: an unarchived transcript is one whose session never reached
+/// SessionEnd (killed terminal, reboot), and that is exactly the session worth
+/// resuming. Ten days is how long that chance lasts.
+const CLEANUP_PERIOD_DAYS: u32 = 10;
 
-/// Self-heal the retention setting into an env placed before it existed. Only
-/// fills it in when **absent** — a value the user chose themselves is theirs,
-/// including a deliberately short one.
+/// The values aello has written into `cleanupPeriodDays` itself. Anything else
+/// is the user's and is left alone — but our own previous default has to be
+/// updatable, or every env placed before this change keeps 365 forever and the
+/// setting silently means nothing.
+const OUR_CLEANUP_VALUES: &[u64] = &[365, 10];
+
+/// Self-heal the retention setting into an env placed before it existed, and
+/// migrate aello's own earlier default.
+///
+/// Absent → written. Holding a value aello itself wrote (`OUR_CLEANUP_VALUES`)
+/// → updated. Anything else is the user's and is left alone, including a
+/// deliberately short one. Without the migration branch every env placed before
+/// this change would keep 365 forever, which is the value the whole design just
+/// stopped needing — a setting that only applies to new envs is a setting the
+/// fleet does not have.
 fn ensure_cleanup_period(settings: &Path) -> Result<()> {
     let Ok(text) = std::fs::read_to_string(settings) else {
         return Ok(());
@@ -1383,12 +1411,64 @@ fn ensure_cleanup_period(settings: &Path) -> Result<()> {
     let Some(obj) = v.as_object_mut() else {
         return Ok(());
     };
-    if obj.contains_key("cleanupPeriodDays") {
-        return Ok(());
+    match obj.get("cleanupPeriodDays").and_then(|d| d.as_u64()) {
+        Some(n) if n == CLEANUP_PERIOD_DAYS as u64 => return Ok(()),
+        Some(n) if !OUR_CLEANUP_VALUES.contains(&n) => return Ok(()),
+        Some(_) => {}
+        None if obj.contains_key("cleanupPeriodDays") => return Ok(()), // non-numeric: theirs
+        None => {}
     }
     obj.insert("cleanupPeriodDays".into(), CLEANUP_PERIOD_DAYS.into());
     std::fs::write(settings, serde_json::to_string_pretty(&v)?)
         .context("could not update settings.json with the transcript retention")
+}
+
+/// The statusline command aello considers its own. Registered by name rather
+/// than by absolute path: `aello update` replaces the binary in place and a
+/// recorded path would survive a reinstall that moved it, going silently dead
+/// — a statusline that fails just doesn't render, so there is nothing to see.
+/// `aello check` executes it for that reason.
+///
+/// No backslashes on purpose: Claude Code runs the statusLine command through
+/// Git Bash on Windows, which eats unquoted backslashes as escapes.
+pub const STATUSLINE_COMMAND: &str = "aello statusline";
+
+/// Register the usage readout in an existing `settings.json`.
+///
+/// Only when there is no `statusLine` at all, or when the one there is ours: a
+/// hand-written statusline is the user's, and a placement that replaced it
+/// every run would be the "env dir is rewritten under you" complaint with a
+/// new face. Removing the key is how you opt out, and `place` leaves it
+/// removed only until the next run — so opting out for good means pointing it
+/// at something else.
+fn ensure_statusline(settings: &Path) -> Result<()> {
+    let Ok(text) = std::fs::read_to_string(settings) else {
+        return Ok(());
+    };
+    let Ok(mut v) = parse_settings(settings, &text) else {
+        return Ok(());
+    };
+    let Some(obj) = v.as_object_mut() else {
+        return Ok(());
+    };
+    match obj.get("statusLine") {
+        Some(s) => {
+            let cmd = s["command"].as_str().unwrap_or_default();
+            if !cmd.contains(STATUSLINE_COMMAND) {
+                return Ok(()); // Somebody else's statusline. Leave it alone.
+            }
+            if cmd == STATUSLINE_COMMAND {
+                return Ok(());
+            }
+        }
+        None => {}
+    }
+    obj.insert(
+        "statusLine".into(),
+        serde_json::json!({"type": "command", "command": STATUSLINE_COMMAND}),
+    );
+    std::fs::write(settings, serde_json::to_string_pretty(&v)?)
+        .context("could not update settings.json with the statusline")
 }
 
 fn ensure_model(settings: &Path, model: &str) -> Result<()> {
@@ -1656,6 +1736,34 @@ mod tests {
     }
 
     #[test]
+    fn every_env_registers_the_statusline() {
+        let v: serde_json::Value = serde_json::from_str(&settings_json("opus")).unwrap();
+        assert_eq!(v["statusLine"]["type"], "command");
+        assert_eq!(v["statusLine"]["command"], STATUSLINE_COMMAND);
+        // Git Bash runs this on Windows and eats unquoted backslashes.
+        assert!(!STATUSLINE_COMMAND.contains('\\'), "no backslashes in the command");
+    }
+
+    /// The self-heal: an env placed before the statusline existed adopts it,
+    /// and one the user pointed somewhere else keeps their command.
+    #[test]
+    fn the_statusline_heals_in_but_never_replaces_the_users_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = dir.path().join("settings.json");
+
+        std::fs::write(&s, r#"{"model":"opus"}"#).unwrap();
+        ensure_statusline(&s).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&s).unwrap()).unwrap();
+        assert_eq!(v["statusLine"]["command"], STATUSLINE_COMMAND);
+        assert_eq!(v["model"], "opus", "the rest of the file survives");
+
+        std::fs::write(&s, r#"{"statusLine":{"type":"command","command":"my-own-thing"}}"#).unwrap();
+        ensure_statusline(&s).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&s).unwrap()).unwrap();
+        assert_eq!(v["statusLine"]["command"], "my-own-thing", "a hand-written statusline is theirs");
+    }
+
+    #[test]
     fn every_env_registers_the_stop_and_release_hooks() {
         let s = settings_json("sonnet");
         let v: serde_json::Value = serde_json::from_str(&s).expect("valid JSON");
@@ -1690,11 +1798,35 @@ mod tests {
     /// 30-day mark. Nothing errors when that happens — the archive just quietly
     /// stops being an archive.
     #[test]
-    fn settings_keep_transcripts_past_claude_codes_default_retention() {
+    /// Retention is deliberately **shorter** than Claude Code's 30-day default,
+    /// which is the opposite of what this asserted while a recorded path was
+    /// the only archive. SessionEnd now copies the transcript and verifies the
+    /// copy, so the original is a temporary; the setting exists to get it out
+    /// of the working tree, not to keep it alive.
+    #[test]
+    fn settings_expire_claude_codes_own_transcripts_quickly() {
         let s = settings_json("opus");
         let v: serde_json::Value = serde_json::from_str(&s).unwrap();
         let days = v["cleanupPeriodDays"].as_u64().expect("cleanupPeriodDays must be set");
-        assert!(days > 30, "retention {days} is not longer than Claude Code's 30-day default");
+        assert!(days < 30, "retention {days} is not shorter than Claude Code's default");
+        assert!(
+            days >= 7,
+            "retention {days} is too short: a session that never reached SessionEnd is \
+             unarchived, and this is the only window in which it can still be resumed"
+        );
+    }
+
+    /// Our own previous default must migrate, or every env placed before this
+    /// keeps 365 forever and the change reaches nothing already on disk.
+    #[test]
+    fn cleanup_period_migrates_aellos_own_earlier_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = dir.path().join("settings.json");
+        std::fs::write(&s, r#"{"model":"opus","cleanupPeriodDays":365}"#).unwrap();
+        ensure_cleanup_period(&s).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&s).unwrap()).unwrap();
+        assert_eq!(v["cleanupPeriodDays"].as_u64(), Some(CLEANUP_PERIOD_DAYS as u64));
     }
 
     #[test]

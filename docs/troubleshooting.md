@@ -122,7 +122,9 @@ Expected, and not a fault. `PostCompact` fires only when a session **compacts** 
 
 Records written before the transcript was *copied* stored only its path, and Claude Code deletes its own session files after `cleanupPeriodDays` — **30 by default**. So old references stop resolving, silently.
 
-Two things changed: SessionEnd now copies the transcript next to the record (`<ts>_<session>_transcript.jsonl`, named in the record's `transcript_archived` field), and placement sets `cleanupPeriodDays` to 365. The retention is only filled in when the key is **absent**, so if you deliberately keep it short, that stands — and old records whose transcript is already gone cannot be recovered.
+Two things changed: SessionEnd copies the transcript next to the record (`<ts>_<session>_transcript.jsonl`, named in `transcript_archived`), verifies the copy with sha256 (`transcript_verified`), and — when the session also wrote a `/handoff` note — **deletes Claude Code's original** (`original_deleted`). Retention is now **10 days**, migrated into existing envs; a value you set yourself is left alone. Old records whose transcript is already gone cannot be recovered — but check first whether the original is still in its env dir, because 226 of 269 dangling records here turned out to be recoverable that way.
+
+If `original_deleted` reads `failed: PermissionError` on every record, the delete branch never works on your machine — Claude Code is holding the transcript open — and the 10-day timer is doing all the cleanup. That is a supported outcome, not a fault; the archive is written and verified either way.
 
 ## A transcript wasn't archived (`transcript_archived` is empty)
 

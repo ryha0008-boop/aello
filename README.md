@@ -141,6 +141,7 @@ aello github-setup [--name <repo>] [--public] [--yes]   # create + push the repo
 aello docs [name]                              # print bundled reference docs (no name lists them)
 aello check [path] [--all] [--root <dir>] [--json]      # verify a repo's integrations (exit 1 on failure)
 aello tokens [name] [--sessions] [--json]      # token usage + estimated cost per env
+aello statusline                               # the in-session readout (run by Claude Code, not by hand)
 aello voice <mute|unmute|stop|status> [--project]       # off switch for the voice
 aello completions <bash|zsh|fish|powershell|elvish>     # print a shell completion script
 aello update [--force]                         # self-update (--force reinstalls the current version)
@@ -248,10 +249,24 @@ Not hearing anything? Run `aello voice status` first. [`docs/voice.md`](docs/voi
 aello tokens                 # per-env totals + the current 5-hour window
 aello tokens <name>          # one env
 aello tokens --sessions      # per-session breakdown
+aello tokens --stats         # projects ranked by tokens/session, where the money goes
 aello tokens --json          # machine-readable
 ```
 
+`--stats` (and `S` on the TUI tokens tab, which charts the same numbers) ranks projects by **tokens ÷ sessions** — how expensive it is to *engage* with a project rather than how much it has been used — and puts each bucket's token share next to its cost share, which disagree violently: cache read is 98% of the tokens and 69% of the money. It also names what it cannot count: archived sessions whose transcript was deleted before aello started copying it contribute zero, and unarchived sessions are only visible from the project directory.
+
 Nothing needs enabling: this reads the transcripts contextdb already archives, so it works retroactively over history recorded before the feature existed. Live sessions in the current directory are counted too; sessions running in other projects appear once they end.
+
+**In the session itself**, every env shows a live readout under the prompt — no setup, it is registered with the env:
+
+```
+204k·$9.95 │ 5h·42%·34M·1h57m │ 7d·20%·527M·5d18h
+this·6.57M·$4.08 │ sess·20M·$14.14 │ prjt·926M·$638.27
+```
+
+Ceilings on top — context tokens, session cost, then each plan window as *percentage · tokens · time to reset*. Spend beneath — last turn, this turn, session, project. Colour carries it: context red, money green, a window green under 80% and red over, and the whole spend row red once a window is spent.
+
+The 5-hour and weekly bars are your **actual plan limits** — Claude Code hands the statusline the utilisation the API reports, which is the one number no transcript contains (so the `aello tokens` 5-hour section, which can only measure against this machine's own peak, is the fallback and this is the real thing). Everything on the third line is transcripts. An env placed before this existed picks it up on its next `aello run`; a `statusLine` you wrote yourself is never replaced. See `docs/tokens.md`.
 
 Three things the output is deliberately explicit about, because all are easy to misread:
 

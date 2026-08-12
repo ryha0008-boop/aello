@@ -135,7 +135,7 @@ pub struct Priced {
 }
 
 impl Priced {
-    fn push(&mut self, model: &str, u: &Usage) {
+    pub fn push(&mut self, model: &str, u: &Usage) {
         self.usage.add(u);
         match u.cost(model) {
             Some(c) => self.cost += c,
@@ -185,6 +185,11 @@ impl Block {
 
 /// Everything one scan produced.
 pub struct Report {
+    /// Every deduplicated message, oldest first. Kept rather than dropped
+    /// because a caller may need a window the 5-hour blocks can't express —
+    /// the statusline sums "since the plan's own window opened", and a block
+    /// straddling that instant would be counted whole.
+    pub records: Vec<Record>,
     pub envs: Vec<EnvRoll>,
     /// Every 5-hour block across all envs, oldest first. The quota is
     /// machine-wide (one shared subscription token), so blocks are global.
@@ -192,6 +197,11 @@ pub struct Report {
     /// Model ids with no rate entry, so an unpriced total can be explained.
     pub unknown_models: BTreeSet<String>,
     pub files_scanned: usize,
+    /// Archived sessions that hold **only a pointer** to a transcript that no
+    /// longer exists, so they contribute nothing to any total here. Reported
+    /// rather than swallowed: 269 of 415 archives on the machine this was
+    /// written on, which is months of history reading as zero.
+    pub pointer_only: usize,
     pub messages: usize,
     /// Records seen before dedup — the gap against `messages` is the
     /// content-block duplication this module exists to strip.
@@ -320,6 +330,7 @@ pub fn scan(sources: &[Source]) -> Report {
     let mut records: Vec<Record> = Vec::new();
     let mut files = 0usize;
     let mut raw = 0usize;
+    let mut pointer_only = 0usize;
 
     for src in sources {
         let Ok(rd) = std::fs::read_dir(&src.dir) else { continue };
@@ -333,6 +344,18 @@ pub fn scan(sources: &[Source]) -> Report {
             // reading 391 files here; anything else with a .jsonl extension is
             // still read, so a rename can't silently drop real data.
             if path.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with("_end.jsonl")) {
+                // …but count the ones with no transcript beside them. Those
+                // sessions ended, were archived, and contribute **zero
+                // tokens**, because SessionEnd only recorded a path to a
+                // transcript Claude Code has since deleted. A total computed
+                // over them is not wrong by a rounding error; it is missing
+                // whole months, and nothing about the output would say so.
+                let copied = PathBuf::from(
+                    path.to_string_lossy().replace("_end.jsonl", "_transcript.jsonl"),
+                );
+                if !copied.exists() {
+                    pointer_only += 1;
+                }
                 continue;
             }
             files += 1;
@@ -345,7 +368,16 @@ pub fn scan(sources: &[Source]) -> Report {
     let blocks = build_blocks(&records);
     let (envs, unknown_models) = roll_envs(&records);
 
-    Report { envs, blocks, unknown_models, files_scanned: files, messages, raw_records: raw }
+    Report {
+        records,
+        envs,
+        blocks,
+        unknown_models,
+        files_scanned: files,
+        pointer_only,
+        messages,
+        raw_records: raw,
+    }
 }
 
 /// Parse one transcript. Returns the number of usage-bearing records seen
@@ -393,7 +425,7 @@ fn read_transcript(
     raw
 }
 
-fn parse_usage(u: &serde_json::Value) -> Usage {
+pub fn parse_usage(u: &serde_json::Value) -> Usage {
     let n = |k: &str| u[k].as_u64().unwrap_or(0);
     let total_write = n("cache_creation_input_tokens");
     // `cache_creation` splits the write across TTL buckets, which price 1.25x
@@ -498,6 +530,186 @@ fn roll_envs(records: &[Record]) -> (Vec<EnvRoll>, BTreeSet<String>) {
     }
     envs.sort_by(|a, b| b.priced.usage.total().cmp(&a.priced.usage.total()));
     (envs, unknown)
+}
+
+// ── Statistics ──────────────────────────────────────────────────────────────
+
+/// One project's rollup. contextdb groups by a project's **folder name**, not
+/// its path, so two checkouts of the same repo in different directories are one
+/// project here — which is usually what you want and is worth knowing when it
+/// isn't.
+#[derive(Clone, Debug)]
+pub struct ProjectRoll {
+    pub project: String,
+    pub sessions: u64,
+    pub messages: u64,
+    /// Which blueprints have worked here. A project worked by three envs is a
+    /// different thing from one worked by a single env.
+    pub blueprints: BTreeSet<String>,
+    pub priced: Priced,
+    pub first: i64,
+    pub last: i64,
+}
+
+impl ProjectRoll {
+    /// Tokens **per session** — the "how hungry is this project" number.
+    ///
+    /// Tokens ÷ sessions, not sessions ÷ tokens: the latter is a number like
+    /// 0.0000001 that ranks identically and reads like nothing. A project with
+    /// few long sessions ranks above one with many short ones even when the
+    /// second has spent more in total, which is the point — this measures the
+    /// cost of *engaging* with a project, not how much it has been used.
+    pub fn per_session(&self) -> u64 {
+        if self.sessions == 0 {
+            return 0;
+        }
+        self.priced.usage.total() / self.sessions
+    }
+
+    pub fn cost_per_session(&self) -> f64 {
+        if self.sessions == 0 {
+            return 0.0;
+        }
+        self.priced.cost / self.sessions as f64
+    }
+}
+
+/// One UTC day.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DayRoll {
+    /// Midnight UTC of that day, epoch seconds.
+    pub day: i64,
+    pub tokens: u64,
+    pub cost: f64,
+    pub messages: u64,
+}
+
+/// What each bucket actually cost, as opposed to how many tokens it holds.
+/// The two are wildly different — cache read is most of the tokens and a
+/// minority of the money — and printing only the token share misleads.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BucketCost {
+    pub input: f64,
+    pub output: f64,
+    pub cache_write: f64,
+    pub cache_read: f64,
+}
+
+impl BucketCost {
+    pub fn total(&self) -> f64 {
+        self.input + self.output + self.cache_write + self.cache_read
+    }
+}
+
+#[derive(Debug)]
+pub struct Stats {
+    /// Ranked by tokens per session, hungriest first.
+    pub projects: Vec<ProjectRoll>,
+    /// Contiguous days, oldest first — including days with nothing on them,
+    /// because a gap is a fact and a chart that closes the gap invents work.
+    pub daily: Vec<DayRoll>,
+    /// Tokens by hour of day, **UTC** (no timezone crate, and guessing an
+    /// offset would silently shift every bar).
+    pub hourly: [u64; 24],
+    pub sessions: u64,
+    pub bucket_cost: BucketCost,
+    /// Span of recorded history, in days.
+    pub span_days: i64,
+}
+
+impl Stats {
+    /// Mean cost per day over the recorded span — not over the charted window,
+    /// which is a different and smaller number.
+    pub fn cost_per_day(&self, total_cost: f64) -> f64 {
+        if self.span_days <= 0 {
+            return total_cost;
+        }
+        total_cost / self.span_days as f64
+    }
+
+    pub fn busiest_day(&self) -> Option<&DayRoll> {
+        self.daily.iter().max_by_key(|d| d.tokens)
+    }
+
+    pub fn peak_hour(&self) -> Option<usize> {
+        (0..24).max_by_key(|&h| self.hourly[h]).filter(|&h| self.hourly[h] > 0)
+    }
+}
+
+/// Roll a scan up into the shapes the TUI charts. `window_days` bounds the
+/// daily series only; every other figure is over all of history.
+pub fn stats(report: &Report, window_days: i64) -> Stats {
+    let mut projects: BTreeMap<String, ProjectRoll> = BTreeMap::new();
+    let mut project_sessions: HashSet<(String, String)> = HashSet::new();
+    let mut all_sessions: HashSet<String> = HashSet::new();
+    let mut by_day: BTreeMap<i64, DayRoll> = BTreeMap::new();
+    let mut hourly = [0u64; 24];
+    let mut bucket_cost = BucketCost::default();
+
+    for r in &report.records {
+        let p = projects.entry(r.project.clone()).or_insert_with(|| ProjectRoll {
+            project: r.project.clone(),
+            sessions: 0,
+            messages: 0,
+            blueprints: BTreeSet::new(),
+            priced: Priced::default(),
+            first: r.ts,
+            last: r.ts,
+        });
+        p.messages += 1;
+        p.blueprints.insert(r.blueprint.clone());
+        p.priced.push(&r.model, &r.usage);
+        p.first = p.first.min(r.ts);
+        p.last = p.last.max(r.ts);
+        if project_sessions.insert((r.project.clone(), r.session.clone())) {
+            p.sessions += 1;
+        }
+        all_sessions.insert(r.session.clone());
+
+        let cost = r.usage.cost(&r.model).unwrap_or(0.0);
+        let day = r.ts.div_euclid(86400) * 86400;
+        let d = by_day.entry(day).or_insert(DayRoll { day, ..Default::default() });
+        d.tokens += r.usage.total();
+        d.cost += cost;
+        d.messages += 1;
+
+        hourly[(r.ts.rem_euclid(86400) / 3600).clamp(0, 23) as usize] += r.usage.total();
+
+        if let Some((i, o)) = rates(&r.model) {
+            bucket_cost.input += r.usage.input as f64 / 1e6 * i;
+            bucket_cost.output += r.usage.output as f64 / 1e6 * o;
+            bucket_cost.cache_write += r.usage.cache_write_5m as f64 / 1e6 * i * CACHE_WRITE_5M
+                + r.usage.cache_write_1h as f64 / 1e6 * i * CACHE_WRITE_1H;
+            bucket_cost.cache_read += r.usage.cache_read as f64 / 1e6 * i * CACHE_READ;
+        }
+    }
+
+    // Fill the gaps: a day with no work is a zero bar, not a missing one.
+    let daily = match (by_day.keys().next(), by_day.keys().next_back()) {
+        (Some(&first), Some(&last)) => {
+            let start = first.max(last - (window_days - 1).max(0) * 86400);
+            let mut out = Vec::new();
+            let mut d = start;
+            while d <= last {
+                out.push(by_day.get(&d).copied().unwrap_or(DayRoll { day: d, ..Default::default() }));
+                d += 86400;
+            }
+            out
+        }
+        _ => Vec::new(),
+    };
+
+    let span_days = match (report.records.first(), report.records.last()) {
+        (Some(a), Some(b)) => ((b.ts - a.ts) / 86400).max(1),
+        _ => 0,
+    };
+
+    let mut projects: Vec<ProjectRoll> = projects.into_values().collect();
+    projects.sort_by(|a, b| {
+        b.per_session().cmp(&a.per_session()).then_with(|| b.project.cmp(&a.project))
+    });
+
+    Stats { projects, daily, hourly, sessions: all_sessions.len() as u64, bucket_cost, span_days }
 }
 
 // ── Formatting helpers (shared by the CLI table and the TUI tab) ────────────
@@ -737,5 +949,170 @@ mod tests {
         assert_eq!(envs[0].sessions[0].id, "new");
         assert_eq!(envs[0].sessions[0].messages, 2);
         assert_eq!(envs[0].priced.usage.output, 30);
+    }
+
+    // ── Statistics ──────────────────────────────────────────────────────────
+
+    fn rec_in(ts: i64, project: &str, sess: &str, u: Usage) -> Record {
+        Record {
+            ts,
+            model: "claude-opus-5".into(),
+            blueprint: "A".into(),
+            project: project.into(),
+            session: sess.into(),
+            usage: u,
+        }
+    }
+
+    fn report_of(records: Vec<Record>) -> Report {
+        Report {
+            records,
+            envs: Vec::new(),
+            blocks: Vec::new(),
+            unknown_models: BTreeSet::new(),
+            files_scanned: 0,
+            pointer_only: 0,
+            messages: 0,
+            raw_records: 0,
+        }
+    }
+
+    /// The ranking is tokens **per session**, so a project with one huge
+    /// session outranks one with many small ones even when the second has
+    /// spent more overall. That inversion is the whole point of the metric,
+    /// so it is the thing pinned.
+    #[test]
+    fn projects_rank_by_tokens_per_session_not_by_total() {
+        let big = Usage { output: 900, ..Default::default() };
+        let small = Usage { output: 100, ..Default::default() };
+        let r = report_of(vec![
+            rec_in(1000, "hungry", "h1", big),
+            // "busy" spends more in total (1000 > 900) across four sessions.
+            rec_in(1000, "busy", "b1", small),
+            rec_in(2000, "busy", "b2", small),
+            rec_in(3000, "busy", "b3", small),
+            rec_in(4000, "busy", "b4", small),
+            rec_in(5000, "busy", "b5", small),
+            rec_in(6000, "busy", "b6", small),
+            rec_in(7000, "busy", "b7", small),
+            rec_in(8000, "busy", "b8", small),
+            rec_in(9000, "busy", "b9", small),
+            rec_in(9500, "busy", "b10", small),
+        ]);
+        let s = stats(&r, 30);
+
+        assert_eq!(s.projects[0].project, "hungry");
+        assert_eq!(s.projects[0].sessions, 1);
+        assert_eq!(s.projects[0].per_session(), 900);
+        assert_eq!(s.projects[1].project, "busy");
+        assert_eq!(s.projects[1].sessions, 10);
+        assert_eq!(s.projects[1].per_session(), 100);
+        assert!(
+            s.projects[1].priced.usage.total() > s.projects[0].priced.usage.total(),
+            "the lower-ranked project really did spend more in total"
+        );
+        assert_eq!(s.sessions, 11, "sessions are counted across every project");
+    }
+
+    /// A day with no work is a zero bar, not a missing one — otherwise a chart
+    /// closes the gap and invents a week of steady activity that never
+    /// happened.
+    #[test]
+    fn the_daily_series_keeps_its_empty_days() {
+        let u = Usage { output: 10, ..Default::default() };
+        let day = 86400;
+        let big = Usage { output: 99, ..Default::default() };
+        let s = stats(&report_of(vec![rec_in(day * 10, "p", "a", big), rec_in(day * 14, "p", "b", u)]), 30);
+        assert_eq!(s.daily.len(), 5, "day 10 through day 14 inclusive");
+        assert_eq!(s.daily[0].tokens, 99);
+        assert_eq!(s.daily[1].tokens, 0);
+        assert_eq!(s.daily[4].tokens, 10);
+        assert_eq!(s.busiest_day().map(|d| d.day), Some(day * 10));
+    }
+
+    #[test]
+    fn the_daily_window_is_bounded_but_history_is_not() {
+        let u = Usage { output: 10, ..Default::default() };
+        let day = 86400;
+        let recs = (0..40).map(|i| rec_in(day * (100 + i), "p", &format!("s{i}"), u)).collect();
+        let s = stats(&report_of(recs), 30);
+        assert_eq!(s.daily.len(), 30, "the chart is bounded");
+        assert_eq!(s.sessions, 40, "the totals are not");
+        assert_eq!(s.projects[0].priced.usage.output, 400);
+    }
+
+    /// Tokens and money are different shapes: cache read dominates one and not
+    /// the other. Reporting only the token split misleads, so the cost split
+    /// is computed per bucket at each bucket's own multiplier.
+    #[test]
+    fn the_cost_split_is_not_the_token_split() {
+        let u = Usage { output: 1_000_000, cache_read: 100_000_000, ..Default::default() };
+        let s = stats(&report_of(vec![rec_in(0, "p", "a", u)]), 30);
+        let c = s.bucket_cost;
+        // Opus 5: $5/M in, $25/M out; a read is 0.1x input.
+        assert!((c.output - 25.0).abs() < 1e-6, "output {}", c.output);
+        assert!((c.cache_read - 50.0).abs() < 1e-6, "cache read {}", c.cache_read);
+        let token_share = u.cache_read as f64 / u.total() as f64;
+        let cost_share = c.cache_read / c.total();
+        assert!(token_share > 0.99, "reads are ~all the tokens: {token_share}");
+        assert!(cost_share < 0.7, "and nothing like all the money: {cost_share}");
+    }
+
+    #[test]
+    fn hours_bucket_in_utc_and_name_their_peak() {
+        let u = Usage { output: 10, ..Default::default() };
+        let s = stats(
+            &report_of(vec![
+                rec_in(15 * 3600, "p", "a", u),
+                rec_in(86400 + 15 * 3600 + 59, "p", "b", u),
+                rec_in(3 * 3600, "p", "c", u),
+            ]),
+            30,
+        );
+        assert_eq!(s.hourly[15], 20);
+        assert_eq!(s.hourly[3], 10);
+        assert_eq!(s.peak_hour(), Some(15));
+    }
+
+    /// An archive whose transcript was never copied (or has since been
+    /// deleted) contributes nothing — and that is indistinguishable from a
+    /// quiet week unless it is counted and said out loud. 269 of 415 archives
+    /// on the machine this was written on.
+    #[test]
+    fn archives_with_no_transcript_beside_them_are_counted_and_not_swallowed() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path().join("proj").join("A");
+        std::fs::create_dir_all(&d).unwrap();
+
+        // One session archived with its transcript…
+        std::fs::write(d.join("20260810_100000_aaaa_end.jsonl"), "{}").unwrap();
+        std::fs::write(
+            d.join("20260810_100000_aaaa_transcript.jsonl"),
+            r#"{"timestamp":"2026-08-10T10:00:00.000Z","sessionId":"aaaa","message":{"id":"m1","model":"claude-opus-5","usage":{"output_tokens":10}}}"#,
+        )
+        .unwrap();
+        // …and two archived as a pointer only.
+        std::fs::write(d.join("20260701_100000_bbbb_end.jsonl"), "{}").unwrap();
+        std::fs::write(d.join("20260702_100000_cccc_end.jsonl"), "{}").unwrap();
+
+        let sources =
+            vec![Source { dir: d, blueprint: "A".into(), project: "proj".into() }];
+        let report = scan(&sources);
+
+        assert_eq!(report.pointer_only, 2, "both pointer-only archives are counted");
+        assert_eq!(report.messages, 1, "and only the real transcript contributes usage");
+        assert_eq!(report.files_scanned, 1, "the sidecars are not read");
+    }
+
+    /// An empty scan must not divide by zero or claim a peak that isn't there.
+    #[test]
+    fn an_empty_scan_produces_an_empty_but_valid_stat_block() {
+        let s = stats(&report_of(Vec::new()), 30);
+        assert!(s.projects.is_empty());
+        assert!(s.daily.is_empty());
+        assert_eq!(s.sessions, 0);
+        assert_eq!(s.peak_hour(), None);
+        assert!(s.busiest_day().is_none());
+        assert_eq!(s.cost_per_day(12.0), 12.0, "no span means the total stands as the rate");
     }
 }

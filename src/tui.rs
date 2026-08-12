@@ -148,6 +148,9 @@ enum Mode {
     /// reads hundreds of MB of transcripts and takes seconds, which is fine
     /// once and unacceptable per frame.
     Tokens { sel: usize, scroll: u16 },
+    /// The charts over the same scan: which projects are hungry, the daily and
+    /// hourly shape of the spend, and where the money actually goes.
+    TokenStats { scroll: u16 },
 }
 
 /// Subdirectories of `dir` (sorted, dotfolders hidden), with ".." first if
@@ -960,6 +963,7 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                     KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('t') => {
                         app.mode = Mode::Normal;
                     }
+                    KeyCode::Char('s') => app.mode = Mode::TokenStats { scroll: 0 },
                     KeyCode::Down | KeyCode::Char('j') => {
                         if envs > 0 {
                             *sel = (*sel + 1).min(envs - 1);
@@ -991,6 +995,23 @@ fn run_app(terminal: &mut Term) -> Result<PostExit> {
                     _ => {}
                 }
             }
+            Mode::TokenStats { scroll } => match key.code {
+                KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('s') => {
+                    app.mode = Mode::Tokens { sel: 0, scroll: 0 };
+                }
+                KeyCode::Char('t') => app.mode = Mode::Normal,
+                KeyCode::Down | KeyCode::Char('j') => {
+                    *scroll = scroll.saturating_add(1).min(app.tokens_scroll_max.get());
+                }
+                KeyCode::Up | KeyCode::Char('k') => *scroll = scroll.saturating_sub(1),
+                KeyCode::PageDown | KeyCode::Char(' ') => {
+                    *scroll = scroll.saturating_add(10).min(app.tokens_scroll_max.get());
+                }
+                KeyCode::PageUp => *scroll = scroll.saturating_sub(10),
+                KeyCode::End | KeyCode::Char('g') => *scroll = app.tokens_scroll_max.get(),
+                KeyCode::Home => *scroll = 0,
+                _ => {}
+            },
         }
     }
 }
@@ -1047,6 +1068,7 @@ fn draw(f: &mut Frame, app: &App) {
         Mode::Config { dir, entries, sel, new } => draw_config(f, dir, entries, *sel, new),
         Mode::Help { docs, sel, scroll } => draw_help(f, docs, *sel, *scroll, &app.help_scroll_max),
         Mode::Tokens { sel, scroll } => draw_tokens(f, app, *sel, *scroll),
+        Mode::TokenStats { scroll } => draw_token_stats(f, app, *scroll),
     }
 }
 
@@ -1714,7 +1736,7 @@ fn draw_tokens(f: &mut Frame, app: &App, sel: usize, scroll: u16) {
         ))
         .title_bottom(
             Line::from(Span::styled(
-                " [↑/↓] ENV · [PGUP/PGDN] SCROLL · [R] RESCAN · [ESC] CLOSE ",
+                " [↑/↓] ENV · [PGUP/PGDN] SCROLL · [S] STATS · [R] RESCAN · [ESC] CLOSE ",
                 Style::default().fg(DIM),
             ))
             .centered(),
@@ -2014,6 +2036,277 @@ fn draw_token_detail(
     );
 }
 
+// ── Token statistics page ───────────────────────────────────────────────────
+
+/// How many days the daily chart covers. Wider than a terminal is usually
+/// worth; the number is stated on the chart so nobody reads it as "all time".
+const CHART_DAYS: i64 = 30;
+
+/// Eight levels of a vertical bar — one character per column, so 30 days or 24
+/// hours fit a line each without a widget or a second screen.
+const SPARK: [char; 9] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+fn spark(values: &[u64]) -> String {
+    let max = values.iter().copied().max().unwrap_or(0);
+    if max == 0 {
+        return " ".repeat(values.len());
+    }
+    values
+        .iter()
+        .map(|&v| {
+            // A non-zero day must never render as blank — that reads as "no
+            // work", which is a different fact.
+            let idx = if v == 0 { 0 } else { (v as f64 / max as f64 * 8.0).ceil().max(1.0) as usize };
+            SPARK[idx.min(8)]
+        })
+        .collect()
+}
+
+/// A proportional bar, `width` cells wide.
+fn hbar(frac: f64, width: usize) -> String {
+    let filled = (frac.clamp(0.0, 1.0) * width as f64).round() as usize;
+    format!("{}{}", "█".repeat(filled), "░".repeat(width.saturating_sub(filled)))
+}
+
+fn draw_token_stats(f: &mut Frame, app: &App, scroll: u16) {
+    let area = f.area();
+    f.render_widget(Clear, area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(ORANGE_HOT))
+        .title(Span::styled(
+            " TOKENS // STATISTICS ",
+            Style::default().fg(ORANGE_HOT).add_modifier(Modifier::BOLD),
+        ))
+        .title_bottom(
+            Line::from(Span::styled(
+                " [↑/↓ PGUP/PGDN] SCROLL · [S/ESC] BACK · [T] CLOSE ",
+                Style::default().fg(DIM),
+            ))
+            .centered(),
+        )
+        .style(Style::default().bg(SURFACE));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let Some(report) = app.tokens.as_ref() else { return };
+    let s = tokens::stats(report, CHART_DAYS);
+    let total = report.total();
+
+    let section = |t: &str| {
+        Line::from(Span::styled(
+            format!(" {t}"),
+            Style::default().fg(ORANGE).add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+        ))
+    };
+    let note = |t: String| Line::from(Span::styled(format!("  {t}"), Style::default().fg(DIM)));
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    // ── Headline ────────────────────────────────────────────────────────────
+    let msgs = report.messages as u64;
+    let per_msg = if msgs > 0 { total.cost / msgs as f64 } else { 0.0 };
+    let per_sess = if s.sessions > 0 { total.cost / s.sessions as f64 } else { 0.0 };
+    lines.push(section("OVERALL"));
+    lines.push(Line::from(vec![
+        Span::styled("  ", Style::default()),
+        Span::styled(
+            format!("{} tokens", tokens::fmt_tokens(total.usage.total())),
+            Style::default().fg(AMBER).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" · ", Style::default().fg(DIM)),
+        Span::styled(
+            tokens::fmt_cost(total.cost),
+            Style::default().fg(ORANGE_HOT).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(
+                " · {} sessions · {} messages · {} → {}",
+                s.sessions,
+                msgs,
+                s.daily.first().map(|d| tokens::fmt_time(d.day)).unwrap_or_else(|| "—".into()),
+                s.daily.last().map(|d| tokens::fmt_time(d.day)).unwrap_or_else(|| "—".into()),
+            ),
+            Style::default().fg(TEXT),
+        ),
+    ]));
+    lines.push(Line::from(Span::styled(
+        format!(
+            "  {} per day · {} per session · {} per message",
+            tokens::fmt_cost(s.cost_per_day(total.cost)),
+            tokens::fmt_cost(per_sess),
+            tokens::fmt_cost(per_msg),
+        ),
+        Style::default().fg(MUTED),
+    )));
+    lines.push(note("list API rates on subscription usage — a what-if, never a bill".into()));
+    if report.pointer_only > 0 {
+        lines.push(Line::from(Span::styled(
+            format!(
+                "  {} archived session(s) hold only a pointer to a deleted transcript and count as ZERO here",
+                report.pointer_only
+            ),
+            Style::default().fg(ERR),
+        )));
+    }
+    lines.push(note(
+        "totals cover contextdb plus the live envs of THIS directory — run from a project to see its unarchived sessions"
+            .into(),
+    ));
+    lines.push(Line::from(""));
+
+    // ── Token-hungry projects ───────────────────────────────────────────────
+    lines.push(section("TOKEN-HUNGRY PROJECTS  (tokens ÷ sessions)"));
+    lines.push(Line::from(Span::styled(
+        format!(
+            "  {:<22}{:>6}{:>9}{:>10}{:>9}  {}",
+            "PROJECT", "SESS", "TOTAL", "PER SESS", "$/SESS", "RELATIVE"
+        ),
+        Style::default().fg(DIM),
+    )));
+    let hungriest = s.projects.first().map(|p| p.per_session()).unwrap_or(0);
+    for p in &s.projects {
+        let frac = if hungriest > 0 { p.per_session() as f64 / hungriest as f64 } else { 0.0 };
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("  {:<22}", truncate(&p.project, 21)),
+                Style::default().fg(TEXT),
+            ),
+            Span::styled(format!("{:>6}", p.sessions), Style::default().fg(MUTED)),
+            Span::styled(
+                format!("{:>9}", tokens::fmt_tokens(p.priced.usage.total())),
+                Style::default().fg(MUTED),
+            ),
+            Span::styled(
+                format!("{:>10}", tokens::fmt_tokens(p.per_session())),
+                Style::default().fg(AMBER).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("{:>9}", tokens::fmt_cost(p.cost_per_session())),
+                Style::default().fg(ORANGE_HOT),
+            ),
+            Span::styled("  ", Style::default()),
+            Span::styled(hbar(frac, 16), Style::default().fg(ORANGE_HOT)),
+        ]));
+    }
+    lines.push(note(
+        "how expensive it is to ENGAGE with a project, not how much it has been used — \
+         few long sessions outrank many short ones"
+            .into(),
+    ));
+    lines.push(Line::from(""));
+
+    // ── Where the money goes ────────────────────────────────────────────────
+    lines.push(section("WHERE THE MONEY GOES  (token share vs cost share)"));
+    let u = &total.usage;
+    let tok = u.total().max(1) as f64;
+    let cost = s.bucket_cost.total().max(1e-9);
+    let buckets: [(&str, u64, f64); 4] = [
+        ("input", u.input, s.bucket_cost.input),
+        ("output", u.output, s.bucket_cost.output),
+        ("cache write", u.cache_write(), s.bucket_cost.cache_write),
+        ("cache read", u.cache_read, s.bucket_cost.cache_read),
+    ];
+    lines.push(Line::from(Span::styled(
+        format!("  {:<13}{:>10}{:>8}   {:<20}{:>10}{:>8}", "BUCKET", "TOKENS", "%", "", "COST", "%"),
+        Style::default().fg(DIM),
+    )));
+    for (name, tokens_n, dollars) in buckets {
+        let tp = tokens_n as f64 / tok;
+        let cp = dollars / cost;
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {name:<13}"), Style::default().fg(TEXT)),
+            Span::styled(
+                format!("{:>10}{:>7.1}%", tokens::fmt_tokens(tokens_n), tp * 100.0),
+                Style::default().fg(AMBER),
+            ),
+            Span::styled(format!("  {}", hbar(tp, 10)), Style::default().fg(AMBER)),
+            Span::styled(
+                format!("  {:>10}{:>7.1}%", tokens::fmt_cost(dollars), cp * 100.0),
+                Style::default().fg(ORANGE_HOT),
+            ),
+            Span::styled(format!("  {}", hbar(cp, 10)), Style::default().fg(ORANGE_HOT)),
+        ]));
+    }
+    lines.push(note(
+        "cache is not uniformly cheap: a read is 0.1x input, but a 1h write is 2x it".into(),
+    ));
+    lines.push(Line::from(""));
+
+    // ── Daily ───────────────────────────────────────────────────────────────
+    lines.push(section(&format!("DAILY  (last {} days, UTC)", s.daily.len())));
+    let day_tokens: Vec<u64> = s.daily.iter().map(|d| d.tokens).collect();
+    let peak = s.busiest_day();
+    lines.push(Line::from(vec![
+        Span::styled("  ", Style::default()),
+        Span::styled(spark(&day_tokens), Style::default().fg(ORANGE_HOT)),
+        Span::styled(
+            format!(
+                "  peak {} on {}",
+                tokens::fmt_tokens(peak.map(|d| d.tokens).unwrap_or(0)),
+                peak.map(|d| tokens::fmt_time(d.day)).unwrap_or_else(|| "—".into()),
+            ),
+            Style::default().fg(MUTED),
+        ),
+    ]));
+    if let (Some(a), Some(b)) = (s.daily.first(), s.daily.last() ) {
+        lines.push(Line::from(Span::styled(
+            format!("  {:<width$}{}", tokens::fmt_time(a.day), tokens::fmt_time(b.day),
+                width = s.daily.len().saturating_sub(11).max(1)),
+            Style::default().fg(DIM),
+        )));
+    }
+    let charted: u64 = day_tokens.iter().sum();
+    let charted_cost: f64 = s.daily.iter().map(|d| d.cost).sum();
+    lines.push(note(format!(
+        "{} · {} in the charted window · gaps are real days with no work",
+        tokens::fmt_tokens(charted),
+        tokens::fmt_cost(charted_cost)
+    )));
+    lines.push(Line::from(""));
+
+    // ── Hour of day ─────────────────────────────────────────────────────────
+    lines.push(section("HOUR OF DAY  (UTC — no timezone conversion, so read the offset in)"));
+    lines.push(Line::from(vec![
+        Span::styled("  ", Style::default()),
+        Span::styled(spark(&s.hourly), Style::default().fg(AMBER)),
+        Span::styled(
+            format!(
+                "  busiest {:02}:00 UTC",
+                s.peak_hour().unwrap_or(0)
+            ),
+            Style::default().fg(MUTED),
+        ),
+    ]));
+    lines.push(Line::from(Span::styled(
+        "  00  03  06  09  12  15  18  21".to_string(),
+        Style::default().fg(DIM),
+    )));
+
+    let viewport = inner.height.saturating_sub(1);
+    app.tokens_scroll_max.set((lines.len() as u16).saturating_sub(viewport));
+
+    f.render_widget(
+        Paragraph::new(lines)
+            .scroll((scroll, 0))
+            .style(Style::default().bg(SURFACE))
+            .block(Block::default().padding(Padding::new(1, 1, 0, 0))),
+        inner,
+    );
+}
+
+/// Clip a name to `n` characters so a long project folder can't shove a column
+/// off the pane.
+fn truncate(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(n.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2081,11 +2374,28 @@ mod tests {
             priced: priced.clone(),
             by_env: BTreeMap::from([("TechnicalDirector".to_string(), u)]),
         };
+        // The stats page reads `records`, not the rollups, so a sample report
+        // with none renders an empty chart — which is exactly the bug this
+        // fixture would otherwise hide.
+        let rec = |ts: i64, project: &str, session: &str| tokens::Record {
+            ts,
+            model: "claude-opus-5".into(),
+            blueprint: "TechnicalDirector".into(),
+            project: project.into(),
+            session: session.into(),
+            usage: u,
+        };
         tokens::Report {
+            records: vec![
+                rec(now - 90_000, "aello", "c95944da"),
+                rec(now - 3_000, "aello", "c95944da"),
+                rec(now - 1_000, "revoiced", "aa11bb22"),
+            ],
             envs: vec![env],
             blocks: vec![block],
             unknown_models: BTreeSet::new(),
             files_scanned: 220,
+            pointer_only: 3,
             messages: 15_092,
             raw_records: 32_286,
         }
@@ -2121,6 +2431,52 @@ mod tests {
         assert!(text.contains("estimated"), "cost must never read as a bill");
         assert!(text.contains("CACHE READ"));
         assert!(text.contains("SESSIONS (1)"));
+    }
+
+    /// The statistics page, rendered offscreen. Same reason as the tab above —
+    /// a layout slip panics inside ratatui on the user's terminal and nowhere
+    /// else — plus the two labels that stop a chart overstating: the hour
+    /// histogram is UTC, and the cost is a what-if.
+    #[test]
+    fn token_stats_page_charts_the_projects_and_labels_its_axes() {
+        let mut app = bare_app();
+        app.tokens = Some(sample_report());
+        let mut term =
+            Terminal::new(ratatui::backend::TestBackend::new(140, 40)).expect("test terminal");
+        term.draw(|f| draw_token_stats(f, &app, 0)).expect("draw");
+
+        let text: String = term
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<Vec<_>>()
+            .concat();
+
+        assert!(text.contains("TOKENS // STATISTICS"));
+        assert!(text.contains("TOKEN-HUNGRY PROJECTS"), "the ranking is the point");
+        assert!(text.contains("tokens ÷ sessions"), "and the formula is stated");
+        assert!(text.contains("aello"), "{text}");
+        assert!(text.contains("revoiced"), "every project is listed, not just the cwd's");
+        assert!(text.contains("WHERE THE MONEY GOES"));
+        assert!(text.contains("cache read"));
+        assert!(text.contains("UTC"), "the hour histogram must name its timezone");
+        assert!(text.contains("what-if"), "cost must never read as a bill");
+        // The two ways a total here is quietly incomplete, both stated on the
+        // page rather than left for the reader to discover.
+        assert!(text.contains("count as ZERO"), "pointer-only archives must be named: {text}");
+        assert!(text.contains("THIS directory"), "the live half is cwd-scoped: {text}");
+    }
+
+    /// The stats page must survive being opened before the scan finishes —
+    /// `s` is reachable from a tab that itself renders a SCANNING frame.
+    #[test]
+    fn token_stats_page_survives_having_no_scan_yet() {
+        let app = bare_app(); // tokens: None
+        let mut term =
+            Terminal::new(ratatui::backend::TestBackend::new(100, 20)).expect("test terminal");
+        term.draw(|f| draw_token_stats(f, &app, 0)).expect("draw");
     }
 
     /// The pre-scan frame is a real state, not a transient: the scan takes

@@ -13,6 +13,7 @@ mod launch;
 mod models;
 mod project;
 mod sessions;
+mod statusline;
 mod templates;
 mod tokens;
 mod tui;
@@ -185,10 +186,23 @@ enum Commands {
         /// List individual sessions rather than per-env totals.
         #[arg(long)]
         sessions: bool,
+        /// Rank projects by tokens per session, and show where the money goes.
+        /// The same numbers the TUI charts on its `S` page.
+        #[arg(long)]
+        stats: bool,
         /// Machine-readable output.
         #[arg(long)]
         json: bool,
     },
+    /// Render the in-session usage readout. Reads Claude Code's statusLine
+    /// payload on stdin — not meant to be run by hand.
+    ///
+    /// Every placed env registers this as its `statusLine`, so the 5-hour and
+    /// weekly plan limits, the context window, and the token counts for this
+    /// turn, the last turn, this session and this project sit under the prompt.
+    /// The plan percentages exist only in that payload; the token counts come
+    /// from the transcripts, as `aello tokens` does.
+    Statusline,
     /// Mute or unmute the voice (applies to every env).
     Voice {
         #[command(subcommand)]
@@ -284,7 +298,10 @@ fn main() {
         Some(Commands::Restore { name, project }) => cmd_restore(name, project),
         Some(Commands::Persona { name, from, project }) => cmd_persona(name, from, project),
         Some(Commands::Check { path, all, root, json }) => cmd_check(path, all, root, json),
-        Some(Commands::Tokens { name, sessions, json }) => cmd_tokens(name, sessions, json),
+        Some(Commands::Tokens { name, sessions, stats, json }) => {
+            cmd_tokens(name, sessions, stats, json)
+        }
+        Some(Commands::Statusline) => statusline::run(),
         Some(Commands::Voice { action }) => match action {
             VoiceAction::Mute { project } => voice::mute(project),
             VoiceAction::Unmute { project } => voice::unmute(project),
@@ -1202,7 +1219,7 @@ fn cmd_check(
 }
 
 /// Token usage per env, from the transcripts contextdb already archives.
-fn cmd_tokens(name: Option<String>, sessions: bool, json: bool) -> Result<()> {
+fn cmd_tokens(name: Option<String>, sessions: bool, stats: bool, json: bool) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let report = tokens::scan(&tokens::collect_sources(&cwd));
 
@@ -1228,6 +1245,11 @@ fn cmd_tokens(name: Option<String>, sessions: bool, json: bool) -> Result<()> {
 
     if json {
         return print_tokens_json(&report, &envs, sessions);
+    }
+
+    if stats {
+        print_stats(&report);
+        return Ok(());
     }
 
     if sessions {
@@ -1296,6 +1318,91 @@ fn print_env_table(envs: &[&tokens::EnvRoll]) {
             tokens::fmt_cost(sum.cost),
         );
     }
+}
+
+/// `aello tokens --stats` — the same rollups the TUI charts, in plain text.
+///
+/// Exists so the numbers can be checked against the transcripts by hand; a
+/// chart nobody can reproduce is decoration.
+fn print_stats(report: &tokens::Report) {
+    let s = tokens::stats(report, 30);
+    let total = report.total();
+    let msgs = report.messages as u64;
+
+    println!(
+        "\n{} tokens · {} · {} sessions · {} messages · {} days",
+        tokens::fmt_tokens(total.usage.total()),
+        tokens::fmt_cost(total.cost),
+        s.sessions,
+        msgs,
+        s.span_days,
+    );
+    println!(
+        "{} per day · {} per session · {} per message",
+        tokens::fmt_cost(s.cost_per_day(total.cost)),
+        tokens::fmt_cost(if s.sessions > 0 { total.cost / s.sessions as f64 } else { 0.0 }),
+        tokens::fmt_cost(if msgs > 0 { total.cost / msgs as f64 } else { 0.0 }),
+    );
+
+    // Two disclosures, because both failure modes look exactly like a correct
+    // total: an archive whose transcript was deleted contributes zero, and the
+    // live half of the scan only reaches the current directory's envs.
+    if report.pointer_only > 0 {
+        println!(
+            "{} archived session(s) hold only a pointer to a transcript that no longer exists — they count as ZERO above.",
+            report.pointer_only
+        );
+    }
+    println!(
+        "Totals cover contextdb plus the live envs of the current directory; run from a project to include its unarchived sessions."
+    );
+
+    println!("\nTOKEN-HUNGRY PROJECTS  (tokens ÷ sessions)");
+    println!("  {:<24}{:>6}{:>10}{:>11}{:>10}  ENVS", "PROJECT", "SESS", "TOTAL", "PER SESS", "$/SESS");
+    for p in &s.projects {
+        println!(
+            "  {:<24}{:>6}{:>10}{:>11}{:>10}  {}",
+            p.project,
+            p.sessions,
+            tokens::fmt_tokens(p.priced.usage.total()),
+            tokens::fmt_tokens(p.per_session()),
+            tokens::fmt_cost(p.cost_per_session()),
+            p.blueprints.iter().cloned().collect::<Vec<_>>().join(","),
+        );
+    }
+
+    println!("\nWHERE THE MONEY GOES");
+    let u = &total.usage;
+    let tok = u.total().max(1) as f64;
+    let cost = s.bucket_cost.total().max(1e-9);
+    for (name, n, d) in [
+        ("input", u.input, s.bucket_cost.input),
+        ("output", u.output, s.bucket_cost.output),
+        ("cache write", u.cache_write(), s.bucket_cost.cache_write),
+        ("cache read", u.cache_read, s.bucket_cost.cache_read),
+    ] {
+        println!(
+            "  {:<13}{:>10} {:>6.1}% of tokens   {:>10} {:>6.1}% of cost",
+            name,
+            tokens::fmt_tokens(n),
+            n as f64 / tok * 100.0,
+            tokens::fmt_cost(d),
+            d / cost * 100.0,
+        );
+    }
+
+    if let Some(d) = s.busiest_day() {
+        println!(
+            "\nBusiest day {} — {} · {}",
+            tokens::fmt_time(d.day),
+            tokens::fmt_tokens(d.tokens),
+            tokens::fmt_cost(d.cost),
+        );
+    }
+    if let Some(h) = s.peak_hour() {
+        println!("Busiest hour {h:02}:00 UTC");
+    }
+    println!("\nCosts are list API rates applied to subscription usage — a what-if, not a bill.");
 }
 
 fn print_session_table(envs: &[&tokens::EnvRoll]) {

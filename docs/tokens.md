@@ -12,6 +12,7 @@ before the feature existed.
 aello tokens                 # per-env totals + the current 5-hour window
 aello tokens <name>          # one env
 aello tokens --sessions      # per-session breakdown
+aello tokens --stats         # projects ranked by tokens/session + where the money goes
 aello tokens --json          # machine-readable
 ```
 
@@ -119,6 +120,116 @@ subscription's actual limit does not appear in any transcript — aello cannot
 read it and does not guess. The largest 5-hour block ever recorded here is the
 only honest denominator available, and the output names it so the number is not
 mistaken for "% of your plan".
+
+## The statusline: the same numbers, in the session
+
+Every placed env registers `aello statusline` as its Claude Code `statusLine`,
+so the readout sits under the prompt and updates as the conversation does (up to
+about three times a second):
+
+```
+204k·$9.95 │ 5h·42%·34M·1h57m │ 7d·20%·527M·5d18h
+this·6.57M·$4.08 │ sess·20M·$14.14 │ prjt·926M·$638.27
+```
+
+Two rows: **ceilings on top, spend beneath.** The model and the effort are not
+shown — the session already knows what it is running, and the space is worth
+more as numbers.
+
+Row 1 is context tokens (red) and this session's cost, then each plan window as
+*percentage · tokens · time to reset*. Row 2 is `last` / `this` turn, `sess`
+and `prjt`, each as tokens and cost. A segment with no data is dropped rather
+than drawn as zero, so an API-key session (no `rate_limits`) simply shows fewer
+of them.
+
+Colour carries the meaning: context red, money green, a plan window green under
+80% and **red at or above it**. Past 100% the whole spend row turns red,
+because at that point the spend is the thing to look at.
+
+**Row 1's two halves come from different worlds, and neither can answer the
+other's question.**
+
+The **percentage** is the *subscription's own* utilisation, arriving in the
+`anthropic-ratelimit-unified-*` response headers and passed to the statusline by
+Claude Code. **No transcript carries it**, which is exactly why the 5-hour
+section above is measured against this machine's peak block: that is what aello
+can do without this number, and this row is what it can do with it.
+
+The **token count** beside it is aello's own, summed from transcripts over the
+same window the percentage is measured against (the window start is derived from
+the payload's `resets_at`). It is **raw tokens, machine-wide**, and it is *not*
+the quantity Anthropic is metering — a percentage and a token count in one
+segment look like they should divide into a quota, and they do not. It can also
+only under-report: a session running in another project right now is unreadable
+until it ends, the same limit the rest of this page documents.
+
+Row 2 is transcripts throughout, deduped by `message.id` like everything else
+here. The session figure reproduces `aello tokens --sessions` for the same
+session.
+
+**A turn ends at a user prompt, and that is narrower than it sounds.** Claude
+Code writes every tool result back as a `user` record, a subagent's whole
+conversation is interleaved into the same file, and an interrupt lands as a
+`user` record too. Measured across every transcript in this project: 4,539 tool
+results, 313 typed prompts, 21 prompts carrying a pasted image, and 22
+`[Request interrupted by user]` markers. Only the last two shapes plus plain
+text start a turn — treating an interrupt as a boundary inserts an empty turn,
+and "last turn" then reads as nothing at the moment you most want it.
+
+The project total is cached for 180 seconds (`<env>/statusline-cache.json`),
+because a full scan is ~0.8s and the statusline runs far too often to pay that.
+Everything narrower — this turn, the last turn, the session — is re-read from
+disk every render. Deleting the cache file costs one slow render.
+
+To turn it off, remove the `statusLine` key from `<env>/settings.json` — but the
+next `aello run` puts it back, so pointing it at your own command is the durable
+opt-out. A `statusLine` aello did not write is never replaced.
+
+`aello check` **runs** it rather than reading the setting: a statusline that
+fails renders nothing, logs to a debug file nobody opens, and looks identical to
+one that works.
+
+## Statistics and charts (`S` in the TUI, `--stats` on the CLI)
+
+`S` on the tokens tab opens a second page over the same scan; `aello tokens
+--stats` prints the same numbers as text so they can be checked by hand.
+
+**Token-hungry projects** ranks by **tokens ÷ sessions** — how expensive it is
+to *engage* with a project, not how much it has been used. A project with one
+enormous session outranks one with twenty small ones even when the second has
+spent more in total; that inversion is the metric working, not a bug. Sessions
+÷ tokens would rank identically and read as `0.0000001`, so it is not offered.
+Treat a one-session project as noise: an average of one sample is a sample.
+
+**Where the money goes** puts the token share and the cost share of each bucket
+side by side, because they disagree violently — measured here: cache read is
+98.3% of tokens and 69.1% of cost, output 0.4% of tokens and 12.4% of cost.
+Reading only the token split is how "cache is cheap" becomes a wrong conclusion.
+
+**Daily** is a 30-day sparkline that keeps its empty days: a gap is a fact, and
+a chart that closes it invents a month of steady work. **Hour of day** is
+bucketed in **UTC** — there is no timezone crate here and guessing an offset
+would silently shift every bar.
+
+### Two ways these totals are incomplete, both stated on the page
+
+- **Pointer-only archives.** SessionEnd used to record only a *path* to the
+  transcript; copying the file came later. Claude Code deletes its own session
+  files on a retention timer, so those archives
+  point at nothing and contribute **zero tokens**. The count is printed; it is
+  not folded into the total as if it were a gap in the work.
+
+  This was not hypothetical. On the machine this was written on, **269 of 415**
+  archived sessions were pointer-only and the reported total was **3.94B tokens
+  / $2806**. For **226** of them the original transcript was still sitting in
+  its env dir, never copied — backfilling those 698 MB moved the true total to
+  **7.41B / $5575 across 293 sessions**. Half the history was invisible and read
+  as quiet months. If this count is ever non-zero, check whether the originals
+  still exist before writing the history off.
+- **The live half is cwd-scoped.** contextdb holds ended sessions; unarchived
+  ones are only readable in the env dirs of the directory you are standing in.
+  Running from `~` instead of a project dropped 430M tokens and 31 days of span
+  here, and moved `$/day` from $72 to $315. Run it from the project.
 
 ## Cost of the scan
 

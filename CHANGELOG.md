@@ -2,7 +2,98 @@
 
 ## [Unreleased]
 
+### Changed
+- **contextdb is now the only place a transcript lives.** SessionEnd copies the
+  transcript, **verifies the copy byte-for-byte with sha256**, and then deletes
+  Claude Code's original — but only when the session also wrote a `/handoff`
+  note. Transcript retention (`cleanupPeriodDays`) drops from **365 to 10 days**
+  and now *migrates* in existing envs rather than only filling an absent key, so
+  the change reaches envs already on disk instead of only new ones.
+
+  **The handoff note is the gate, and not as a proxy for "ended cleanly".**
+  Deleting the original costs `--resume` for that session and nothing else,
+  because the archive holds every byte. A handoff note *is* the continuity — it
+  is written to be read by the next session — so once it exists the transcript's
+  resume value is already spent. No note means the session may still be worth
+  resuming, so its transcript stays and the 10-day timer takes it later.
+  Measured across 372 archives: 257 (69%) carried a note, and the `SessionEnd`
+  trigger alone (`prompt_input_exit` 183, `clear` 151, `other` 38) does not
+  separate them.
+
+  Ten days rather than three: an unarchived transcript belongs to a session that
+  never reached SessionEnd at all — a killed terminal, a reboot — which is
+  exactly the session worth resuming. Ten days is how long that chance lasts.
+
+  Every outcome is recorded in the archive: `transcript_verified` is `sha256`,
+  `MISMATCH` or the exception type, and `original_deleted` is `session-end`,
+  `failed: <Error>` or empty. Measured all three paths against the real hook —
+  note present → original gone; no note → original kept; file held open by
+  another process → copy still written, note still captured, exit 0, and
+  `failed: PermissionError` on the record rather than silence.
+
 ### Added
+- **A statistics page over the token scan — `S` on the TUI tokens tab, or
+  `aello tokens --stats`.** Projects ranked by **tokens ÷ sessions** (how
+  expensive it is to *engage* with a project, so one huge session outranks
+  twenty small ones), each bucket's token share beside its cost share, a 30-day
+  sparkline that keeps its empty days, and an hour-of-day histogram labelled
+  UTC because there is no timezone crate and a guessed offset would shift every
+  bar silently.
+
+  Measured while building it: cache read is **98.3% of tokens and 69.1% of
+  cost**, output 0.4% of tokens and 12.4% of cost — the two splits are printed
+  together because reading only the token one is how "cache is cheap" becomes a
+  wrong conclusion.
+
+- **`aello tokens` now says what it could not count.** Two disclosures, both for
+  numbers that otherwise read as a quiet period rather than as missing data:
+  **269 of 415** archived sessions on the machine this was built on held only a
+  *pointer* to a transcript Claude Code has since deleted (SessionEnd only
+  started copying the file later), so they contributed zero tokens and are now
+  counted and named — for 226 of them the original was still on disk, and
+  copying it moved that machine's true total from 3.94B tokens to **7.41B**; and
+  the live half of the scan only reaches the current directory's envs — running
+  from `~` rather than the project dropped 430M tokens and 31 days of span here,
+  moving `$/day` from $72 to $315.
+
+- **A usage readout under the prompt, in the session itself.** Every env now
+  registers `aello statusline` as its Claude Code `statusLine`, which renders
+  two rows on every conversation update — ceilings on top, spend beneath:
+
+  ```
+  204k·$9.95 │ 5h·42%·34M·1h57m │ 7d·20%·527M·5d18h
+  this·6.57M·$4.08 │ sess·20M·$14.14 │ prjt·926M·$638.27
+  ```
+
+  Context tokens and session cost, then each **plan window** as percentage,
+  tokens and time to reset; below, tokens and list-rate cost for **the last
+  turn, this turn, this session and this project**. Colour is the part read at a
+  glance: context red, money green, a window green under 80% and red over it,
+  and the whole spend row red once a window is spent.
+
+  The two plan percentages come from the payload Claude Code hands the
+  statusline, and they exist **nowhere else** — no transcript carries them,
+  which is why `aello tokens` measures its 5-hour window against this machine's
+  own peak block instead. The token counts come from the transcripts, deduped by
+  `message.id` exactly as `aello tokens` does; the session figure reproduces
+  `aello tokens --sessions` to the cent on a real session. A missing field drops
+  its segment rather than printing a confident `0%`, so an API-key session (no
+  `rate_limits`) simply shows fewer segments.
+
+  A turn is split on **user prompts**, which is not the same as records with
+  `"role":"user"`: measured over every transcript in this project, 4,539 of
+  4,895 such records are tool results, 22 are `[Request interrupted by user]`
+  markers, and 21 are real prompts carrying a pasted image. Counting an
+  interrupt as a boundary would insert an empty turn and blank out "last turn"
+  at exactly the moment it is worth reading.
+
+  The project-wide total is cached for 180 seconds because the statusline
+  re-runs up to three times a second and the scan takes ~0.8s; everything
+  narrower than the project is re-read from disk on every render. Existing envs
+  adopt the registration on their next `aello run`, and a hand-written
+  `statusLine` is never replaced. `aello check` now **executes** it with a real
+  payload — a statusline that fails renders nothing and reports nowhere, so
+  "registered" is not evidence that it works.
 - **Documented the Renovate failure mode that looks exactly like success:
   Mend's onboarding defaults to "Scan Only", which sets Renovate to `silent`.**
   It runs jobs on schedule and creates no PRs, no issues and no dependency
