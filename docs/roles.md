@@ -68,17 +68,18 @@ Crucially, the skill is **generated from the blueprint's role**, not a one-size-
 What `/sync` does when invoked (only the parts the role covers):
 - **Repo health** — confirm it's a git repo, check for an `origin` remote (offer `gh repo create` if missing, with confirmation), report branch / ahead-behind / status.
 - **Reconcile memory, then docs** — memory is refreshed **first** (its `MEMORY.md` index and per-fact files), then each doc the role owns gets a two-way staleness pass: add what's missing, fix what's wrong, delete what no longer applies. Reports per file: updated / fresh / skipped. For a contributor this is `CHANGELOG.md` alone.
-- **Mirror env config** — copy the env's `skills/`, `memory/`, persona and (if one was written this session) the `<name>.HANDOFF.md` resume note into the tracked per-blueprint `claude-internal/<name>/` folder (see below), staged by explicit path. Self-heals the folder (`mkdir -p`) so already-placed envs adopt it. Because the handoff snapshot is taken here, **`/handoff` has to run before `/sync`** — a note written afterwards misses the commit and stays on this machine.
+- **Mirror env config** — copy the env's `skills/`, `commands/`, `memory/`, persona and (if one was written this session) the `<name>.HANDOFF.md` resume note into the tracked per-blueprint `claude-internal/<name>/` folder (see below), staged by explicit path. Self-heals the folder (`mkdir -p`) so already-placed envs adopt it. Because the handoff snapshot is taken here, **`/handoff` has to run before `/sync`** — a note written afterwards misses the commit and stays on this machine.
 - **Commit + push** — stage **only the files touched this session** (by explicit path, never `git add -A`), commit with a clear message ending in an `Env: <blueprint>` trailer, then `git pull --rebase origin <branch>` (absorbs the release CI's auto-bump so the push fast-forwards) and push to `origin`.
 
 ### `claude-internal/` — version-controlling the env
 
-The env dir (`.claude-env-<name>/`) is gitignored — it holds credentials and per-machine state — so the skills, memory, and persona that define a blueprint would otherwise never reach git. Any role with git duties fixes this with **`claude-internal/`**, a tracked folder at the repo root that mirrors the live env dir:
+The env dir (`.claude-env-<name>/`) is gitignored — it holds credentials and per-machine state — so the skills, commands, memory, and persona that define a blueprint would otherwise never reach git. Any role with git duties fixes this with **`claude-internal/`**, a tracked folder at the repo root that mirrors the live env dir:
 
 ```
 claude-internal/
 └── <name>/            # one namespace per blueprint sharing the repo
     ├── skills/            # mirror of <env>/skills/ — one-way, pruned
+    ├── commands/          # union with <env>/commands/ — never pruned
     ├── memory/            # union with <env>/projects/<cwd>/memory/ — never pruned
     ├── persona.CLAUDE.md  # snapshot of <env>/CLAUDE.md, renamed so it never auto-loads
     └── handoff.md         # snapshot of <name>.HANDOFF.md — lowercase, so *.HANDOFF.md
@@ -86,11 +87,11 @@ claude-internal/
                            #   reaches another machine
 ```
 
-For generated content the live env dir is the **single source of truth** — `claude-internal/<name>/` is only written *from* it, and a mirrored skill the blueprint no longer seeds gets pruned. **Memory is the exception, and deliberately so.** It has two writers as soon as a second machine is involved, so the mirror only ever gains notes: a note present in the mirror and absent from this env dir is the other machine's committed work, and deleting it on a launch destroyed it silently, staging the deletion in the same breath. A launch that finds such notes prints their names and points at `aello restore`. Removing one for real is a `git rm`.
+For generated content the live env dir is the **single source of truth** — `claude-internal/<name>/` is only written *from* it, and a mirrored skill the blueprint no longer seeds gets pruned. **Memory and commands are the exceptions, and deliberately so.** Memory has two writers as soon as a second machine is involved, so the mirror only ever gains notes: a note present in the mirror and absent from this env dir is the other machine's committed work, and deleting it on a launch destroyed it silently, staging the deletion in the same breath. Commands (`<env>/commands/*.md`, your own slash commands) are pruned from neither side for a simpler reason: aello writes none of them, so there is no generated version to fall back on and the mirror is the only copy that crosses a machine. A launch that finds mirror-only notes or commands prints their names and points at `aello restore`. Removing one for real is a `git rm`.
 
 Reading the mirror back into an env happens in two places:
 
-- **A clone.** When `aello run` finds the mirror present and no env dir beside it, it restores the env — skills, memory, persona and any waiting resume note — before seeding anything, then carries on mirroring as usual. Without that step the first run on a second machine seeded a bare env and the prune pass deleted every tracked memory note and hand-kept skill the bare env did not have, silently, since the mirror is written from code that had no reason to look.
+- **A clone.** When `aello run` finds the mirror present and no env dir beside it, it restores the env — skills, commands, memory, persona and any waiting resume note — before seeding anything, then carries on mirroring as usual. Without that step the first run on a second machine seeded a bare env and the prune pass deleted every tracked memory note and hand-kept skill the bare env did not have, silently, since the mirror is written from code that had no reason to look.
 - **`aello restore <name>`.** The same thing for an env dir that already exists — run it after pulling work another machine pushed, because `aello run` deliberately will not touch a live env from a snapshot. It is additive: memory and skills are unions, a persona that differs is reported and left alone (`aello persona` is how you replace one on purpose), and only the resume note is replaced, since the local one has already been snapshotted into git by this machine's own `/sync`.
 
 The folder is **namespaced per blueprint** so multiple blueprints sharing one repo don't clobber each other's mirror. The persona snapshot is deliberately **not** named `CLAUDE.md` (which Claude Code would auto-load as a second persona). The folder is seeded at placement and refreshed by every `/sync`; it is **not** covered by the `.claude-env-*` gitignore line, so it commits normally.

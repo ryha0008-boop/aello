@@ -1095,6 +1095,7 @@ fn cmd_restore(name: String, project: Option<PathBuf>) -> Result<()> {
     println!("Restored '{bp_name}' from claude-internal/{bp_name}/:");
     println!("  {} memory note(s) → {}", r.memory, project::memory_dir(&env, &project).display());
     println!("  {} skill(s) → {}", r.skills, env.join("skills").display());
+    println!("  {} command(s) → {}", r.commands, env.join("commands").display());
     if r.handoff {
         println!("  resume note → {}", project::handoff_path(&project, &bp_name).display());
         println!("  It is delivered and deleted on the next launch.");

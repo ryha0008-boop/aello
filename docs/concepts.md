@@ -23,6 +23,7 @@ my-project/
 ├── claude-internal/          # TRACKED mirror of the env, namespaced per blueprint
 │   └── <name>/               #   one folder per blueprint sharing the repo
 │       ├── skills/           #     mirror of <env>/skills/ (one-way, pruned)
+│       ├── commands/         #     union with <env>/commands/ (hand-written; never pruned)
 │       ├── memory/           #     union with <env>/projects/<cwd>/memory/
 │       ├── persona.CLAUDE.md #     snapshot of <env>/CLAUDE.md (renamed; never auto-loads)
 │       └── handoff.md        #     snapshot of <name>.HANDOFF.md, so it can cross machines
@@ -33,7 +34,7 @@ my-project/
 
 The env dir is gitignored, so the skills, memory, and persona that define a blueprint would never reach git. With the `github` cap, `claude-internal/` (a tracked folder at the repo root) captures that internal config — written *from* the env dir, so the live env stays the source of truth for anything generated. Each blueprint mirrors into its own `claude-internal/<name>/` namespace, so multiple blueprints sharing one repo don't clobber each other. It's seeded at placement and refreshed by `/sync`. **The destination is configurable** (`aello edit <name> --mirror-dir <path>`): in a **public** repo the mirror is a publish rather than a backup, so pointing it at a working tree of a private repo keeps the product public and the memory private, and `/sync` commits there instead. Without a destination `/sync` checks the repo's visibility before staging and stops if it is public — see [roles.md](roles.md). The persona snapshot is renamed (`persona.CLAUDE.md`) so Claude Code never auto-loads it as a second persona.
 
-**Skills are a strict one-way mirror; memory is a union.** A skill is regenerated from the role on every placement, so a mirrored skill the env no longer seeds is stale output and gets pruned. A memory note is not: on a repo worked from two machines, a note in the mirror with no counterpart in this env dir is the *other machine's*, and pruning it deleted committed work on a launch that had no way to know better. So memory only ever gains files, and a launch that finds mirror-only notes names them and points at `aello restore`. Deleting a note for real takes a `git rm` of the mirror copy — deliberate, rather than a side effect of starting a session.
+**Skills are a strict one-way mirror; memory and commands are unions.** A skill is regenerated from the role on every placement, so a mirrored skill the env no longer seeds is stale output and gets pruned. A memory note is not: on a repo worked from two machines, a note in the mirror with no counterpart in this env dir is the *other machine's*, and pruning it deleted committed work on a launch that had no way to know better. Custom slash commands in `<env>/commands/` sit on the memory side of that line for a sharper reason — aello generates no command at all, so every one of them is hand-written and the mirror is the only copy that ever crosses a machine. So both only ever gain files, and a launch that finds mirror-only ones names them and points at `aello restore`. Deleting one for real takes a `git rm` of the mirror copy — deliberate, rather than a side effect of starting a session.
 
 Reading the mirror back happens in exactly two places:
 

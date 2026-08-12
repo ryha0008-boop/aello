@@ -322,6 +322,17 @@ pub fn mirror_dir(project: &Path, blueprint: &str, root: Option<&str>) -> PathBu
 /// committed so the note reaches another machine.
 pub const MIRRORED_HANDOFF: &str = "handoff.md";
 
+/// Marker file inside a skill directory: keep this skill out of the tracked
+/// mirror. For a skill vendored from someone else's repo — it has its own
+/// upstream, and mirroring it drops that project into this repo's history.
+///
+/// It is a **separate** marker from `.aello-keep`, which answers a different
+/// question: `.aello-keep` stops `place` regenerating a skill, and only the four
+/// seeded names are ever regenerated. A vendored skill needs neither of those and
+/// still must not be published, so overloading one marker with both meanings
+/// would make "don't publish this" unsayable for a seeded skill and vice versa.
+pub const NO_MIRROR: &str = ".aello-nomirror";
+
 /// The live resume note the SessionStart hook reads and deletes, at the project
 /// root.
 pub fn handoff_path(project: &Path, blueprint: &str) -> PathBuf {
@@ -779,9 +790,9 @@ fn scaffold_project(
 }
 
 /// One-way mirror of this env's internal config into the project-tracked
-/// `claude-internal/<blueprint>/` folder, so the skills, memory, and persona
-/// that live in the gitignored env dir are captured in git. The live env dir
-/// stays the single source of truth; this only copies from it. The persona
+/// `claude-internal/<blueprint>/` folder, so the skills, commands, memory, and
+/// persona that live in the gitignored env dir are captured in git. The live env
+/// dir stays the single source of truth; this only copies from it. The persona
 /// snapshot is renamed to `persona.CLAUDE.md` so Claude Code never auto-loads it
 /// as a second persona. Namespacing per blueprint keeps multi-blueprint repos
 /// from clobbering each other's mirror.
@@ -814,17 +825,14 @@ fn mirror_env_internal(
     // deleting them here, on a launch, with nothing printed.
     let orphaned = merge_dir(&memory_dir(env_dir, project), &dest.join("memory"))
         .context("could not mirror memory into claude-internal")?;
-    if !orphaned.is_empty() {
-        println!(
-            "note: {} memory note(s) in {}/memory/ are not in this env:",
-            orphaned.len(),
-            dest.display()
-        );
-        for name in &orphaned {
-            println!("  {name}");
-        }
-        println!("  `aello restore {blueprint}` to adopt them, or `git rm` one to drop it.");
-    }
+    report_orphans(&orphaned, "memory note", &dest.join("memory"), blueprint);
+    // Commands are a union for the same reason memory is, and NOT a pruning copy
+    // like skills. aello generates skills from the role, so a mirror-only skill is
+    // stale output; it generates no command at all, so a mirror-only command is
+    // the other machine's hand-written work and pruning it deletes the only copy.
+    let orphaned = merge_dir(&env_dir.join("commands"), &dest.join("commands"))
+        .context("could not mirror commands into claude-internal")?;
+    report_orphans(&orphaned, "command", &dest.join("commands"), blueprint);
     let persona = env_dir.join("CLAUDE.md");
     if persona.exists() {
         std::fs::create_dir_all(&dest).context("could not create claude-internal dir")?;
@@ -846,6 +854,24 @@ fn mirror_env_internal(
     Ok(())
 }
 
+/// Name the mirror-only entries `merge_dir` refused to delete, and how to adopt
+/// them. Silence here is what made the two-machine case invisible: the files are
+/// on disk, nothing reads them, and a launch looks identical either way.
+fn report_orphans(orphaned: &[String], noun: &str, dir: &Path, blueprint: &str) {
+    if orphaned.is_empty() {
+        return;
+    }
+    println!(
+        "note: {} {noun}(s) in {} are not in this env:",
+        orphaned.len(),
+        dir.display()
+    );
+    for name in orphaned {
+        println!("  {name}");
+    }
+    println!("  `aello restore {blueprint}` to adopt them, or `git rm` one to drop it.");
+}
+
 /// Seed a missing env dir from the tracked `claude-internal/<blueprint>/` mirror.
 ///
 /// The mirror is tracked precisely so the skills, memory and persona that live
@@ -858,7 +884,7 @@ fn mirror_env_internal(
 ///
 /// Everything below still gets rewritten by the rest of `place` — a regenerated
 /// `/sync`, a persona the config would seed — so this restores what nothing else
-/// can: memory, hand-kept skills, and a `custom` persona.
+/// can: memory, hand-kept skills, hand-written commands, and a `custom` persona.
 fn restore_from_mirror(env_dir: &Path, blueprint: &str, root: Option<&str>) -> Result<()> {
     if env_dir.exists() {
         return Ok(());
@@ -873,6 +899,8 @@ fn restore_from_mirror(env_dir: &Path, blueprint: &str, root: Option<&str>) -> R
     // is a plain copy — and its symlink skipping is wanted either way.
     copy_dir_all(&src.join("skills"), &env_dir.join("skills"))
         .context("could not restore skills from claude-internal")?;
+    copy_dir_all(&src.join("commands"), &env_dir.join("commands"))
+        .context("could not restore commands from claude-internal")?;
     copy_dir_all(&src.join("memory"), &memory_dir(env_dir, project))
         .context("could not restore memory from claude-internal")?;
     let persona = src.join("persona.CLAUDE.md");
@@ -897,6 +925,7 @@ fn restore_from_mirror(env_dir: &Path, blueprint: &str, root: Option<&str>) -> R
 pub struct Restored {
     pub memory: usize,
     pub skills: usize,
+    pub commands: usize,
     pub handoff: bool,
     /// The env's persona differs from the mirror's snapshot and was left alone.
     pub persona_differs: bool,
@@ -943,6 +972,8 @@ pub fn restore(
         .context("could not restore memory from claude-internal")?;
     merge_dir(&src.join("skills"), &env_dir.join("skills"))
         .context("could not restore skills from claude-internal")?;
+    merge_dir(&src.join("commands"), &env_dir.join("commands"))
+        .context("could not restore commands from claude-internal")?;
 
     let snapshot = src.join("persona.CLAUDE.md");
     let live = env_dir.join("CLAUDE.md");
@@ -976,6 +1007,7 @@ pub fn restore(
     Ok(Restored {
         memory: count_entries(&src.join("memory"), false),
         skills: count_entries(&src.join("skills"), true),
+        commands: count_entries(&src.join("commands"), false),
         handoff: restored_handoff,
         persona_differs,
     })
@@ -1024,6 +1056,12 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
         let entry = entry?;
         let ft = entry.file_type()?;
         if ft.is_symlink() {
+            continue;
+        }
+        // A skill the env keeps but the repo must not carry — a vendored one with
+        // its own upstream, say. Not added to `keep`, so a copy an earlier launch
+        // already made is pruned: marking it is how you take it back out.
+        if ft.is_dir() && entry.path().join(NO_MIRROR).exists() {
             continue;
         }
         keep.insert(entry.file_name());
@@ -2752,6 +2790,111 @@ mod tests {
         let here = memory_dir(&env, proj.path());
         assert!(here.join("MEMORY.md").exists(), "restored into this machine's encoded dir");
         assert!(!foreign.join("MEMORY.md").exists(), "not into the other machine's");
+    }
+
+    /// Custom slash commands live in `<env>/commands/` and aello writes none of
+    /// them, so the mirror is the only copy that crosses a machine. It carried
+    /// skills, memory, persona and the handoff and silently skipped this one —
+    /// measured on `code-auditor`, whose env had three commands and whose mirror
+    /// had the one somebody had copied in by hand.
+    #[test]
+    fn commands_reach_the_mirror_and_come_back() {
+        let proj = tempfile::tempdir().unwrap();
+        let env = env_dir(proj.path(), "demo");
+        let inst = Instance { name: "demo".into(), model: "haiku".into(), mirror_root: None };
+        let caps = Capabilities { github: true, ..Default::default() };
+        let ci = proj.path().join("claude-internal").join("demo");
+
+        // Outbound: a hand-written command in the env reaches the mirror.
+        std::fs::create_dir_all(env.join("commands")).unwrap();
+        std::fs::write(env.join("commands").join("diagram.md"), "# /diagram\n").unwrap();
+        place(&env, &inst, Some("# p"), &caps).unwrap();
+        assert!(
+            ci.join("commands").join("diagram.md").exists(),
+            "a command in the env never reached the mirror"
+        );
+
+        // Inbound, fresh clone: mirror present, no env dir beside it.
+        let clone = tempfile::tempdir().unwrap();
+        let clone_ci = clone.path().join("claude-internal").join("demo");
+        std::fs::create_dir_all(clone_ci.join("commands")).unwrap();
+        std::fs::write(clone_ci.join("commands").join("diagram.md"), "# /diagram\n").unwrap();
+        let clone_env = env_dir(clone.path(), "demo");
+        place(&clone_env, &inst, Some("# p"), &caps).unwrap();
+        assert!(
+            clone_env.join("commands").join("diagram.md").exists(),
+            "a fresh clone did not seed commands from the mirror"
+        );
+    }
+
+    /// A vendored skill has its own upstream, so mirroring it drops someone
+    /// else's repo into this project's history. `.aello-nomirror` says so, and
+    /// the marker has to *remove* an existing copy: `code-auditor` recorded that
+    /// decision in a commit message, and the next `aello run` put all 137 files
+    /// back without a word, because a rule nothing enforces is a rule the tool
+    /// silently reverts.
+    #[test]
+    fn a_skill_marked_no_mirror_is_kept_out_and_taken_back_out() {
+        let proj = tempfile::tempdir().unwrap();
+        let env = env_dir(proj.path(), "demo");
+        let inst = Instance { name: "demo".into(), model: "haiku".into(), mirror_root: None };
+        let caps = Capabilities { github: true, ..Default::default() };
+        let ci = proj.path().join("claude-internal").join("demo");
+
+        // First launch: unmarked, so it mirrors like any hand-kept skill.
+        let vendored = env.join("skills").join("vendored");
+        std::fs::create_dir_all(&vendored).unwrap();
+        std::fs::write(vendored.join("SKILL.md"), "# vendored\n").unwrap();
+        place(&env, &inst, Some("# p"), &caps).unwrap();
+        assert!(ci.join("skills").join("vendored").join("SKILL.md").exists());
+
+        // Mark it, launch again: the copy already in the mirror is removed.
+        std::fs::write(vendored.join(NO_MIRROR), "").unwrap();
+        place(&env, &inst, Some("# p"), &caps).unwrap();
+        assert!(
+            !ci.join("skills").join("vendored").exists(),
+            "marking a skill did not take it back out of the mirror"
+        );
+        // The env still has it — the marker is about publishing, not keeping.
+        assert!(vendored.join("SKILL.md").exists(), "the marker deleted the live skill");
+        // And the seeded skills are untouched by any of this.
+        assert!(ci.join("skills").join("sync").join("SKILL.md").exists());
+    }
+
+    /// Commands are a union, like memory — NOT a pruning copy like skills. aello
+    /// regenerates a skill from the role, so a mirror-only skill is stale output;
+    /// it generates no command, so a mirror-only command is the other machine's
+    /// only copy and pruning it deletes work that exists nowhere else. This is
+    /// the bug the memory prune already caused once.
+    #[test]
+    fn a_mirror_only_command_survives_a_placement_and_restores() {
+        let proj = tempfile::tempdir().unwrap();
+        let env = env_dir(proj.path(), "demo");
+        let inst = Instance { name: "demo".into(), model: "haiku".into(), mirror_root: None };
+        let caps = Capabilities { github: true, ..Default::default() };
+        let ci = proj.path().join("claude-internal").join("demo");
+
+        // This machine has one command; the mirror also holds one it pulled from
+        // the other machine. A launch must not delete the one it does not have.
+        std::fs::create_dir_all(env.join("commands")).unwrap();
+        std::fs::write(env.join("commands").join("mine.md"), "# mine\n").unwrap();
+        std::fs::create_dir_all(ci.join("commands")).unwrap();
+        std::fs::write(ci.join("commands").join("theirs.md"), "# theirs\n").unwrap();
+
+        place(&env, &inst, Some("# p"), &caps).unwrap();
+        assert!(
+            ci.join("commands").join("theirs.md").exists(),
+            "a launch deleted the other machine's command from the mirror"
+        );
+        assert!(ci.join("commands").join("mine.md").exists());
+        // Still not adopted — `place` must not contradict a live env dir.
+        assert!(!env.join("commands").join("theirs.md").exists());
+
+        // `aello restore` is what adopts it, and it keeps the local one.
+        let r = restore(proj.path(), &env, "demo", None).unwrap();
+        assert!(env.join("commands").join("theirs.md").exists(), "restore did not adopt it");
+        assert!(env.join("commands").join("mine.md").exists(), "restore dropped a local command");
+        assert_eq!(r.commands, 2, "the report counts what the mirror holds");
     }
 
     #[test]

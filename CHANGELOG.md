@@ -2,6 +2,36 @@
 
 ## [Unreleased]
 
+### Fixed
+- **Custom slash commands now cross machines.** `<env>/commands/*.md` — your own
+  `/whatever` commands — were the one part of an env the `claude-internal/`
+  mirror never carried: `aello run` mirrored skills, memory, persona and the
+  resume note, and `aello restore` read the same four back. A command written on
+  one machine simply did not exist on the other, and nothing said so. They are
+  mirrored and restored now, in both directions.
+
+  They are a **union**, like memory, and not a pruning copy like skills. aello
+  generates a skill from the role, so a mirror-only skill is stale output worth
+  deleting; it generates no command at all, so a mirror-only command is the other
+  machine's hand-written work and the mirror is its only copy. A launch that
+  finds one names it and points at `aello restore`, the same way it already did
+  for memory notes.
+
+  Found while planning a two-machine test on a real env: it had three commands
+  and its mirror had one, put there by hand months after the fact.
+
+### Added
+- **`.aello-nomirror`** — an empty marker beside a skill's `SKILL.md` keeps that
+  skill out of the tracked `claude-internal/` mirror. For a skill vendored from
+  someone else's repo: it has its own upstream, and mirroring it commits that
+  project into this repo's history. Marking one that is already mirrored removes
+  it on the next run, so the marker is also how you take it back out.
+
+  Separate from `.aello-keep`, which stops *regeneration* — a skill can want
+  either, both or neither, and one marker meaning both makes the other unsayable.
+  Written because a repo had recorded exactly this decision in a commit message
+  and the next launch silently reverted it.
+
 ### Added
 - **Four more ways to split the same spend**, on both the TUI stats page and
   `aello tokens --stats`: **by git branch**, **by reasoning effort**, a

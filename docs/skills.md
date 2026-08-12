@@ -85,5 +85,14 @@ Nothing stops you adding skills to an env by hand: a `SKILL.md` under `<env>/ski
 
 - **Name it something aello doesn't generate**, or pin it with `.aello-keep`. The four names above are rewritten on every run.
 - **Set `disable-model-invocation: true`** if it should only run when you type it, and say so in the body as well — the frontmatter flag alone has already proven insufficient at least once.
+- **Vendored from somebody else's repo?** Drop an empty `.aello-nomirror` beside its `SKILL.md` and it stays out of the tracked `claude-internal/` mirror — otherwise a role with git duties commits that project into this repo's history on the next launch. Marking one that is *already* mirrored removes it on the next run, so the marker is also how you take it back out. It is a separate marker from `.aello-keep` on purpose: that one is about regeneration, this one is about publication, and a skill can want either, both, or neither.
+
+  The trade is that the skill then does **not** cross to another machine — the mirror is what carries an env across a clone. Vendored code usually has its own install step, which is the right place for it; a skill you wrote yourself should be mirrored.
+
+## Custom slash commands
+
+`<env>/commands/<name>.md` gives you `/<name>` in that env, the same way skills give you skill names. aello generates none of them, so nothing here is ever rewritten or removed.
+
+They are mirrored into `claude-internal/<name>/commands/` and restored from it, in both directions — and because there is no generated version to fall back on, the mirror is treated like memory rather than like skills: it only ever gains files. A command in the mirror that this env doesn't have is the other machine's, and a launch names it and points at `aello restore` rather than deleting it.
 
 A skill you want in *every* env is a different thing: that's a change to `templates.rs`, not a file you copy 39 times. See [development.md](development.md).
