@@ -124,7 +124,7 @@ Records written before the transcript was *copied* stored only its path, and Cla
 
 Two things changed: SessionEnd copies the transcript next to the record (`<ts>_<session>_transcript.jsonl`, named in `transcript_archived`), verifies the copy with sha256 (`transcript_verified`), and — when the session also wrote a `/handoff` note — **deletes Claude Code's original** (`original_deleted`). Retention is now **10 days**, migrated into existing envs; a value you set yourself is left alone. Old records whose transcript is already gone cannot be recovered — but check first whether the original is still in its env dir, because 226 of 269 dangling records here turned out to be recoverable that way.
 
-If `original_deleted` reads `failed: PermissionError` on every record, the delete branch never works on your machine — Claude Code is holding the transcript open — and the 10-day timer is doing all the cleanup. That is a supported outcome, not a fault; the archive is written and verified either way.
+If `original_deleted` reads `failed: PermissionError` on every record, the delete branch never works on your machine — something is holding the transcript open — and the 10-day timer is doing all the cleanup. That is a supported outcome, not a fault; the archive is written and verified either way. It is not the expected one: measured on Windows 11 on 2026-08-12, the first real `/exit` after this shipped recorded `transcript_verified: sha256` and `original_deleted: session-end`, so Claude Code does **not** hold its own transcript open at SessionEnd. Suspect an indexer or a sync client instead.
 
 ## A transcript wasn't archived (`transcript_archived` is empty)
 

@@ -140,7 +140,7 @@ aello login [--agent claude|cline]             # store a shared login (asks whic
 aello github-setup [--name <repo>] [--public] [--yes]   # create + push the repo via gh
 aello docs [name]                              # print bundled reference docs (no name lists them)
 aello check [path] [--all] [--root <dir>] [--json]      # verify a repo's integrations (exit 1 on failure)
-aello tokens [name] [--sessions] [--json]      # token usage + estimated cost per env
+aello tokens [name] [--sessions] [--stats] [--json]  # token usage + estimated cost per env
 aello statusline                               # the in-session readout (run by Claude Code, not by hand)
 aello voice <mute|unmute|stop|status> [--project]       # off switch for the voice
 aello completions <bash|zsh|fish|powershell|elvish>     # print a shell completion script
@@ -254,6 +254,10 @@ aello tokens --json          # machine-readable
 ```
 
 `--stats` (and `S` on the TUI tokens tab, which charts the same numbers) ranks projects by **tokens ÷ sessions** — how expensive it is to *engage* with a project rather than how much it has been used — and puts each bucket's token share next to its cost share, which disagree violently: cache read is 98% of the tokens and 69% of the money. It also names what it cannot count: archived sessions whose transcript was deleted before aello started copying it contribute zero, and unarchived sessions are only visible from the project directory.
+
+The same page splits that spend **by git branch, by reasoning effort, and per model over time**, and reports what the sessions actually *did*: turns and how long they really took (Claude Code times its own turns, so this is wall clock rather than a guess from timestamps), the tool mix, which skills were genuinely run, the files edited most, interrupted turns, and queued prompts.
+
+It also prices **context nobody typed** — everything the harness itself injects, from task reminders to hook output. That one is worth reading with its `x` column: an injection is written into the context once and then re-read by every later request in the same session, so a few hundred tokens per turn is really five to nine times that. Here it totals 4.2% of all spend, and 84% of it is re-reads rather than the injections themselves.
 
 Nothing needs enabling: this reads the transcripts contextdb already archives, so it works retroactively over history recorded before the feature existed. Live sessions in the current directory are counted too; sessions running in other projects appear once they end.
 
