@@ -279,6 +279,19 @@ fn main() {
         }
     }
 
+    // `println!` panics when stdout goes away, so `aello tokens --stats | head`
+    // ended a normal way of reading a long report with a panic dump. Nothing is
+    // left to flush by then, so exit quietly — and only for that panic; every
+    // other one keeps the default hook and its backtrace.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let msg = info.payload().downcast_ref::<String>().map(String::as_str);
+        if msg.is_some_and(is_broken_pipe) {
+            std::process::exit(0);
+        }
+        default_hook(info);
+    }));
+
     let cli = Cli::parse();
     let result = match cli.command {
         None => tui::run(),
@@ -314,6 +327,15 @@ fn main() {
         eprintln!("error: {e:#}");
         std::process::exit(1);
     }
+}
+
+/// Is this panic message the one `println!` raises when its pipe is gone?
+///
+/// The wording differs per OS ("Broken pipe" vs "The pipe is being closed"), so
+/// match the prefix the std macros always emit rather than the errno text.
+fn is_broken_pipe(msg: &str) -> bool {
+    msg.starts_with("failed printing to stdout")
+        || msg.starts_with("failed printing to stderr")
 }
 
 /// Blueprint names map to env-dir names, so keep them filesystem-safe.
@@ -1582,6 +1604,19 @@ fn cmd_list(json: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_broken_pipe_panic_is_swallowed() {
+        // The two real messages, one per OS — the errno text differs, the
+        // prefix does not.
+        assert!(is_broken_pipe("failed printing to stdout: Broken pipe (os error 32)"));
+        assert!(is_broken_pipe(
+            "failed printing to stdout: The pipe is being closed. (os error 232)"
+        ));
+        // Anything else must still reach the default hook and its backtrace.
+        assert!(!is_broken_pipe("index out of bounds: the len is 3 but the index is 7"));
+        assert!(!is_broken_pipe("called `Option::unwrap()` on a `None` value"));
+    }
 
     #[test]
     fn valid_names_accepted() {

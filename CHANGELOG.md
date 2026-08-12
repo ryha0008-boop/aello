@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed
+- **A long report piped into `head` no longer ends in a panic dump.**
+  `println!` panics when its pipe is gone, so `aello tokens --stats | head` could
+  die with `failed printing to stdout: The pipe is being closed` — a normal way
+  to read a long report, reported as a crash. That one panic now exits quietly;
+  every other panic keeps the default hook and its backtrace. It is a race (the
+  writer has to still be writing when the reader exits), so it reproduced about
+  one run in three before the fix and zero times in twelve after.
+
 ### Changed
 - **contextdb is now the only place a transcript lives.** SessionEnd copies the
   transcript, **verifies the copy byte-for-byte with sha256**, and then deletes

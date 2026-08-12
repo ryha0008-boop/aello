@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>aello — architecture</title>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --paper:   #0f1a1e;
+      --ink:     #ffffff;
+      --muted:   #888888;
+      --accent:  #97fce4;
+      --rule:    #242424;
+      --font-sans: 'Geist', Inter, system-ui, sans-serif;
+      --font-mono: 'Geist Mono', ui-monospace, monospace;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background: linear-gradient(180deg, #091b1b 0%, #03100f 100%);
+      background-attachment: fixed;
+      color: var(--ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+
+    .frame { max-width: 1200px; width: 100%; }
+
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 0.5rem;
+    }
+
+    h1 {
+      font-family: var(--font-sans);
+      font-size: clamp(1.375rem, 2.2vw + 0.75rem, 2rem);
+      font-weight: 500;
+      letter-spacing: -0.01em;
+      line-height: 1.2;
+      color: var(--ink);
+      margin-bottom: 1.5rem;
+    }
+
+    svg { width: 100%; min-width: 900px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Architecture · Diagram Design</p>
+    <h1>aello — how a blueprint becomes an isolated environment</h1>
+
+    <svg viewBox="0 0 1000 600" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#888888"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#97fce4"/></marker>
+        <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#0095a0"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#0f1a1e"/>
+
+      <!-- ============ zones ============ -->
+      <rect x="40" y="104" width="176" height="288" rx="8" fill="rgba(255,255,255,0.02)" stroke="#242424" stroke-width="1"/>
+      <rect x="56" y="108" width="96" height="12" fill="#0f1a1e"/>
+      <text x="104" y="116" fill="#888888" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">COMMAND SURFACE</text>
+
+      <rect x="256" y="104" width="200" height="376" rx="8" fill="rgba(255,255,255,0.02)" stroke="#242424" stroke-width="1"/>
+      <rect x="272" y="108" width="44" height="12" fill="#0f1a1e"/>
+      <text x="294" y="116" fill="#888888" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">AELLO</text>
+
+      <rect x="496" y="216" width="464" height="264" rx="8" fill="rgba(255,255,255,0.02)" stroke="#242424" stroke-width="1"/>
+      <rect x="512" y="220" width="108" height="12" fill="#0f1a1e"/>
+      <text x="566" y="228" fill="#888888" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">PROJECT DIRECTORY</text>
+
+      <!-- ============ arrows (drawn before boxes) ============ -->
+
+      <!-- CLI -> place -->
+      <path d="M 192,168 H 228 Q 236,168 236,176 V 264 Q 236,272 244,272 H 280" fill="none" stroke="#888888" stroke-width="1" marker-end="url(#arrow)"/>
+      <rect x="192" y="148" width="32" height="12" fill="#0f1a1e"/>
+      <text x="208" y="156" fill="#888888" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">RUN</text>
+
+      <!-- TUI -> place -->
+      <path d="M 192,328 H 244 Q 252,328 252,320 V 312 Q 252,304 260,304 H 280" fill="none" stroke="#888888" stroke-width="1" marker-end="url(#arrow)"/>
+
+      <!-- blueprint store -> place -->
+      <line x1="356" y1="200" x2="356" y2="248" stroke="#888888" stroke-width="1" marker-end="url(#arrow)"/>
+      <rect x="364" y="216" width="56" height="12" fill="#0f1a1e"/>
+      <text x="392" y="224" fill="#888888" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">BLUEPRINT</text>
+
+      <!-- templates -> place -->
+      <line x1="356" y1="400" x2="356" y2="328" stroke="#888888" stroke-width="1" marker-end="url(#arrow)"/>
+      <rect x="364" y="356" width="52" height="12" fill="#0f1a1e"/>
+      <text x="390" y="364" fill="#888888" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">EMBEDDED</text>
+
+      <!-- place -> env dir (primary) -->
+      <line x1="432" y1="288" x2="528" y2="288" stroke="#97fce4" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <rect x="460" y="268" width="40" height="12" fill="#0f1a1e"/>
+      <text x="480" y="276" fill="#97fce4" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">WRITES</text>
+
+      <!-- env dir -> agent -->
+      <line x1="704" y1="288" x2="784" y2="288" stroke="#888888" stroke-width="1" marker-end="url(#arrow)"/>
+      <rect x="716" y="268" width="56" height="12" fill="#0f1a1e"/>
+      <text x="744" y="276" fill="#888888" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">LAUNCHES</text>
+
+      <!-- env dir -> token accounting -->
+      <line x1="616" y1="328" x2="616" y2="400" stroke="#888888" stroke-width="1" marker-end="url(#arrow)"/>
+      <rect x="624" y="356" width="72" height="12" fill="#0f1a1e"/>
+      <text x="660" y="364" fill="#888888" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">TRANSCRIPTS</text>
+
+      <!-- agent -> tracked mirror -->
+      <line x1="864" y1="328" x2="864" y2="400" stroke="#888888" stroke-width="1" marker-end="url(#arrow)"/>
+      <rect x="872" y="356" width="40" height="12" fill="#0f1a1e"/>
+      <text x="892" y="364" fill="#888888" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">/SYNC</text>
+
+      <!-- ============ nodes ============ -->
+
+      <!-- aello CLI -->
+      <rect x="64" y="136" width="128" height="64" fill="#0f1a1e"/>
+      <rect x="64" y="136" width="128" height="64" fill="rgba(255,255,255,0.04)" stroke="#888888" stroke-width="1"/>
+      <rect x="72" y="144" width="28" height="12" fill="none" stroke="#404040" stroke-width="1"/>
+      <text x="86" y="152" fill="#888888" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">BIN</text>
+      <text x="128" y="176" fill="#ffffff" font-size="12" font-weight="500" font-family="'Geist', sans-serif" text-anchor="middle">aello CLI</text>
+      <text x="128" y="192" fill="#888888" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">clap · src/main.rs</text>
+
+      <!-- TUI -->
+      <rect x="64" y="296" width="128" height="64" fill="#0f1a1e"/>
+      <rect x="64" y="296" width="128" height="64" fill="rgba(255,255,255,0.04)" stroke="#888888" stroke-width="1"/>
+      <rect x="72" y="304" width="28" height="12" fill="none" stroke="#404040" stroke-width="1"/>
+      <text x="86" y="312" fill="#888888" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">TUI</text>
+      <text x="128" y="336" fill="#ffffff" font-size="12" font-weight="500" font-family="'Geist', sans-serif" text-anchor="middle">Dashboard</text>
+      <text x="128" y="352" fill="#888888" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">ratatui</text>
+
+      <!-- blueprint store -->
+      <rect x="280" y="136" width="152" height="64" fill="#0f1a1e"/>
+      <rect x="280" y="136" width="152" height="64" fill="#0b1114" stroke="#404040" stroke-width="1"/>
+      <rect x="288" y="144" width="28" height="12" fill="none" stroke="#404040" stroke-width="1"/>
+      <text x="302" y="152" fill="#888888" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">CFG</text>
+      <text x="356" y="176" fill="#ffffff" font-size="12" font-weight="500" font-family="'Geist', sans-serif" text-anchor="middle">Blueprint store</text>
+      <text x="356" y="192" fill="#888888" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">config.toml</text>
+
+      <!-- placement engine (FOCAL) -->
+      <rect x="280" y="248" width="152" height="80" fill="#0f1a1e"/>
+      <rect x="280" y="248" width="152" height="80" fill="rgba(151,252,228,0.10)" stroke="#97fce4" stroke-width="1.2"/>
+      <rect x="288" y="256" width="32" height="12" fill="none" stroke="rgba(151,252,228,0.40)" stroke-width="1"/>
+      <text x="304" y="264" fill="#97fce4" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">CORE</text>
+      <text x="356" y="292" fill="#ffffff" font-size="12" font-weight="500" font-family="'Geist', sans-serif" text-anchor="middle">Placement engine</text>
+      <text x="356" y="308" fill="#888888" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">project::place</text>
+
+      <!-- skill templates -->
+      <rect x="280" y="400" width="152" height="64" fill="#0f1a1e"/>
+      <rect x="280" y="400" width="152" height="64" fill="#0b1114" stroke="#404040" stroke-width="1"/>
+      <rect x="288" y="408" width="28" height="12" fill="none" stroke="#404040" stroke-width="1"/>
+      <text x="302" y="416" fill="#888888" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">EMB</text>
+      <text x="356" y="440" fill="#ffffff" font-size="12" font-weight="500" font-family="'Geist', sans-serif" text-anchor="middle">Skill templates</text>
+      <text x="356" y="456" fill="#888888" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">include_dir!</text>
+
+      <!-- isolated env (FOCAL) -->
+      <rect x="528" y="248" width="176" height="80" fill="#0f1a1e"/>
+      <rect x="528" y="248" width="176" height="80" fill="rgba(151,252,228,0.10)" stroke="#97fce4" stroke-width="1.2"/>
+      <rect x="536" y="256" width="28" height="12" fill="none" stroke="rgba(151,252,228,0.40)" stroke-width="1"/>
+      <text x="550" y="264" fill="#97fce4" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">DIR</text>
+      <text x="616" y="292" fill="#ffffff" font-size="12" font-weight="500" font-family="'Geist', sans-serif" text-anchor="middle">Isolated env</text>
+      <text x="616" y="308" fill="#888888" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">.claude-env-&lt;name&gt;/</text>
+
+      <!-- agent process -->
+      <rect x="784" y="248" width="160" height="80" fill="#0f1a1e"/>
+      <rect x="784" y="248" width="160" height="80" fill="#061312" stroke="#374151" stroke-width="1"/>
+      <rect x="792" y="256" width="32" height="12" fill="none" stroke="#374151" stroke-width="1"/>
+      <text x="808" y="264" fill="#888888" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">PROC</text>
+      <text x="864" y="292" fill="#ffffff" font-size="12" font-weight="500" font-family="'Geist', sans-serif" text-anchor="middle">claude / cline</text>
+      <text x="864" y="308" fill="#888888" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">CLAUDE_CONFIG_DIR</text>
+
+      <!-- token accounting -->
+      <rect x="528" y="400" width="176" height="64" fill="#0f1a1e"/>
+      <rect x="528" y="400" width="176" height="64" fill="rgba(255,255,255,0.04)" stroke="#888888" stroke-width="1"/>
+      <rect x="536" y="408" width="28" height="12" fill="none" stroke="#404040" stroke-width="1"/>
+      <text x="550" y="416" fill="#888888" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">RPT</text>
+      <text x="616" y="440" fill="#ffffff" font-size="12" font-weight="500" font-family="'Geist', sans-serif" text-anchor="middle">Token accounting</text>
+      <text x="616" y="456" fill="#888888" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">tokens · statusline</text>
+
+      <!-- tracked mirror -->
+      <rect x="784" y="400" width="160" height="64" fill="#0f1a1e"/>
+      <rect x="784" y="400" width="160" height="64" fill="#0b1114" stroke="#404040" stroke-width="1"/>
+      <rect x="792" y="408" width="28" height="12" fill="none" stroke="#404040" stroke-width="1"/>
+      <text x="806" y="416" fill="#888888" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">GIT</text>
+      <text x="864" y="440" fill="#ffffff" font-size="12" font-weight="500" font-family="'Geist', sans-serif" text-anchor="middle">Tracked mirror</text>
+      <text x="864" y="456" fill="#888888" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">claude-internal/</text>
+
+      <!-- ============ legend ============ -->
+      <line x1="40" y1="528" x2="960" y2="528" stroke="#242424" stroke-width="1"/>
+      <text x="40" y="548" fill="#888888" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">LEGEND</text>
+
+      <rect x="152" y="540" width="12" height="12" fill="rgba(151,252,228,0.10)" stroke="#97fce4" stroke-width="1"/>
+      <text x="172" y="548" fill="#888888" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">FOCAL</text>
+
+      <rect x="312" y="540" width="12" height="12" fill="rgba(255,255,255,0.04)" stroke="#888888" stroke-width="1"/>
+      <text x="332" y="548" fill="#888888" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">COMMAND</text>
+
+      <rect x="472" y="540" width="12" height="12" fill="#0b1114" stroke="#404040" stroke-width="1"/>
+      <text x="492" y="548" fill="#888888" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">STATE ON DISK</text>
+
+      <rect x="632" y="540" width="12" height="12" fill="#061312" stroke="#374151" stroke-width="1"/>
+      <text x="652" y="548" fill="#888888" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">SPAWNED PROCESS</text>
+    </svg>
+  </div>
+</body>
+</html>
