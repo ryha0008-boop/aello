@@ -1413,6 +1413,29 @@ fn print_stats(report: &tokens::Report) {
         );
     }
 
+    if s.branches.len() > 1 {
+        print_slices("BRANCHES", &s.branches, total.cost);
+    }
+    if s.efforts.len() > 1 {
+        print_slices("REASONING EFFORT", &s.efforts, total.cost);
+    }
+
+    if s.model_daily.len() > 1 {
+        println!("\nMODELS OVER TIME  (last {} days, UTC)", s.daily.len());
+        for (model, series) in &s.model_daily {
+            println!("  {:<26}{}", truncate_name(model, 25), tokens::spark(series));
+        }
+        println!("\n  {:<26}FIRST → LAST SEEN  (all history, not just the window)", "");
+        for (model, first, last) in &s.model_span {
+            println!(
+                "  {:<26}{} → {}",
+                truncate_name(model, 25),
+                tokens::fmt_time(*first),
+                tokens::fmt_time(*last),
+            );
+        }
+    }
+
     print_activity(&report.activity, total.cost);
 
     if let Some(d) = s.busiest_day() {
@@ -1427,6 +1450,34 @@ fn print_stats(report: &tokens::Report) {
         println!("Busiest hour {h:02}:00 UTC");
     }
     println!("\nCosts are list API rates applied to subscription usage — a what-if, not a bill.");
+}
+
+/// A named split of the total — by branch, by reasoning effort, by anything.
+/// The share is of cost, not tokens: they disagree by up to 20x per bucket.
+fn print_slices(title: &str, slices: &[tokens::Slice], total_cost: f64) {
+    println!("\n{title}");
+    println!("  {:<26}{:>6}{:>8}{:>10}{:>10}{:>8}", "", "SESS", "MSGS", "TOKENS", "COST", "%");
+    for s in slices {
+        println!(
+            "  {:<26}{:>6}{:>8}{:>10}{:>10}{:>7.1}%",
+            truncate_name(&s.name, 25),
+            s.sessions,
+            s.messages,
+            tokens::fmt_tokens(s.priced.usage.total()),
+            tokens::fmt_cost(s.priced.cost),
+            if total_cost > 0.0 { s.priced.cost / total_cost * 100.0 } else { 0.0 },
+        );
+    }
+}
+
+/// Clip a name so a long branch or model id can't shove a column off the line.
+fn truncate_name(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(n.saturating_sub(1)).collect();
+    out.push('…');
+    out
 }
 
 /// The other half of the same scan: what the sessions *did*, not what they
@@ -1486,6 +1537,30 @@ fn print_activity(a: &tokens::Activity, total_cost: f64) {
         for (name, n) in tokens::Activity::top(&a.shell, 10) {
             println!("  {:<32}{:>6}", name, n);
         }
+    }
+
+    let injected = a.injected_total();
+    if injected.count > 0 {
+        println!(
+            "\nCONTEXT NOBODY TYPED  ({} injections, ~{} tokens estimated)",
+            injected.count,
+            tokens::fmt_tokens(injected.est_tokens()),
+        );
+        for (kind, i) in a.injected_ranking().into_iter().take(8) {
+            println!(
+                "  {:<26}{:>6}{:>10}{:>12}",
+                truncate_name(&kind, 25),
+                i.count,
+                tokens::fmt_tokens(i.est_tokens()),
+                format!("{} avg", tokens::fmt_tokens(i.est_tokens() / i.count.max(1))),
+            );
+        }
+        // Stated, not implied: the transcript records what was injected and
+        // never what it tokenised to, so this is characters ÷ 4 and nothing
+        // more. Do not add it to a total that came from a `usage` field.
+        println!(
+            "  ESTIMATE — characters ÷ 4. The transcript never records what an injection tokenised to."
+        );
     }
 
     let peak = a.turn_weekday.iter().copied().max().unwrap_or(0).max(1);

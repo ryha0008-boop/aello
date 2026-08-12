@@ -120,6 +120,14 @@ pub struct Record {
     pub blueprint: String,
     pub project: String,
     pub session: String,
+    /// The git branch checked out when the message was sent. Absent on records
+    /// older than the field, and `HEAD` on a detached checkout — both are kept
+    /// as they are rather than folded into `main`.
+    pub branch: String,
+    /// Reasoning effort, when the record carries it. `None` is its own bucket:
+    /// the field only appears on newer records, and folding an absent value
+    /// into the commonest one would invent a number.
+    pub effort: Option<String>,
     pub usage: Usage,
 }
 
@@ -156,6 +164,10 @@ pub struct Activity {
     pub files: BTreeMap<String, u64>,
     /// First word of a shell command, lowercased.
     pub shell: BTreeMap<String, u64>,
+    /// What the *harness* pushed into the conversation, by kind: task
+    /// reminders, hook output, skill listings, deferred-tool deltas. This is
+    /// context nobody typed, and it is the only way to see what it costs.
+    pub attachments: BTreeMap<String, Injected>,
     /// `[Request interrupted by user]` markers — the times a turn was stopped
     /// mid-flight, which is the closest thing to a "wrong direction" signal.
     pub interrupts: u64,
@@ -165,7 +177,46 @@ pub struct Activity {
     pub unqueued: u64,
 }
 
+/// One kind of harness-injected context: how often, and how big.
+///
+/// `chars` is the serialized payload, and the token figure derived from it is an
+/// **estimate** — a quarter of a character count, the usual rule of thumb. The
+/// transcript records what was injected but never how many tokens it became, so
+/// this is the honest ceiling on what can be said: it is not read off a `usage`
+/// field and must not be printed as though it were.
+#[derive(Default, Clone, Copy, Debug)]
+pub struct Injected {
+    pub count: u64,
+    pub chars: u64,
+}
+
+impl Injected {
+    /// Rough tokens: characters ÷ 4. An estimate, labelled as one everywhere it
+    /// is shown.
+    pub fn est_tokens(&self) -> u64 {
+        self.chars / 4
+    }
+}
+
 impl Activity {
+    /// Harness-injected context, biggest payload first — the ranking that
+    /// matters, since a rare 14 kB attachment costs more than 5,000 tiny ones.
+    pub fn injected_ranking(&self) -> Vec<(String, Injected)> {
+        let mut v: Vec<(String, Injected)> =
+            self.attachments.iter().map(|(k, i)| (k.clone(), *i)).collect();
+        v.sort_by(|a, b| b.1.chars.cmp(&a.1.chars).then_with(|| a.0.cmp(&b.0)));
+        v
+    }
+
+    pub fn injected_total(&self) -> Injected {
+        let mut t = Injected::default();
+        for i in self.attachments.values() {
+            t.count += i.count;
+            t.chars += i.chars;
+        }
+        t
+    }
+
     pub fn turns(&self) -> u64 {
         self.turn_ms.len() as u64
     }
@@ -536,7 +587,8 @@ fn read_transcript(
         let has_event = line.contains("turn_duration")
             || line.contains("attributionSkill")
             || line.contains("[Request interrupted by user")
-            || line.contains("queue-operation");
+            || line.contains("queue-operation")
+            || line.contains("\"attachment\"");
         if !(has_usage || has_tool || has_event) {
             continue;
         }
@@ -571,6 +623,8 @@ fn read_transcript(
             blueprint: src.blueprint.clone(),
             project: src.project.clone(),
             session,
+            branch: v["gitBranch"].as_str().unwrap_or_default().to_string(),
+            effort: v["effort"].as_str().map(str::to_string),
             usage: parse_usage(usage),
         });
     }
@@ -625,6 +679,18 @@ fn read_activity(
                     "remove" => act.unqueued += 1,
                     _ => {}
                 }
+            }
+            return Some(());
+        }
+        // An attachment *does* carry a uuid — checked, after the queue record
+        // above turned out not to.
+        Some("attachment") => {
+            let a = v.get("attachment")?;
+            let kind = a["type"].as_str().unwrap_or("unknown");
+            if uuid.is_some_and(&mut fresh) {
+                let e = act.attachments.entry(kind.to_string()).or_default();
+                e.count += 1;
+                e.chars += serde_json::to_string(a).map(|s| s.len() as u64).unwrap_or(0);
             }
             return Some(());
         }
@@ -886,6 +952,28 @@ pub struct Stats {
     pub bucket_cost: BucketCost,
     /// Span of recorded history, in days.
     pub span_days: i64,
+    /// Spend per git branch, costliest first. `(unrecorded)` collects records
+    /// older than the field rather than hiding them; `HEAD` is a detached
+    /// checkout and is left as itself.
+    pub branches: Vec<Slice>,
+    /// Spend per reasoning effort, costliest first. `(unrecorded)` is its own
+    /// row — the field appears only on newer records and folding it into `high`
+    /// would invent the number.
+    pub efforts: Vec<Slice>,
+    /// Per-model daily totals over the charted window, so a migration between
+    /// models is visible as it happened rather than as one blended average.
+    pub model_daily: Vec<(String, Vec<u64>)>,
+    /// First and last day each model was seen, over all of history.
+    pub model_span: Vec<(String, i64, i64)>,
+}
+
+/// A named slice of the total: one branch, one effort level, one anything.
+#[derive(Clone, Debug)]
+pub struct Slice {
+    pub name: String,
+    pub sessions: u64,
+    pub messages: u64,
+    pub priced: Priced,
 }
 
 impl Stats {
@@ -980,7 +1068,102 @@ pub fn stats(report: &Report, window_days: i64) -> Stats {
         b.per_session().cmp(&a.per_session()).then_with(|| b.project.cmp(&a.project))
     });
 
-    Stats { projects, daily, hourly, sessions: all_sessions.len() as u64, bucket_cost, span_days }
+    let branches = slice_by(&report.records, |r| {
+        if r.branch.is_empty() { UNRECORDED } else { &r.branch }
+    });
+    let efforts = slice_by(&report.records, |r| r.effort.as_deref().unwrap_or(UNRECORDED));
+    let (model_daily, model_span) = model_timeline(&report.records, &daily);
+
+    Stats {
+        projects,
+        daily,
+        hourly,
+        sessions: all_sessions.len() as u64,
+        bucket_cost,
+        span_days,
+        branches,
+        efforts,
+        model_daily,
+        model_span,
+    }
+}
+
+/// The bucket an absent field goes in. Never folded into the commonest value:
+/// `effort` and `gitBranch` only exist on newer records, and a silent merge
+/// would report a number nothing measured.
+pub const UNRECORDED: &str = "(unrecorded)";
+
+/// Roll records into named slices by whatever `key` returns, costliest first.
+fn slice_by(records: &[Record], key: impl Fn(&Record) -> &str) -> Vec<Slice> {
+    let mut map: BTreeMap<String, Slice> = BTreeMap::new();
+    let mut seen: HashSet<(String, String)> = HashSet::new();
+    for r in records {
+        let k = key(r).to_string();
+        let s = map.entry(k.clone()).or_insert_with(|| Slice {
+            name: k.clone(),
+            sessions: 0,
+            messages: 0,
+            priced: Priced::default(),
+        });
+        s.messages += 1;
+        s.priced.push(&r.model, &r.usage);
+        if seen.insert((k, r.session.clone())) {
+            s.sessions += 1;
+        }
+    }
+    let mut out: Vec<Slice> = map.into_values().collect();
+    out.sort_by(|a, b| {
+        b.priced.cost.total_cmp(&a.priced.cost).then_with(|| a.name.cmp(&b.name))
+    });
+    out
+}
+
+/// Per-model tokens per charted day, plus each model's first and last day over
+/// all of history.
+///
+/// Only the models that actually appear in the charted window get a series —
+/// otherwise a migration chart carries a row of zeroes for every model ever
+/// used, which is the same visual weight as a model still in service.
+fn model_timeline(
+    records: &[Record],
+    daily: &[DayRoll],
+) -> (Vec<(String, Vec<u64>)>, Vec<(String, i64, i64)>) {
+    let mut span: BTreeMap<String, (i64, i64)> = BTreeMap::new();
+    for r in records {
+        let day = r.ts.div_euclid(86400) * 86400;
+        let e = span.entry(r.model.clone()).or_insert((day, day));
+        e.0 = e.0.min(day);
+        e.1 = e.1.max(day);
+    }
+    let mut model_span: Vec<(String, i64, i64)> =
+        span.iter().map(|(m, (a, b))| (m.clone(), *a, *b)).collect();
+    model_span.sort_by_key(|(_, a, _)| *a);
+
+    let Some(first_day) = daily.first().map(|d| d.day) else {
+        return (Vec::new(), model_span);
+    };
+    let mut series: BTreeMap<String, Vec<u64>> = BTreeMap::new();
+    for r in records {
+        let day = r.ts.div_euclid(86400) * 86400;
+        if day < first_day {
+            continue;
+        }
+        let i = ((day - first_day) / 86400) as usize;
+        if i >= daily.len() {
+            continue;
+        }
+        series
+            .entry(r.model.clone())
+            .or_insert_with(|| vec![0; daily.len()])[i] += r.usage.total();
+    }
+    // Drop a series that is all zeroes in the window. `<synthetic>` records
+    // carry a usage object with nothing in it, and an all-blank sparkline reads
+    // as a broken chart rather than as "no tokens" — the span table below still
+    // lists the model, so nothing is hidden.
+    let mut model_daily: Vec<(String, Vec<u64>)> =
+        series.into_iter().filter(|(_, v)| v.iter().sum::<u64>() > 0).collect();
+    model_daily.sort_by_key(|(_, v)| std::cmp::Reverse(v.iter().sum::<u64>()));
+    (model_daily, model_span)
 }
 
 // ── Formatting helpers (shared by the CLI table and the TUI tab) ────────────
@@ -1047,6 +1230,27 @@ pub fn fmt_cost(c: f64) -> String {
     }
 }
 
+/// Eight levels of a vertical bar — one character per column, so 30 days or 24
+/// hours fit a line each without a widget or a second screen.
+const SPARK: [char; 9] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+/// A sparkline over `values`, one character per value.
+pub fn spark(values: &[u64]) -> String {
+    let max = values.iter().copied().max().unwrap_or(0);
+    if max == 0 {
+        return " ".repeat(values.len());
+    }
+    values
+        .iter()
+        .map(|&v| {
+            // A non-zero day must never render as blank — that reads as "no
+            // work", which is a different fact.
+            let idx = if v == 0 { 0 } else { (v as f64 / max as f64 * 8.0).ceil().max(1.0) as usize };
+            SPARK[idx.min(8)]
+        })
+        .collect()
+}
+
 /// A duration where the seconds matter. `fmt_duration` has minute resolution,
 /// which renders a typical 90-second turn as "1m" and a 20-second one as "0m".
 pub fn fmt_secs(secs: f64) -> String {
@@ -1087,6 +1291,8 @@ mod tests {
             blueprint: bp.into(),
             project: "proj".into(),
             session: sess.into(),
+            branch: "main".into(),
+            effort: Some("high".into()),
             usage: u,
         }
     }
@@ -1228,6 +1434,83 @@ mod tests {
         assert_eq!(a.turn_hour[13], 1);
     }
 
+    /// `effort` and `gitBranch` only exist on newer records. Folding an absent
+    /// value into the commonest one reports a number nothing measured, so it
+    /// gets its own bucket and the page says so.
+    #[test]
+    fn an_absent_field_gets_its_own_bucket_rather_than_the_commonest_one() {
+        let u = Usage { output: 100, ..Default::default() };
+        let mut a = rec(1_000, "A", "s1", "claude-opus-5", u);
+        a.branch = String::new();
+        a.effort = None;
+        let mut b = rec(2_000, "A", "s2", "claude-opus-5", u);
+        b.branch = "feature".into();
+        b.effort = Some("medium".into());
+        let s = stats(&report_of(vec![a, b]), 30);
+
+        let names: Vec<&str> = s.branches.iter().map(|x| x.name.as_str()).collect();
+        assert!(names.contains(&UNRECORDED), "branches: {names:?}");
+        assert!(names.contains(&"feature"), "branches: {names:?}");
+        let efforts: Vec<&str> = s.efforts.iter().map(|x| x.name.as_str()).collect();
+        assert!(efforts.contains(&UNRECORDED), "efforts: {efforts:?}");
+        assert!(efforts.contains(&"medium"), "efforts: {efforts:?}");
+        // Every record lands in exactly one bucket of each split.
+        assert_eq!(s.branches.iter().map(|x| x.messages).sum::<u64>(), 2);
+        assert_eq!(s.efforts.iter().map(|x| x.messages).sum::<u64>(), 2);
+    }
+
+    /// A model with no tokens in the charted window must not draw an all-blank
+    /// sparkline — that reads as a broken chart. It still appears in the
+    /// first/last-seen list, so nothing is hidden.
+    #[test]
+    fn a_model_with_no_tokens_in_the_window_is_listed_but_not_charted() {
+        let day = 86_400;
+        let real = rec(30 * day, "A", "s1", "claude-opus-5", Usage { output: 10, ..Default::default() });
+        let empty = rec(30 * day, "A", "s1", "<synthetic>", Usage::default());
+        let s = stats(&report_of(vec![real, empty]), 30);
+        let charted: Vec<&str> = s.model_daily.iter().map(|(m, _)| m.as_str()).collect();
+        assert_eq!(charted, vec!["claude-opus-5"], "charted: {charted:?}");
+        assert_eq!(s.model_span.len(), 2, "but both are listed with their span");
+    }
+
+    /// Attachments are the harness talking to itself. They carry a uuid — unlike
+    /// the queue records above — so the same key works, and reading a directory
+    /// twice must not double the payload.
+    #[test]
+    fn injected_context_is_measured_in_characters_and_counted_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("20260809_120000_abc_transcript.jsonl");
+        std::fs::write(
+            &f,
+            concat!(
+                r#"{"type":"attachment","uuid":"a1","timestamp":"2026-08-01T13:00:00.000Z","sessionId":"s1","attachment":{"type":"task_reminder","content":[],"itemCount":0}}"#,
+                "\n",
+                r#"{"type":"attachment","uuid":"a2","timestamp":"2026-08-01T13:01:00.000Z","sessionId":"s1","attachment":{"type":"hook_additional_context","content":"be concise"}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+        let src =
+            Source { dir: dir.path().to_path_buf(), blueprint: "Bp".into(), project: "proj".into() };
+
+        let a = scan(std::slice::from_ref(&src)).activity;
+        let total = a.injected_total();
+        assert_eq!(total.count, 2);
+        assert!(total.chars > 0, "the payload must be measured, not just counted");
+        assert_eq!(a.attachments.len(), 2);
+        // Biggest payload first — a rare large injection costs more than many
+        // tiny ones, so the ranking is by size, not by count.
+        assert_eq!(a.injected_ranking()[0].0, "hook_additional_context");
+
+        let dup = |d: &Path| Source {
+            dir: d.to_path_buf(),
+            blueprint: "Bp".into(),
+            project: "proj".into(),
+        };
+        let twice = scan(&[dup(dir.path()), dup(dir.path())]).activity;
+        assert_eq!(twice.injected_total().chars, total.chars, "read twice, counted once");
+    }
+
     #[test]
     fn turn_lengths_keep_their_seconds() {
         // fmt_duration would render every one of these as "0m" or "1m".
@@ -1336,6 +1619,8 @@ mod tests {
             blueprint: "A".into(),
             project: project.into(),
             session: sess.into(),
+            branch: "main".into(),
+            effort: Some("high".into()),
             usage: u,
         }
     }

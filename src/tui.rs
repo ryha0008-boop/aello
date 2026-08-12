@@ -2042,25 +2042,9 @@ fn draw_token_detail(
 /// worth; the number is stated on the chart so nobody reads it as "all time".
 const CHART_DAYS: i64 = 30;
 
-/// Eight levels of a vertical bar — one character per column, so 30 days or 24
-/// hours fit a line each without a widget or a second screen.
-const SPARK: [char; 9] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-
-fn spark(values: &[u64]) -> String {
-    let max = values.iter().copied().max().unwrap_or(0);
-    if max == 0 {
-        return " ".repeat(values.len());
-    }
-    values
-        .iter()
-        .map(|&v| {
-            // A non-zero day must never render as blank — that reads as "no
-            // work", which is a different fact.
-            let idx = if v == 0 { 0 } else { (v as f64 / max as f64 * 8.0).ceil().max(1.0) as usize };
-            SPARK[idx.min(8)]
-        })
-        .collect()
-}
+/// Sparklines live in `tokens` now — the CLI `--stats` view draws them too, and
+/// two copies of the "a non-zero day is never blank" rule is one too many.
+use tokens::spark;
 
 /// A proportional bar, `width` cells wide.
 fn hbar(frac: f64, width: usize) -> String {
@@ -2234,6 +2218,51 @@ fn draw_token_stats(f: &mut Frame, app: &App, scroll: u16) {
     ));
     lines.push(Line::from(""));
 
+    // ── Cost split by branch and by reasoning effort ─────────────────────────
+    // Both are one shape, so they share one renderer. A single-row split is
+    // dropped: "100% on main" is not a finding.
+    let mut slice_table = |title: &str, slices: &[tokens::Slice]| {
+        if slices.len() < 2 {
+            return;
+        }
+        lines.push(section(title));
+        lines.push(Line::from(Span::styled(
+            format!("  {:<24}{:>6}{:>8}{:>10}{:>10}  {}", "", "SESS", "MSGS", "TOKENS", "COST", "SHARE OF COST"),
+            Style::default().fg(DIM),
+        )));
+        let top = slices.first().map(|s| s.priced.cost).unwrap_or(0.0).max(1e-9);
+        for s in slices {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("  {:<24}", truncate(&s.name, 23)),
+                    Style::default().fg(if s.name == tokens::UNRECORDED { MUTED } else { TEXT }),
+                ),
+                Span::styled(format!("{:>6}{:>8}", s.sessions, s.messages), Style::default().fg(MUTED)),
+                Span::styled(
+                    format!("{:>10}", tokens::fmt_tokens(s.priced.usage.total())),
+                    Style::default().fg(AMBER),
+                ),
+                Span::styled(
+                    format!("{:>10}", tokens::fmt_cost(s.priced.cost)),
+                    Style::default().fg(ORANGE_HOT),
+                ),
+                Span::styled("  ", Style::default()),
+                Span::styled(hbar(s.priced.cost / top, 14), Style::default().fg(ORANGE_HOT)),
+            ]));
+        }
+        lines.push(Line::from(""));
+    };
+    slice_table("SPEND BY BRANCH", &s.branches);
+    slice_table("SPEND BY REASONING EFFORT", &s.efforts);
+    if s.efforts.iter().any(|e| e.name == tokens::UNRECORDED) {
+        lines.push(note(
+            "(unrecorded) is its own row on purpose — the field only exists on newer records, and \
+             folding it into `high` would invent the number"
+                .into(),
+        ));
+        lines.push(Line::from(""));
+    }
+
     // ── Daily ───────────────────────────────────────────────────────────────
     lines.push(section(&format!("DAILY  (last {} days, UTC)", s.daily.len())));
     let day_tokens: Vec<u64> = s.daily.iter().map(|d| d.tokens).collect();
@@ -2265,6 +2294,37 @@ fn draw_token_stats(f: &mut Frame, app: &App, scroll: u16) {
         tokens::fmt_cost(charted_cost)
     )));
     lines.push(Line::from(""));
+
+    // ── Models over time ────────────────────────────────────────────────────
+    // One line per model over the same window as DAILY above, so a migration
+    // reads as a handover rather than as one blended average.
+    if s.model_daily.len() > 1 {
+        lines.push(section("MODELS OVER TIME  (same window as DAILY)"));
+        for (i, (model, series)) in s.model_daily.iter().enumerate() {
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {:<26}", truncate(model, 25)), Style::default().fg(TEXT)),
+                Span::styled(
+                    spark(series),
+                    Style::default().fg(if i == 0 { ORANGE_HOT } else { AMBER }),
+                ),
+            ]));
+        }
+        for (model, first, last) in &s.model_span {
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "  {:<26}{} → {}",
+                    truncate(model, 25),
+                    tokens::fmt_time(*first),
+                    tokens::fmt_time(*last)
+                ),
+                Style::default().fg(DIM),
+            )));
+        }
+        lines.push(note(
+            "the dates are all history; the bars are only the charted window".into(),
+        ));
+        lines.push(Line::from(""));
+    }
 
     // ── Hour of day ─────────────────────────────────────────────────────────
     lines.push(section("HOUR OF DAY  (UTC — no timezone conversion, so read the offset in)"));
@@ -2396,6 +2456,50 @@ fn draw_token_stats(f: &mut Frame, app: &App, scroll: u16) {
         }
         lines.push(Line::from(""));
 
+        // ── Context nobody typed ────────────────────────────────────────────
+        let injected = a.injected_total();
+        if injected.count > 0 {
+            lines.push(section("CONTEXT NOBODY TYPED  (harness injections)"));
+            lines.push(Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(
+                    format!("{} injections", injected.count),
+                    Style::default().fg(TEXT),
+                ),
+                Span::styled(
+                    format!(" · ~{} tokens", tokens::fmt_tokens(injected.est_tokens())),
+                    Style::default().fg(AMBER).add_modifier(Modifier::BOLD),
+                ),
+            ]));
+            let widest = a
+                .injected_ranking()
+                .first()
+                .map(|(_, i)| i.est_tokens())
+                .unwrap_or(1)
+                .max(1) as f64;
+            for (kind, i) in a.injected_ranking().into_iter().take(6) {
+                lines.push(Line::from(vec![
+                    Span::styled(format!("  {:<26}", truncate(&kind, 25)), Style::default().fg(TEXT)),
+                    Span::styled(format!("{:>6}", i.count), Style::default().fg(MUTED)),
+                    Span::styled(
+                        format!("{:>9}", tokens::fmt_tokens(i.est_tokens())),
+                        Style::default().fg(AMBER),
+                    ),
+                    Span::styled(
+                        format!("  {}", hbar(i.est_tokens() as f64 / widest, 12)),
+                        Style::default().fg(AMBER),
+                    ),
+                ]));
+            }
+            // The one thing this section must never do is look measured.
+            lines.push(note(
+                "ESTIMATE — characters ÷ 4. The transcript records what was injected, never what \
+                 it tokenised to, so do not add this to a total that came from a usage field"
+                    .into(),
+            ));
+            lines.push(Line::from(""));
+        }
+
         lines.push(section("SHELL COMMANDS  (first word)"));
         let shell = tokens::Activity::top(&a.shell, 8);
         lines.push(Line::from(Span::styled(
@@ -2510,19 +2614,27 @@ mod tests {
         // The stats page reads `records`, not the rollups, so a sample report
         // with none renders an empty chart — which is exactly the bug this
         // fixture would otherwise hide.
-        let rec = |ts: i64, project: &str, session: &str| tokens::Record {
-            ts,
-            model: "claude-opus-5".into(),
-            blueprint: "TechnicalDirector".into(),
-            project: project.into(),
-            session: session.into(),
-            usage: u,
+        // Two branches, two models and one record with no effort recorded, so
+        // the branch table, the migration chart and the `(unrecorded)` row all
+        // have something to draw. A fixture with one of each renders a
+        // single-row table that looks fine and proves nothing.
+        let rec = |ts: i64, project: &str, session: &str, branch: &str, model: &str, effort: Option<&str>| {
+            tokens::Record {
+                ts,
+                model: model.into(),
+                blueprint: "TechnicalDirector".into(),
+                project: project.into(),
+                session: session.into(),
+                branch: branch.into(),
+                effort: effort.map(str::to_string),
+                usage: u,
+            }
         };
         tokens::Report {
             records: vec![
-                rec(now - 90_000, "aello", "c95944da"),
-                rec(now - 3_000, "aello", "c95944da"),
-                rec(now - 1_000, "revoiced", "aa11bb22"),
+                rec(now - 90_000, "aello", "c95944da", "main", "claude-opus-4-8", None),
+                rec(now - 3_000, "aello", "c95944da", "feat-stats", "claude-opus-5", Some("high")),
+                rec(now - 1_000, "revoiced", "aa11bb22", "main", "claude-opus-5", Some("medium")),
             ],
             // Likewise for activity: an all-zero default renders the whole
             // "what the sessions did" half as nothing, which would pass every
@@ -2545,6 +2657,16 @@ mod tests {
                 skill_sessions: BTreeMap::from([
                     ("sync".to_string(), BTreeSet::from(["s1".to_string()])),
                     ("handoff".to_string(), BTreeSet::from(["s1".to_string(), "s2".to_string()])),
+                ]),
+                attachments: BTreeMap::from([
+                    (
+                        "task_reminder".to_string(),
+                        tokens::Injected { count: 12, chars: 1_644 },
+                    ),
+                    (
+                        "hook_additional_context".to_string(),
+                        tokens::Injected { count: 3, chars: 5_535 },
+                    ),
                 ]),
                 files: BTreeMap::from([("CLAUDE.md".to_string(), 6)]),
                 shell: BTreeMap::from([("git".to_string(), 9)]),
@@ -2661,6 +2783,41 @@ mod tests {
         // Turn time is measured, not inferred, and the page has to say so —
         // otherwise it reads as elapsed session time and the $/hour is wrong.
         assert!(text.contains("not elapsed session time"), "{text}");
+    }
+
+    /// The four splits added after the first activity pass: branch, effort,
+    /// model timeline and harness-injected context. Each has one label that
+    /// stops it being read as more than it is.
+    #[test]
+    fn token_stats_page_splits_spend_and_labels_every_estimate() {
+        let mut app = bare_app();
+        app.tokens = Some(sample_report());
+        let mut term =
+            Terminal::new(ratatui::backend::TestBackend::new(140, 110)).expect("test terminal");
+        term.draw(|f| draw_token_stats(f, &app, 0)).expect("draw");
+        let text: String = term
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<Vec<_>>()
+            .concat();
+
+        assert!(text.contains("SPEND BY BRANCH"), "{text}");
+        assert!(text.contains("feat-stats"), "both branches listed: {text}");
+        assert!(text.contains("SPEND BY REASONING EFFORT"), "{text}");
+        // An absent field gets its own row and says why, rather than being
+        // folded into the commonest value.
+        assert!(text.contains("(unrecorded)"), "{text}");
+        assert!(text.contains("would invent the number"), "{text}");
+        assert!(text.contains("MODELS OVER TIME"), "{text}");
+        assert!(text.contains("claude-opus-4-8"), "the model being migrated FROM: {text}");
+        // The injected-context figure is characters ÷ 4 and must never read as
+        // though it came off a usage field.
+        assert!(text.contains("CONTEXT NOBODY TYPED"), "{text}");
+        assert!(text.contains("hook_additional_context"), "{text}");
+        assert!(text.contains("ESTIMATE"), "the estimate must be labelled: {text}");
     }
 
     /// The stats page must survive being opened before the scan finishes —

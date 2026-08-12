@@ -3,6 +3,28 @@
 ## [Unreleased]
 
 ### Added
+- **Four more ways to split the same spend**, on both the TUI stats page and
+  `aello tokens --stats`: **by git branch**, **by reasoning effort**, a
+  **per-model timeline** over the charted window, and **context nobody typed** —
+  what the harness itself injected (task reminders, hook output, skill and agent
+  listings, nested memory).
+
+  An absent `effort` or `gitBranch` gets its own `(unrecorded)` row instead of
+  being folded into the commonest value; both fields only exist on newer
+  records, and here that row is **18.8% of all cost**. A split with one row is
+  dropped, because "100% on main" is not a finding.
+
+  The model timeline makes a migration read as a handover rather than one
+  blended average. A model with no tokens in the window is listed with its
+  first/last-seen dates but not charted — an all-blank sparkline reads as a
+  broken chart.
+
+  The injected-context token figure is **characters ÷ 4 and labelled as an
+  estimate everywhere it appears**: the transcript records what was injected and
+  never what it tokenised to. Here it is 8,965 injections, with
+  `hook_additional_context` — where aello's own per-turn rules land — averaging
+  ~454 tokens across 1,335 of them.
+
 - **The statistics page now reports what the sessions *did*, not only what they
   spent** — `S` in the TUI and `aello tokens --stats` both gain it, from the
   same scan, with no new hook and retroactively over all of history.

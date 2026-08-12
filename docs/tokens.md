@@ -211,6 +211,34 @@ a chart that closes it invents a month of steady work. **Hour of day** is
 bucketed in **UTC** — there is no timezone crate here and guessing an offset
 would silently shift every bar.
 
+### Four ways to split the same spend
+
+**Spend by branch** (`gitBranch`) and **spend by reasoning effort** (`effort`)
+are the same table twice. Both fields appear only on newer records, so an absent
+value gets its own **`(unrecorded)`** row rather than being folded into the
+commonest one — measured here, that row is 18.8% of all cost, which is not a
+rounding error to hide inside `high`. A split with one row is dropped entirely:
+"100% on main" is not a finding. `HEAD` means a detached checkout and is left as
+itself.
+
+**Models over time** draws one sparkline per model over the charted window, so a
+migration reads as a handover instead of one blended average — the
+`claude-opus-4-8` → `claude-opus-5` switch on 2026-07-27 is visible as two
+crossing curves. A model with no tokens in the window is listed with its
+first/last-seen dates but **not** charted: an all-blank sparkline reads as a
+broken chart, and `<synthetic>` records carry an empty usage object.
+
+**Context nobody typed** counts what the *harness* pushed into the conversation
+— task reminders, hook output, skill listings, agent and tool listings, nested
+memory. Measured here: 8,965 injections, and `hook_additional_context` (which is
+where aello's own per-turn rules and SessionStart block land) averages ~454
+tokens across 1,335 injections.
+
+That token figure is **characters ÷ 4, an estimate**, and it is labelled as one
+on both surfaces. The transcript records what was injected and never what it
+tokenised to, so this is the ceiling on what can honestly be said — do not add
+it to a total that came from a `usage` field.
+
 ### What the sessions *did*
 
 The same scan also reads the half of the transcript that has nothing to do with
