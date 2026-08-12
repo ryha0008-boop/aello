@@ -2467,29 +2467,56 @@ fn draw_token_stats(f: &mut Frame, app: &App, scroll: u16) {
                     Style::default().fg(TEXT),
                 ),
                 Span::styled(
-                    format!(" · ~{} tokens", tokens::fmt_tokens(injected.est_tokens())),
-                    Style::default().fg(AMBER).add_modifier(Modifier::BOLD),
+                    format!(" · ~{} tokens · ", tokens::fmt_tokens(injected.est_tokens())),
+                    Style::default().fg(AMBER),
+                ),
+                Span::styled(
+                    format!("~{}", tokens::fmt_cost(injected.cost())),
+                    Style::default().fg(ORANGE_HOT).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!(
+                        " ({:.1}% of all spend)",
+                        if total.cost > 0.0 { injected.cost() / total.cost * 100.0 } else { 0.0 }
+                    ),
+                    Style::default().fg(TEXT),
                 ),
             ]));
-            let widest = a
-                .injected_ranking()
-                .first()
-                .map(|(_, i)| i.est_tokens())
-                .unwrap_or(1)
-                .max(1) as f64;
-            for (kind, i) in a.injected_ranking().into_iter().take(6) {
+            let widest =
+                a.injected_ranking().first().map(|(_, i)| i.cost()).unwrap_or(1.0).max(1e-9);
+            for (kind, i) in a.injected_ranking().into_iter().take(8) {
                 lines.push(Line::from(vec![
-                    Span::styled(format!("  {:<26}", truncate(&kind, 25)), Style::default().fg(TEXT)),
+                    Span::styled(
+                        format!("  {:<28}", truncate(&tokens::injection_label(&kind), 27)),
+                        Style::default().fg(TEXT),
+                    ),
                     Span::styled(format!("{:>6}", i.count), Style::default().fg(MUTED)),
                     Span::styled(
                         format!("{:>9}", tokens::fmt_tokens(i.est_tokens())),
                         Style::default().fg(AMBER),
                     ),
                     Span::styled(
-                        format!("  {}", hbar(i.est_tokens() as f64 / widest, 12)),
-                        Style::default().fg(AMBER),
+                        format!("{:>9}", tokens::fmt_cost(i.cost())),
+                        Style::default().fg(ORANGE_HOT),
+                    ),
+                    Span::styled(format!("{:>6.1}x", i.multiplier()), Style::default().fg(MUTED)),
+                    Span::styled(
+                        format!("  {}", hbar(i.cost() / widest, 10)),
+                        Style::default().fg(ORANGE_HOT),
                     ),
                 ]));
+            }
+            lines.push(note(
+                "an injection is written once and RE-READ by every later request in its session — \
+                 that is the x column, and it is where the money actually goes"
+                    .into(),
+            ));
+            if a.attachments.keys().any(|k| k.starts_with("hook_success/")) {
+                lines.push(note(
+                    "a SessionStart hook is recorded TWICE (hook_success + hook_additional_context) \
+                     — the '(2nd copy)' row is the same payload, not a second injection"
+                        .into(),
+                ));
             }
             // The one thing this section must never do is look measured.
             lines.push(note(
@@ -2661,13 +2688,34 @@ mod tests {
                 attachments: BTreeMap::from([
                     (
                         "task_reminder".to_string(),
-                        tokens::Injected { count: 12, chars: 1_644 },
+                        tokens::Injected {
+                            count: 12,
+                            chars: 1_644,
+                            write_cost: 0.004,
+                            read_cost: 0.021,
+                        },
                     ),
                     (
-                        "hook_additional_context".to_string(),
-                        tokens::Injected { count: 3, chars: 5_535 },
+                        "hook_additional_context/UserPromptSubmit".to_string(),
+                        tokens::Injected {
+                            count: 3,
+                            chars: 5_535,
+                            write_cost: 0.014,
+                            read_cost: 0.062,
+                        },
+                    ),
+                    (
+                        "hook_success/SessionStart".to_string(),
+                        tokens::Injected {
+                            count: 1,
+                            chars: 4_500,
+                            write_cost: 0.011,
+                            read_cost: 0.050,
+                        },
                     ),
                 ]),
+                // Already priced above, so the raw events are spent.
+                injections: Vec::new(),
                 files: BTreeMap::from([("CLAUDE.md".to_string(), 6)]),
                 shell: BTreeMap::from([("git".to_string(), 9)]),
                 interrupts: 1,
@@ -2816,8 +2864,15 @@ mod tests {
         // The injected-context figure is characters ÷ 4 and must never read as
         // though it came off a usage field.
         assert!(text.contains("CONTEXT NOBODY TYPED"), "{text}");
-        assert!(text.contains("hook_additional_context"), "{text}");
+        // The hook event names the row, so the per-turn hook is identifiable
+        // without matching on its wording.
+        assert!(text.contains("hook: UserPromptSubmit"), "{text}");
         assert!(text.contains("ESTIMATE"), "the estimate must be labelled: {text}");
+        // The two things a reader gets wrong otherwise: that an injection is a
+        // one-off charge, and that a SessionStart hook recorded twice was
+        // injected twice.
+        assert!(text.contains("RE-READ by every later request"), "{text}");
+        assert!(text.contains("2nd copy"), "the double-recorded row must say so: {text}");
     }
 
     /// The stats page must survive being opened before the scan finishes —

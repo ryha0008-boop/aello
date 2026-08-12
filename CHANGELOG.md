@@ -19,11 +19,25 @@
   first/last-seen dates but not charted — an all-blank sparkline reads as a
   broken chart.
 
-  The injected-context token figure is **characters ÷ 4 and labelled as an
-  estimate everywhere it appears**: the transcript records what was injected and
-  never what it tokenised to. Here it is 8,965 injections, with
-  `hook_additional_context` — where aello's own per-turn rules land — averaging
-  ~454 tokens across 1,335 of them.
+  **Injections are priced, not just counted, and the price is the finding.** An
+  injection is written into the context once and then re-read by every later
+  request in its session — median **75** further requests here — so it costs
+  `tokens × 2 × input` once plus `tokens × 0.1 × input` per request after that.
+  The table shows write, re-read, total and the multiplier: 9,029 injections,
+  ~3.82M tokens, **~$243 (4.2% of all spend), of which $205 is re-reads and only
+  $38 is writes**. aello's own two hooks are $23.34 (the per-turn rules) and
+  $16.38 (SessionStart) of that. Rates come from the model of each carrying
+  request, so a session that switched models is priced as it happened.
+
+  Rows are keyed by the record's own `hookEvent` rather than by matching the
+  hook's text — aello's wording has already changed once and 53 injections carry
+  the old phrasing, which a text signature would have dropped silently.
+
+  The token figure is **characters ÷ 4 and labelled an estimate everywhere it
+  appears**: the transcript records what was injected and never what it
+  tokenised to. And a SessionStart hook is **recorded twice** (`hook_success`
+  plus `hook_additional_context`); both rows are shown with the duplicate
+  labelled `(2nd copy)`, rather than summed into a number twice the truth.
 
 - **The statistics page now reports what the sessions *did*, not only what they
   spent** — `S` in the TUI and `aello tokens --stats` both gain it, from the

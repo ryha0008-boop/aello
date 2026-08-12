@@ -230,14 +230,55 @@ broken chart, and `<synthetic>` records carry an empty usage object.
 
 **Context nobody typed** counts what the *harness* pushed into the conversation
 — task reminders, hook output, skill listings, agent and tool listings, nested
-memory. Measured here: 8,965 injections, and `hook_additional_context` (which is
-where aello's own per-turn rules and SessionStart block land) averages ~454
-tokens across 1,335 injections.
+memory. Measured here: 9,029 injections, ~3.82M tokens, **~$243 — 4.2% of all
+spend**.
 
-That token figure is **characters ÷ 4, an estimate**, and it is labelled as one
-on both surfaces. The transcript records what was injected and never what it
-tokenised to, so this is the ceiling on what can honestly be said — do not add
-it to a total that came from a `usage` field.
+**An injection is not a one-off charge, and that is the whole finding.** It is
+written into the context once and then re-read by every later request in the
+same session. Measured here, the median injection is followed by **75 further
+requests** (mean 95, max 391), so the real price is `tokens × 2 × input` once
+plus `tokens × 0.1 × input` per request after it — a **5–9x multiple** of the
+write price, shown as the `x` column. Of the $243, only **$38 is writes and $205
+is re-reads**. Rates come from the model of each carrying request rather than a
+constant, so a session that switched models is priced as it happened.
+
+Rows are keyed by the hook event the record names (`hookEvent`), **not** by
+matching the hook's text. aello's per-turn wording has already changed once, and
+53 injections carry the older phrasing — a text signature would have dropped
+them silently.
+
+What aello's own hooks cost, over 49 days at list rates:
+
+| row | n | ~tokens | write | re-read | total |
+|---|---|---|---|---|---|
+| `hook: UserPromptSubmit` (the four response rules) | 1,207 | 439k | $4.35 | $18.99 | **$23.34** |
+| `hook: SessionStart` (the banner + any handoff note) | 156 | 180k | $1.73 | $14.65 | **$16.38** |
+
+Two measurements worth keeping:
+
+- The **SessionStart payload is dominated by the handoff note, not the banner**.
+  With no note waiting, the median injection is 1,202 characters (~300 tokens,
+  which matches the ~257 the design notes claim). With one, it is 8,840
+  characters (~2,210 tokens) — over seven times bigger.
+- **97.5% of task reminders are empty** — 4,779 of 4,899 carry `content: []`, so
+  their 146k tokens are almost entirely a 56-character JSON envelope repeated
+  five thousand times.
+
+Two things the table itself has to say out loud, and does:
+
+- The token figure is **characters ÷ 4, an estimate**. The transcript records
+  what was injected and never what it tokenised to, so this is the ceiling on
+  what can honestly be said — do not add it to a total that came from a `usage`
+  field.
+- **A SessionStart hook is recorded twice**, once as `hook_success` and again as
+  `hook_additional_context`. Only one was context. Both rows are shown, with the
+  duplicate labelled `(2nd copy)`, rather than being summed into a number twice
+  the truth.
+
+One row is **not** harness overhead despite sitting in this table:
+`queued_command` is the text of a prompt queued mid-turn, which is sometimes a
+background task's completion notice and sometimes something you typed or pasted
+— its median is 555 characters and its maximum is 700,570.
 
 ### What the sessions *did*
 

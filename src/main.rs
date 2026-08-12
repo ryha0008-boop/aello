@@ -1542,25 +1542,48 @@ fn print_activity(a: &tokens::Activity, total_cost: f64) {
     let injected = a.injected_total();
     if injected.count > 0 {
         println!(
-            "\nCONTEXT NOBODY TYPED  ({} injections, ~{} tokens estimated)",
+            "\nCONTEXT NOBODY TYPED  ({} injections, ~{} tokens, ~{} — {:.1}% of all spend)",
             injected.count,
             tokens::fmt_tokens(injected.est_tokens()),
+            tokens::fmt_cost(injected.cost()),
+            if total_cost > 0.0 { injected.cost() / total_cost * 100.0 } else { 0.0 },
         );
-        for (kind, i) in a.injected_ranking().into_iter().take(8) {
+        println!(
+            "  {:<30}{:>6}{:>9}{:>9}{:>10}{:>9}{:>6}",
+            "", "N", "TOKENS", "WRITE", "RE-READ", "TOTAL", "x"
+        );
+        for (kind, i) in a.injected_ranking().into_iter().take(10) {
             println!(
-                "  {:<26}{:>6}{:>10}{:>12}",
-                truncate_name(&kind, 25),
+                "  {:<30}{:>6}{:>9}{:>9}{:>10}{:>9}{:>5.1}x",
+                truncate_name(&tokens::injection_label(&kind), 29),
                 i.count,
                 tokens::fmt_tokens(i.est_tokens()),
-                format!("{} avg", tokens::fmt_tokens(i.est_tokens() / i.count.max(1))),
+                tokens::fmt_cost(i.write_cost),
+                tokens::fmt_cost(i.read_cost),
+                tokens::fmt_cost(i.cost()),
+                i.multiplier(),
             );
         }
-        // Stated, not implied: the transcript records what was injected and
-        // never what it tokenised to, so this is characters ÷ 4 and nothing
-        // more. Do not add it to a total that came from a `usage` field.
+        // Two things the reader would otherwise get wrong, in the two
+        // directions. The token count looks enormous and the money does not;
+        // and an injection is not a one-off charge.
+        println!(
+            "  An injection is written once and RE-READ by every later request in its session — \
+             that is the x column."
+        );
         println!(
             "  ESTIMATE — characters ÷ 4. The transcript never records what an injection tokenised to."
         );
+        // Claude Code records a SessionStart hook's output twice, as
+        // `hook_success` and again as `hook_additional_context`. Only one of
+        // them was context; both are in the table, so say so rather than
+        // silently summing a payload that was injected once.
+        if a.attachments.keys().any(|k| k.starts_with("hook_success/")) {
+            println!(
+                "  A SessionStart hook is recorded TWICE (hook_success + hook_additional_context) — \
+                 the '(2nd copy)' row is the same payload, not a second injection."
+            );
+        }
     }
 
     let peak = a.turn_weekday.iter().copied().max().unwrap_or(0).max(1);

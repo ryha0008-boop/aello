@@ -23,7 +23,7 @@
 //! because a cost that quietly excludes half the traffic is worse than no cost
 //! at all.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// Rate-limit window length. Claude's usage window is 5 hours from the first
@@ -168,6 +168,9 @@ pub struct Activity {
     /// reminders, hook output, skill listings, deferred-tool deltas. This is
     /// context nobody typed, and it is the only way to see what it costs.
     pub attachments: BTreeMap<String, Injected>,
+    /// Every injection, in the order read. Priced at the end of the scan, once
+    /// the records that carry them forward are all known.
+    pub injections: Vec<InjectionEvent>,
     /// `[Request interrupted by user]` markers — the times a turn was stopped
     /// mid-flight, which is the closest thing to a "wrong direction" signal.
     pub interrupts: u64,
@@ -188,6 +191,13 @@ pub struct Activity {
 pub struct Injected {
     pub count: u64,
     pub chars: u64,
+    /// What it cost to put these tokens into the context once, at the rate of
+    /// the request that paid for it.
+    pub write_cost: f64,
+    /// What it cost to carry them through every later request in the same
+    /// session. This is the number that matters: an injection is written once
+    /// and re-read for the rest of the session.
+    pub read_cost: f64,
 }
 
 impl Injected {
@@ -196,15 +206,54 @@ impl Injected {
     pub fn est_tokens(&self) -> u64 {
         self.chars / 4
     }
+
+    pub fn cost(&self) -> f64 {
+        self.write_cost + self.read_cost
+    }
+
+    /// How many times over the write price this actually cost. 1.0 would mean
+    /// the injection was never re-read; anything above it is the session
+    /// carrying the tokens forward.
+    pub fn multiplier(&self) -> f64 {
+        if self.write_cost <= 0.0 {
+            return 0.0;
+        }
+        self.cost() / self.write_cost
+    }
+}
+
+/// A readable name for an injection kind. The stored key keeps Claude Code's
+/// own spelling so it can be matched back to a record; only the display is
+/// shortened, and only for the two long hook prefixes.
+pub fn injection_label(kind: &str) -> String {
+    match kind.split_once('/') {
+        Some(("hook_additional_context", ev)) => format!("hook: {ev}"),
+        Some(("hook_success", ev)) => format!("hook: {ev} (2nd copy)"),
+        _ => kind.to_string(),
+    }
+}
+
+/// One injection, kept until the scan can price it — that needs every record in
+/// the session, which is only known once all the files have been read.
+#[derive(Clone, Debug)]
+pub struct InjectionEvent {
+    pub session: String,
+    pub ts: i64,
+    pub kind: String,
+    pub chars: u64,
 }
 
 impl Activity {
-    /// Harness-injected context, biggest payload first — the ranking that
-    /// matters, since a rare 14 kB attachment costs more than 5,000 tiny ones.
+    /// Harness-injected context, costliest first. Ranked by money rather than
+    /// by token count: a payload injected early in a long session is re-read
+    /// hundreds of times, and one injected at the end is not, so the two
+    /// orderings disagree.
     pub fn injected_ranking(&self) -> Vec<(String, Injected)> {
         let mut v: Vec<(String, Injected)> =
             self.attachments.iter().map(|(k, i)| (k.clone(), *i)).collect();
-        v.sort_by(|a, b| b.1.chars.cmp(&a.1.chars).then_with(|| a.0.cmp(&b.0)));
+        v.sort_by(|a, b| {
+            b.1.cost().total_cmp(&a.1.cost()).then_with(|| b.1.chars.cmp(&a.1.chars))
+        });
         v
     }
 
@@ -213,6 +262,8 @@ impl Activity {
         for i in self.attachments.values() {
             t.count += i.count;
             t.chars += i.chars;
+            t.write_cost += i.write_cost;
+            t.read_cost += i.read_cost;
         }
         t
     }
@@ -546,6 +597,7 @@ pub fn scan(sources: &[Source]) -> Report {
     }
 
     records.sort_by_key(|r| r.ts);
+    price_injections(&mut activity, &records);
     let messages = records.len();
     let blocks = build_blocks(&records);
     let (envs, unknown_models) = roll_envs(&records);
@@ -631,6 +683,56 @@ fn read_transcript(
     raw
 }
 
+/// Price every injection against the requests that actually carried it.
+///
+/// **This is the whole point of the section.** An injection is not a one-off
+/// charge: it is written into the context once and then re-read by every later
+/// request in the same session, so its real price is
+/// `tokens × (2 × input)` once, plus `tokens × 0.1 × input` per request after
+/// it. Measured on this machine the median injection is followed by **75**
+/// further requests, which turns a 400-token per-turn hook into something like
+/// six times its apparent cost — and reading the token count alone gets that
+/// wrong in the alarming direction, since 3.8M tokens sounds like a fortune and
+/// is not.
+///
+/// Rates come from the model of each carrying request rather than a constant,
+/// so a session that switched models is priced as it happened.
+fn price_injections(act: &mut Activity, records: &[Record]) {
+    if act.injections.is_empty() {
+        return;
+    }
+    // Per session: the requests, in order, and the suffix sum of their input
+    // rates — so pricing one injection is a binary search, not a scan.
+    let mut by_session: HashMap<&str, Vec<(i64, f64)>> = HashMap::new();
+    for r in records {
+        let rate = rates(&r.model).map(|(i, _)| i).unwrap_or(0.0);
+        by_session.entry(r.session.as_str()).or_default().push((r.ts, rate));
+    }
+    let mut suffix: HashMap<&str, Vec<f64>> = HashMap::new();
+    for (s, reqs) in &by_session {
+        let mut sums = vec![0.0; reqs.len() + 1];
+        for i in (0..reqs.len()).rev() {
+            sums[i] = sums[i + 1] + reqs[i].1;
+        }
+        suffix.insert(s, sums);
+    }
+
+    for ev in &act.injections {
+        let Some(reqs) = by_session.get(ev.session.as_str()) else { continue };
+        let idx = reqs.partition_point(|(ts, _)| *ts <= ev.ts);
+        if idx >= reqs.len() {
+            continue; // Nothing followed it, so nothing ever paid for it.
+        }
+        let tokens = (ev.chars / 4) as f64 / 1e6;
+        let sums = &suffix[ev.session.as_str()];
+        let e = act.attachments.entry(ev.kind.clone()).or_default();
+        // The first request after the injection writes it into the cache; every
+        // request after that re-reads it.
+        e.write_cost += tokens * reqs[idx].1 * CACHE_WRITE_1H;
+        e.read_cost += tokens * (sums[idx] - reqs[idx].1) * CACHE_READ;
+    }
+}
+
 /// Pull the non-usage signal out of one already-parsed record.
 ///
 /// Every branch deduplicates on an id the record carries, because the same
@@ -686,11 +788,30 @@ fn read_activity(
         // above turned out not to.
         Some("attachment") => {
             let a = v.get("attachment")?;
-            let kind = a["type"].as_str().unwrap_or("unknown");
+            // A hook attachment names the event that produced it, so the split
+            // between "the per-turn rules" and "the session banner" needs no
+            // matching on their text — which would go quietly wrong the next
+            // time the wording changes, and it has changed once already.
+            let kind = match (a["type"].as_str(), a["hookEvent"].as_str()) {
+                (Some(t), Some(ev)) => format!("{t}/{ev}"),
+                (Some(t), None) => t.to_string(),
+                _ => "unknown".to_string(),
+            };
             if uuid.is_some_and(&mut fresh) {
-                let e = act.attachments.entry(kind.to_string()).or_default();
+                let chars = serde_json::to_string(a).map(|s| s.len() as u64).unwrap_or(0);
+                let e = act.attachments.entry(kind.clone()).or_default();
                 e.count += 1;
-                e.chars += serde_json::to_string(a).map(|s| s.len() as u64).unwrap_or(0);
+                e.chars += chars;
+                if let (Some(s), Some(ts)) =
+                    (v["sessionId"].as_str(), v["timestamp"].as_str().and_then(parse_iso8601))
+                {
+                    act.injections.push(InjectionEvent {
+                        session: s.to_string(),
+                        ts,
+                        kind,
+                        chars,
+                    });
+                }
             }
             return Some(());
         }
@@ -1509,6 +1630,76 @@ mod tests {
         };
         let twice = scan(&[dup(dir.path()), dup(dir.path())]).activity;
         assert_eq!(twice.injected_total().chars, total.chars, "read twice, counted once");
+    }
+
+    /// The point of the injection section: a payload is written into the
+    /// context once and then re-read by every later request in the session, so
+    /// its real price is a multiple of its apparent one. Reading the token
+    /// count alone gets this wrong in the alarming direction.
+    #[test]
+    fn an_injection_is_priced_against_every_request_that_follows_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("20260809_120000_abc_transcript.jsonl");
+        // 400 characters of payload, then three requests that carry it.
+        let filler = "x".repeat(400);
+        let req = |min: u32, id: &str| {
+            format!(
+                r#"{{"timestamp":"2026-08-01T13:{min:02}:00.000Z","sessionId":"s1","type":"assistant","message":{{"id":"{id}","model":"claude-opus-5","usage":{{"output_tokens":1}}}}}}"#
+            )
+        };
+        std::fs::write(
+            &f,
+            format!(
+                "{}\n{}\n{}\n{}\n",
+                format!(
+                    r#"{{"type":"attachment","uuid":"a1","timestamp":"2026-08-01T13:00:00.000Z","sessionId":"s1","attachment":{{"type":"hook_additional_context","hookEvent":"UserPromptSubmit","content":"{filler}"}}}}"#
+                ),
+                req(1, "m1"),
+                req(2, "m2"),
+                req(3, "m3"),
+            ),
+        )
+        .unwrap();
+        let src =
+            Source { dir: dir.path().to_path_buf(), blueprint: "Bp".into(), project: "proj".into() };
+        let a = scan(std::slice::from_ref(&src)).activity;
+
+        // The hook event names the row, so no matching on the hook's wording —
+        // which has changed once already and would have gone silently wrong.
+        let i = a.attachments.get("hook_additional_context/UserPromptSubmit").expect("row");
+        assert_eq!(i.count, 1);
+        let tokens = i.est_tokens() as f64 / 1e6;
+        let (rate, _) = rates("claude-opus-5").unwrap();
+        // One write at 2x input, then TWO re-reads at 0.1x — three requests
+        // follow, and the first of them is the one that writes it.
+        assert!((i.write_cost - tokens * rate * CACHE_WRITE_1H).abs() < 1e-12, "{i:?}");
+        assert!((i.read_cost - tokens * rate * 2.0 * CACHE_READ).abs() < 1e-12, "{i:?}");
+        assert!((i.multiplier() - 1.1).abs() < 0.001, "multiplier was {}", i.multiplier());
+    }
+
+    /// An injection nothing followed was never carried by any request, so it
+    /// costs nothing — priced at zero rather than at the write price of a
+    /// request that does not exist.
+    #[test]
+    fn an_injection_with_no_request_after_it_costs_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("20260809_120000_abc_transcript.jsonl");
+        std::fs::write(
+            &f,
+            concat!(
+                r#"{"timestamp":"2026-08-01T13:00:00.000Z","sessionId":"s1","type":"assistant","message":{"id":"m1","model":"claude-opus-5","usage":{"output_tokens":1}}}"#,
+                "\n",
+                r#"{"type":"attachment","uuid":"a1","timestamp":"2026-08-01T13:05:00.000Z","sessionId":"s1","attachment":{"type":"task_reminder","content":[]}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+        let src =
+            Source { dir: dir.path().to_path_buf(), blueprint: "Bp".into(), project: "proj".into() };
+        let a = scan(std::slice::from_ref(&src)).activity;
+        let i = a.attachments.get("task_reminder").expect("row");
+        assert_eq!(i.count, 1, "it still happened, and is still counted");
+        assert_eq!(i.cost(), 0.0, "but nothing ever paid to carry it");
     }
 
     #[test]
