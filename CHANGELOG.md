@@ -3,6 +3,36 @@
 ## [Unreleased]
 
 ### Added
+- **`aello vault <path>` — `aello login` now puts the credential in your secret
+  store instead of `config.toml`.** Point aello at the store script once; both
+  logins then hand the credential over on **stdin** (never as an argument, which
+  would be visible in process listings and shell history) and remove the
+  plaintext copy from `config.toml`. The Cline login keeps provider, model and
+  base URL in the file — none of those is a secret. `aello vault` with no
+  argument shows the setting and whether the script is still reachable;
+  `--clear` forgets it.
+
+  **Writing is not resolving.** aello still has no verb that reads a value back
+  out. `login` already holds the plaintext for a moment — it just captured it
+  from `claude setup-token` or from a prompt — so the only question is where it
+  goes next, and a pipe into the store beats a write into a file that keeps it
+  forever.
+
+  Three refusals rather than fallbacks: a **configured-but-missing script** is an
+  error, because degrading to "no vault" would write a fresh plaintext copy of
+  the credential you moved out; a **multi-line value** is refused, because the
+  store reads one line and would save it truncated; and a **store that exits
+  non-zero** fails the login, since by then `config.toml` is untouched and
+  reporting success would leave the credential in neither place.
+
+  When a launch has no credential and a vault is configured, the message now
+  names the vault wrapper instead of `aello login` — the two fixes are opposite,
+  and telling that user to log in makes them re-create the plaintext copy.
+
+  The setting is per machine (as `config.toml` is), so a Linux box leaves it
+  unset and keeps the file fallback. Nothing detects a store: a detector is a
+  cache that goes stale when the checkout moves.
+
 - **`.aello-env` — declare which secrets a project needs, and keep them out of
   plaintext.** A committed file listing bare variable names, one per line. The
   values come from an external secret store that launches aello

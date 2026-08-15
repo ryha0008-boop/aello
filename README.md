@@ -137,6 +137,7 @@ aello persona <name> --from <file> [--project <dir>]     # install a written per
 aello restore <name> [--project <dir>]         # adopt the tracked mirror after pulling another machine's work
 aello run [name] [--resume [id]] [-p <prompt>] [-- <extra args for the agent>]
 aello login [--agent claude|cline]             # store a shared login (asks which, if unsaid)
+aello vault [path] [--clear]                   # point logins at a secret store instead of config.toml
 aello github-setup [--name <repo>] [--public] [--yes]   # create + push the repo via gh
 aello docs [name]                              # print bundled reference docs (no name lists them)
 aello check [path] [--all] [--root <dir>] [--json]      # verify a repo's integrations (exit 1 on failure)
@@ -303,7 +304,16 @@ OPENROUTER_API_KEY
 
 aello does not resolve secrets and never holds one. Values come from whatever supplies your environment — a secret manager that launches aello, a systemd `EnvironmentFile`, or plain exports. aello only checks that each declared variable is set, and **refuses to launch when one is missing**, so you find out at second zero instead of at the first API call.
 
-Two optional variables let aello's own credentials leave `config.toml` the same way: `AELLO_OAUTH_TOKEN` replaces `oauth_token`, and `AELLO_CLINE_API_KEY` replaces `[cline].api_key`. When set, each wins over the file. Full details in [`docs/vault.md`](docs/vault.md).
+Two optional variables let aello's own credentials leave `config.toml` the same way: `AELLO_OAUTH_TOKEN` replaces `oauth_token`, and `AELLO_CLINE_API_KEY` replaces `[cline].api_key`. When set, each wins over the file.
+
+If your store is a script aello can run, point it there once and `aello login` does the move itself — it hands the credential over on stdin and deletes the plaintext copy:
+
+```sh
+aello vault /path/to/vault.ps1     # `aello vault` shows it, `--clear` forgets it
+aello login
+```
+
+Writing a secret is not reading one: aello still has no way to get a value back out. After the move, every launch has to go through the store — that is the point, and it changes the command you type. Full details in [`docs/vault.md`](docs/vault.md).
 
 ## Self-update
 

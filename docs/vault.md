@@ -83,6 +83,60 @@ plaintext. Both can come from the store instead:
 When set, each wins over the config file, so the config value can simply be
 deleted.
 
+#### Point aello at the store, and `aello login` does the move for you
+
+```
+$ aello vault C:\path\to\vault.ps1
+Vault set. `aello login` will store credentials there instead of config.toml.
+```
+
+With that set, both logins hand the credential to the store over **stdin** and
+then remove the plaintext copy from `config.toml`:
+
+```
+$ aello login
+Running 'claude setup-token' — complete the login in your browser...
+<token received — hidden from stdout>
+Stored AELLO_OAUTH_TOKEN  (fingerprint 81c8b503)
+Stored the token in the vault as AELLO_OAUTH_TOKEN.
+Removed the plaintext copy from config.toml.
+Launch through the vault so it reaches the env:
+  vault.ps1 run AELLO_OAUTH_TOKEN -NoCapture -- aello run <blueprint>
+```
+
+`aello vault` with no argument shows the current setting and whether the script
+is still reachable; `--clear` forgets it and logins go back to `config.toml`.
+
+**Writing is not resolving.** The rule that aello never reads a secret out of the
+store still holds — there is no verb here that gets one back. `login` already
+holds the plaintext for a moment, because it just captured it from `claude
+setup-token` or from a prompt; the only question is where it goes next, and a
+pipe into the store beats a write into a file that keeps it forever. The value
+goes over stdin and never as an argument, because arguments are visible in
+process listings and shell history.
+
+Three things this deliberately refuses rather than papers over:
+
+- **A configured-but-missing script is an error, not a fallback.** Degrading to
+  "no vault" would send the next `aello login` down the `config.toml` path and
+  write a fresh plaintext copy of the credential you moved out — silently, and
+  with the exact opposite of the intended effect.
+- **A multi-line value is refused.** The store reads one line, so it would be
+  saved truncated: a credential that is silently half a credential.
+- **A store that exits non-zero fails the login.** By then `config.toml` has not
+  been touched, so nothing is lost — but reporting success would leave the
+  credential in neither place.
+
+The setting is **per machine**, because `config.toml` is. A Linux box leaves it
+unset and keeps the `config.toml` fallback; nothing detects a store, because a
+detector is a cache that goes stale the moment the checkout moves and it would
+make one repo behave differently on two machines.
+
+⚠️ **The move is one-way.** Once the plaintext is out of `config.toml`, a plain
+`aello run` has no credential — the store is the *outer* process, so every
+launch has to go through it. That is the intended end state, not a bug, but it
+changes the command you type every day.
+
 ⚠️ **Not `CLAUDE_CODE_OAUTH_TOKEN`.** That name is stripped from every child by
 `scrub_inherited_credentials`, so a store-supplied one is deleted before it can
 be used — measured: with the token removed from `config.toml` the child saw an
@@ -90,10 +144,11 @@ empty value and every env fell back to an interactive login. Weakening the scrub
 is not the fix; it exists so an agent running `aello` inside an env cannot
 authenticate as whoever owns the ambient variable.
 
-⚠️ **`aello login` writes a plaintext copy back.** `login` and `edit` serialize
-the whole config to disk. If the store is already supplying a credential, both
-commands warn before saving. They warn rather than refuse, because a login is
-also how you replace a credential you have lost.
+⚠️ **With no vault configured, `aello login` writes a plaintext copy back.**
+`login` and `edit` serialize the whole config to disk. If the store is already
+supplying a credential, both commands warn before saving. They warn rather than
+refuse, because a login is also how you replace a credential you have lost.
+`aello vault <path>` is what turns that warning into the store doing the work.
 
 ## What this does not do
 

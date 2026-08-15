@@ -39,9 +39,10 @@
 //! B's own file declares none. [`apply`] strips any name the parent declared
 //! that this project does not.
 
-use anyhow::{bail, Result};
-use std::path::Path;
-use std::process::Command;
+use anyhow::{bail, Context, Result};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 /// The per-project declaration file. Committed on purpose: with bare names it
 /// holds no secret, and it is how another machine learns what to supply.
@@ -211,6 +212,103 @@ pub fn missing_message(project: &Path, missing: &[String]) -> String {
     )
 }
 
+/// This machine's configured store script, if it has one.
+///
+/// Configured-but-missing is an **error**, never a silent `None`. Falling back
+/// would send `aello login` down the `config.toml` path and write a fresh
+/// plaintext copy of the credential the user moved out of it — the failure would
+/// be invisible and its effect the exact opposite of the intent.
+pub fn script(cfg: &crate::models::Config) -> Result<Option<PathBuf>> {
+    let Some(spec) = cfg.vault.as_deref().filter(|s| !s.trim().is_empty()) else {
+        return Ok(None);
+    };
+    let path = crate::config::expand_home(spec);
+    if !path.is_file() {
+        bail!(
+            "the configured vault script does not exist: {}\n\
+             Point aello at it again (`aello vault <path>`) or unset it (`aello vault --clear`) — \
+             until then a login would silently fall back to plaintext in config.toml.",
+            path.display()
+        );
+    }
+    Ok(Some(path))
+}
+
+/// Hand one of aello's own credentials to the store, under the variable name the
+/// launch path reads it back from.
+///
+/// **Writing is not resolving.** This module's rule is that aello never reads a
+/// secret out of the store, and that still holds: there is no verb here that
+/// gets one back. `login` already holds the plaintext for a moment — it captured
+/// it from `claude setup-token` or from a prompt — so the only question is where
+/// it goes next, and a pipe into the store is strictly better than a write into
+/// `config.toml`, which keeps it forever in cleartext.
+///
+/// The value goes over **stdin**, never as an argument: arguments are visible in
+/// process listings and in shell history, and `vault.ps1` refuses a `-Value`
+/// flag for that reason. One line, which is what its `set -FromStdin` reads.
+pub fn store(script: &Path, name: &str, value: &str) -> Result<()> {
+    // A newline is what makes the read terminate — `Invoke-Set` uses
+    // `StreamReader.ReadLine()`, and a value carrying one of its own would be
+    // truncated there rather than here, so refuse instead of storing half a key.
+    if value.contains('\n') || value.contains('\r') {
+        bail!("refusing to store a multi-line value as {name} — the store reads one line");
+    }
+    let shell = if cfg!(windows) { "powershell" } else { "pwsh" };
+    let mut child = Command::new(shell)
+        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(script)
+        .args(["set", name, "-FromStdin"])
+        .stdin(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("could not run {} {}", shell, script.display()))?;
+    child
+        .stdin
+        .take()
+        .expect("stdin was piped")
+        .write_all(format!("{value}\n").as_bytes())
+        .context("could not hand the value to the vault")?;
+    let status = child.wait().context("the vault script did not finish")?;
+    if !status.success() {
+        bail!(
+            "the vault refused to store {name} (exit {}). Nothing was saved anywhere — \
+             run the login again once it is fixed.",
+            status.code().map(|c| c.to_string()).unwrap_or_else(|| "signal".into())
+        );
+    }
+    Ok(())
+}
+
+/// How to launch so a stored credential actually reaches the session.
+///
+/// Storing it is only half: the store is the *outer* process, so an env launched
+/// plainly sees nothing. Printed after every successful store, because that is
+/// the moment the old habit (`aello run <bp>`) stops working.
+pub fn launch_hint(names: &[&str]) -> String {
+    format!(
+        "Launch through the vault so it reaches the env:\n  \
+         vault.ps1 run {} -NoCapture -- aello run <blueprint>",
+        names.join(",")
+    )
+}
+
+/// What to say when a credential aello needs is not available.
+///
+/// The two causes have opposite fixes and must not be confused: without a store
+/// the answer is "log in", with one it is almost always "you did not launch
+/// through the vault". Saying "run `aello login`" to the second user makes them
+/// write a fresh plaintext copy of the credential they just moved out.
+pub fn missing_credential_hint(vault: Option<&Path>, var: &str, login_cmd: &str) -> String {
+    match vault {
+        Some(_) => format!(
+            "no {var} in this environment — the vault holds it, so this launch has to go \
+             through it.\n{}",
+            launch_hint(&[var])
+        ),
+        None => format!("no shared credential — run `{login_cmd}`"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -319,6 +417,123 @@ mod tests {
                 "{v} is stripped from every child, so a vault-supplied value would vanish"
             );
         }
+    }
+
+    fn cfg_with_vault(spec: Option<&str>) -> crate::models::Config {
+        crate::models::Config {
+            vault: spec.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn no_vault_configured_is_a_silent_none() {
+        assert!(script(&cfg_with_vault(None)).unwrap().is_none());
+        // Whitespace is the shape a hand-edited config leaves behind.
+        assert!(script(&cfg_with_vault(Some("   "))).unwrap().is_none());
+    }
+
+    /// A configured-but-missing script must NOT degrade to "no vault". That
+    /// fallback would send `aello login` down the `config.toml` path and write a
+    /// fresh plaintext copy of the credential the setting exists to move out —
+    /// silently, and with the opposite of the intended effect.
+    #[test]
+    fn a_vault_that_is_not_there_is_an_error_not_a_fallback() {
+        let err = script(&cfg_with_vault(Some("/nope/vault.ps1"))).unwrap_err().to_string();
+        assert!(err.contains("does not exist"), "{err}");
+        assert!(err.contains("plaintext"), "{err}");
+    }
+
+    #[test]
+    fn a_real_path_resolves() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("vault.ps1");
+        std::fs::write(&p, "").unwrap();
+        let found = script(&cfg_with_vault(Some(&p.to_string_lossy()))).unwrap();
+        assert_eq!(found.as_deref(), Some(p.as_path()));
+    }
+
+    /// The store reads ONE line, so a value carrying a newline would be stored
+    /// truncated — a credential that is silently half a credential. Refuse here,
+    /// where the error can still name what happened.
+    #[test]
+    fn a_multi_line_value_is_refused_rather_than_truncated() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("vault.ps1");
+        std::fs::write(&p, "").unwrap();
+        assert!(store(&p, OAUTH_VAR, "line-one\nline-two").is_err());
+    }
+
+    /// The two causes of a missing credential have opposite fixes, and naming
+    /// the wrong one is actively harmful: told to run `aello login`, a user with
+    /// a vault writes a fresh plaintext copy of what they just moved out of it.
+    #[test]
+    fn the_missing_credential_hint_names_the_fix_that_matches_the_setup() {
+        let with = missing_credential_hint(Some(Path::new("v.ps1")), OAUTH_VAR, "aello login");
+        assert!(with.contains("vault.ps1 run"), "{with}");
+        assert!(!with.contains("aello login"), "{with}");
+
+        let without = missing_credential_hint(None, OAUTH_VAR, "aello login");
+        assert!(without.contains("aello login"), "{without}");
+        assert!(!without.contains("vault.ps1 run"), "{without}");
+    }
+
+    /// Storing is only half the job — the store is the *outer* process, so an
+    /// env launched plainly still sees nothing. The hint has to carry the name
+    /// under which it was stored, or the wrapper injects the wrong variable.
+    #[test]
+    fn the_launch_hint_carries_the_variable_name_and_the_wrapper() {
+        let h = launch_hint(&[OAUTH_VAR, CLINE_KEY_VAR]);
+        assert!(h.contains(OAUTH_VAR), "{h}");
+        assert!(h.contains(CLINE_KEY_VAR), "{h}");
+        assert!(h.contains("-NoCapture"), "{h}");
+        assert!(h.contains("aello run"), "{h}");
+    }
+
+    /// The value must reach the store on **stdin**, never as an argument —
+    /// arguments are visible in process listings and shell history, which is why
+    /// `vault.ps1` has no `-Value` flag to use instead. Measured against a stub
+    /// that records what it was given, rather than reasoned from the arg list.
+    ///
+    /// Windows-only: the store is DPAPI and the interpreter is `powershell`,
+    /// which Linux CI does not have.
+    #[cfg(windows)]
+    #[test]
+    fn the_value_goes_over_stdin_and_never_into_the_arguments() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("seen.txt");
+        let stub = dir.path().join("vault.ps1");
+        std::fs::write(
+            &stub,
+            format!(
+                "param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Argv)\n\
+                 $line = (New-Object IO.StreamReader([Console]::OpenStandardInput())).ReadLine()\n\
+                 Set-Content -LiteralPath '{}' -Value \"args=$($Argv -join ' ')`nstdin=$line\"\n\
+                 exit 0\n",
+                out.to_string_lossy().replace('\\', "\\")
+            ),
+        )
+        .unwrap();
+
+        store(&stub, OAUTH_VAR, "sk-ant-oat-SECRET").unwrap();
+        let seen = std::fs::read_to_string(&out).unwrap();
+        assert!(seen.contains("stdin=sk-ant-oat-SECRET"), "{seen}");
+        assert!(seen.contains(&format!("args=set {OAUTH_VAR} -FromStdin")), "{seen}");
+        let args_line = seen.lines().find(|l| l.starts_with("args=")).unwrap();
+        assert!(!args_line.contains("SECRET"), "the value reached the command line: {args_line}");
+    }
+
+    /// A store that refuses must fail the login loudly. Reporting success here
+    /// would leave the credential nowhere at all — not in the vault, and (by
+    /// then) deliberately not in `config.toml` either.
+    #[cfg(windows)]
+    #[test]
+    fn a_refusing_store_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let stub = dir.path().join("vault.ps1");
+        std::fs::write(&stub, "exit 1\n").unwrap();
+        let err = store(&stub, OAUTH_VAR, "value").unwrap_err().to_string();
+        assert!(err.contains("Nothing was saved"), "{err}");
     }
 
     #[test]

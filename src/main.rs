@@ -95,6 +95,15 @@ enum Commands {
         #[arg(long, value_enum)]
         agent: Option<Agent>,
     },
+    /// Point aello at this machine's secret store, so `aello login` puts the
+    /// credential there instead of in plaintext in `config.toml`.
+    Vault {
+        /// Path to `vault.ps1`. Omit to show the current setting.
+        path: Option<String>,
+        /// Forget the store; logins go back to writing `config.toml`.
+        #[arg(long)]
+        clear: bool,
+    },
     /// Create a GitHub repo for the current project and push (needs `gh`).
     GithubSetup {
         /// Repo name (default: current directory name).
@@ -305,6 +314,7 @@ fn main() {
         Some(Commands::Run { name, resume, prompt, extra }) => cmd_run(name, resume, prompt, extra),
         Some(Commands::Init) => cmd_init(),
         Some(Commands::Login { agent }) => cmd_login(agent),
+        Some(Commands::Vault { path, clear }) => cmd_vault(path, clear),
         Some(Commands::GithubSetup { name, public, yes }) => github::run(name, public, yes),
         Some(Commands::Update { force }) => update::run(force),
         Some(Commands::Completions { shell }) => cmd_completions(shell),
@@ -752,7 +762,16 @@ pub(crate) fn run_blueprint(
         // Token handles auth; skip Claude's interactive first-run wizard.
         let _ = project::mark_onboarded(&env);
     } else if !env.join(".credentials.json").exists() {
-        println!("Launching '{}' — no shared token (run `aello login`); Claude will prompt login.", bp.name);
+        // Name the right fix. With a store configured the cause is almost never
+        // "never logged in" — it is this launch not going through the vault —
+        // and sending that user to `aello login` makes them write a fresh
+        // plaintext copy of the token they just moved out of `config.toml`.
+        let hint = vault::missing_credential_hint(
+            vault::script(&cfg)?.as_deref(),
+            vault::OAUTH_VAR,
+            "aello login",
+        );
+        println!("Launching '{}' — {hint}\nClaude will prompt its own login.", bp.name);
     }
 
     // `--resume` with no value means "continue most recent".
@@ -816,6 +835,21 @@ fn run_cline(
         Some(k) => models::ClineAuth { api_key: Some(k), ..auth.clone() },
         None => auth.clone(),
     };
+    // A Cline env is metered, so a key that resolved to nothing must stop the
+    // launch. `auth_args` omits `-k` when there is none, which is correct for a
+    // keyless provider and indistinguishable from this — the run reaches the
+    // provider and comes back with an error that reads like a bad key.
+    if auth.api_key.is_none() && cfg.vault.is_some() {
+        bail!(
+            "blueprint '{}' has no provider key in this environment.\n{}",
+            bp.name,
+            vault::missing_credential_hint(
+                vault::script(cfg)?.as_deref(),
+                vault::CLINE_KEY_VAR,
+                "aello login --agent cline",
+            )
+        );
+    }
     let auth = &auth;
 
     // Install the credential through `cline auth`. Every run, because the key
@@ -874,15 +908,84 @@ fn warn_if_vault_supplies(var: &str, what: &str) {
     }
 }
 
-fn cmd_login_claude() -> Result<()> {
-    warn_if_vault_supplies(vault::OAUTH_VAR, "token");
-    match auth::capture_setup_token()? {
-        Some(token) => {
-            let mut cfg = config::load()?;
-            cfg.oauth_token = Some(token);
-            config::save(&cfg)?;
-            println!("Saved shared login token. All envs will use it (CLAUDE_CODE_OAUTH_TOKEN).");
+/// Show or set this machine's secret store.
+///
+/// A path, not a URL and not a credential: the file it names is the only thing
+/// that ever holds a plaintext value, and pointing at it is what lets `aello
+/// login` hand the credential over instead of writing it into `config.toml`.
+fn cmd_vault(path: Option<String>, clear: bool) -> Result<()> {
+    let mut cfg = config::load()?;
+    if clear {
+        let had = cfg.vault.take();
+        config::save(&cfg)?;
+        match had {
+            Some(p) => println!(
+                "Forgot the vault ({p}). Logins write `config.toml` again — the credentials \
+                 already in the store stay there, and an env still reads them when you launch \
+                 through it."
+            ),
+            None => println!("No vault was configured."),
         }
+        return Ok(());
+    }
+    let Some(spec) = path else {
+        match &cfg.vault {
+            Some(p) => {
+                println!("vault: {p}");
+                // Report reachability rather than only the string: a moved
+                // checkout leaves a setting that reads as configured and fails
+                // only at the next login.
+                cfg.vault = Some(p.clone());
+                match vault::script(&cfg) {
+                    Ok(_) => println!("Reachable. `aello login` stores the credential there."),
+                    Err(e) => println!("{e}"),
+                }
+            }
+            None => println!(
+                "No vault configured — `aello login` writes the credential into config.toml in \
+                 plaintext. Point aello at your store with: aello vault <path-to-vault.ps1>"
+            ),
+        }
+        return Ok(());
+    };
+    cfg.vault = Some(spec);
+    // Validate before saving, so a typo is refused rather than stored as a
+    // setting that quietly does nothing until the next login.
+    vault::script(&cfg)?;
+    config::save(&cfg)?;
+    println!("Vault set. `aello login` will store credentials there instead of config.toml.");
+    println!("{}", vault::launch_hint(&[vault::OAUTH_VAR]));
+    Ok(())
+}
+
+fn cmd_login_claude() -> Result<()> {
+    let store = vault::script(&config::load()?)?;
+    if store.is_none() {
+        warn_if_vault_supplies(vault::OAUTH_VAR, "token");
+    }
+    match auth::capture_setup_token()? {
+        Some(token) => match &store {
+            // Hand it straight over and drop the plaintext copy. Ordered so a
+            // failed store leaves `config.toml` exactly as it was: the token is
+            // only unreachable when both halves have been done.
+            Some(script) => {
+                vault::store(script, vault::OAUTH_VAR, &token)?;
+                let mut cfg = config::load()?;
+                let dropped = cfg.oauth_token.take().is_some();
+                config::save(&cfg)?;
+                println!("Stored the token in the vault as {}.", vault::OAUTH_VAR);
+                if dropped {
+                    println!("Removed the plaintext copy from config.toml.");
+                }
+                println!("{}", vault::launch_hint(&[vault::OAUTH_VAR]));
+            }
+            None => {
+                let mut cfg = config::load()?;
+                cfg.oauth_token = Some(token);
+                config::save(&cfg)?;
+                println!("Saved shared login token. All envs will use it (CLAUDE_CODE_OAUTH_TOKEN).");
+            }
+        },
         None => println!("Cancelled — no token saved."),
     }
     Ok(())
@@ -899,7 +1002,10 @@ fn cmd_login_claude() -> Result<()> {
 fn cmd_login_cline() -> Result<()> {
     let cfg = config::load()?;
     let current = cfg.cline.as_ref();
-    warn_if_vault_supplies(vault::CLINE_KEY_VAR, "key");
+    let store = vault::script(&cfg)?;
+    if store.is_none() {
+        warn_if_vault_supplies(vault::CLINE_KEY_VAR, "key");
+    }
     println!("Cline is billed per token by your provider — this is not the Claude subscription.");
     let provider = prompt(
         "Provider id (openrouter, cline, anthropic, …)",
@@ -912,15 +1018,41 @@ fn cmd_login_cline() -> Result<()> {
     let key = prompt_secret("API key (hidden; blank to keep any existing / use no key)")?;
     let base_url = prompt_optional("Base URL override (blank for the provider default)")?;
 
-    let api_key = key.or_else(|| current.and_then(|c| c.api_key.clone()));
+    // With a store, the key goes there and `config.toml` keeps only the parts
+    // that are not secret (provider, model, base URL). A blank answer still
+    // means "keep what is already set" — which is now the stored value, left
+    // untouched precisely because there is no verb here that could read it back
+    // and rewrite it.
+    let typed_a_key = key.is_some();
+    let api_key = match (&store, &key) {
+        (Some(script), Some(k)) => {
+            vault::store(script, vault::CLINE_KEY_VAR, k)?;
+            None
+        }
+        (Some(_), None) => None,
+        (None, _) => key.or_else(|| current.and_then(|c| c.api_key.clone())),
+    };
 
     // Re-read immediately before mutating — four prompts is an unbounded amount
     // of wall-clock time, and saving the snapshot taken before them would drop
     // an `aello login` (or an `aello add`) made in another terminal meanwhile.
     let mut cfg = config::load()?;
+    let dropped = store.is_some()
+        && cfg.cline.as_ref().and_then(|c| c.api_key.as_ref()).is_some();
     cfg.cline = Some(models::ClineAuth { provider, api_key, model, base_url });
     config::save(&cfg)?;
-    println!("Saved the Cline login. Every Cline env will use it.");
+    if store.is_some() {
+        if typed_a_key {
+            println!("Stored the Cline key in the vault as {}.", vault::CLINE_KEY_VAR);
+        }
+        if dropped {
+            println!("Removed the plaintext copy from config.toml.");
+        }
+        println!("Saved the provider, model and base URL in config.toml — none of those is a secret.");
+        println!("{}", vault::launch_hint(&[vault::CLINE_KEY_VAR]));
+    } else {
+        println!("Saved the Cline login. Every Cline env will use it.");
+    }
     Ok(())
 }
 

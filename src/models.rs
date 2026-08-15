@@ -295,6 +295,16 @@ pub struct Config {
     /// billing, and one being set says nothing about the other.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cline: Option<ClineAuth>,
+    /// Path to this machine's secret store script (`vault.ps1`), when it has
+    /// one. Set via `aello vault <path>`. A **path, never a secret** — the file
+    /// it names is the only thing that ever sees a plaintext credential.
+    ///
+    /// Per-machine because `config.toml` is: the store is Windows DPAPI, so a
+    /// VPS leaves this unset and keeps the `config.toml` fallback. Opt-in rather
+    /// than detected — a detector is a cache that goes stale when the checkout
+    /// moves, and it would make one repo behave differently on two machines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vault: Option<String>,
 }
 
 impl Config {

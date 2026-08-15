@@ -33,7 +33,10 @@ pub fn capture_setup_token() -> Result<Option<String>> {
             // (redirectable) stdout — `aello login | tee`, CI logs, tmux capture
             // would otherwise persist the long-lived token in cleartext.
             if line_has_token(&line) {
-                let _ = writeln!(out, "<token received — hidden from stdout, stored in config.toml>");
+                // Where it lands is decided by the caller (vault or
+                // `config.toml`), so don't name one of them here — the line
+                // outlived the config-only era once already.
+                let _ = writeln!(out, "<token received — hidden from stdout>");
             } else {
                 let _ = writeln!(out, "{line}");
             }
