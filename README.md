@@ -286,9 +286,24 @@ For a maintainer or contributor, commits made through a blueprint are authored a
 
 ## Configuration
 
-Your blueprints, login token, and transcript folder live in a `config.toml` in your OS's usual config location. The token is stored in plain text on your own machine — regenerate it once a year with `aello login`.
+Your blueprints, login token, and transcript folder live in a `config.toml` in your OS's usual config location. The token is stored in plain text on your own machine — regenerate it once a year with `aello login`, or keep it out of the file entirely (see Secrets below).
 
 **The transcript folder grows.** When a session ends, aello archives it there — the `/handoff` note plus a full copy of the transcript, including every tool call and result and a summary of the agent's reasoning. Transcripts run about 1.3 MB each and occasionally tens of MB, so expect gigabytes over time. Point it somewhere roomy with `C` in the TUI, or prune it yourself; nothing else reads it. Details in [`docs/concepts.md`](docs/concepts.md).
+
+## Secrets
+
+If a project needs an API key at runtime, list the **names** of the variables in a `.aello-env` at the project root — one bare name per line, `#` comments allowed:
+
+```
+# what this project needs at runtime
+OPENROUTER_API_KEY
+```
+
+**Commit it.** It holds no secret, and it is how another machine learns what the project needs. A line containing `=` is an error, not a value — that is what keeps a real key from ever being typed into it.
+
+aello does not resolve secrets and never holds one. Values come from whatever supplies your environment — a secret manager that launches aello, a systemd `EnvironmentFile`, or plain exports. aello only checks that each declared variable is set, and **refuses to launch when one is missing**, so you find out at second zero instead of at the first API call.
+
+Two optional variables let aello's own credentials leave `config.toml` the same way: `AELLO_OAUTH_TOKEN` replaces `oauth_token`, and `AELLO_CLINE_API_KEY` replaces `[cline].api_key`. When set, each wins over the file. Full details in [`docs/vault.md`](docs/vault.md).
 
 ## Self-update
 

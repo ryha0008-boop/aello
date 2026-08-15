@@ -89,6 +89,8 @@ Memory is a third, separate channel — nothing to do with the role. On first pl
 
 **An env's auth is aello's to choose, and only aello's.** Every launch strips `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` from the child's environment before setting whatever the config says. Agents run `aello` from inside an aello env, so inheriting one of those was the normal case rather than an exotic one — and with no token configured, aello printed "Claude will prompt login" while the env quietly authenticated as whoever owned the ambient variable. If you *want* an env on an API key, put it in that env's `settings.json`, not in the shell you launch from.
 
+**The token does not have to live in `config.toml`.** Set `AELLO_OAUTH_TOKEN` in aello's own environment — from a secret manager, a systemd `EnvironmentFile`, anything — and it wins over the config value, which can then be deleted. `AELLO_CLINE_API_KEY` does the same for `[cline].api_key`. Deliberately not `CLAUDE_CODE_OAUTH_TOKEN`: that name is one of the three stripped above, so a value supplied under it is removed before it can be used. See [vault.md](vault.md).
+
 On a fresh env, aello also marks onboarding complete (`hasCompletedOnboarding` in `.claude.json`) so Claude skips its first-run wizard and goes straight in.
 
 ## contextdb (transcripts)
