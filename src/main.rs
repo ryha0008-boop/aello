@@ -987,34 +987,46 @@ fn cmd_vault(path: Option<String>, clear: bool) -> Result<()> {
     Ok(())
 }
 
+/// Persist a freshly captured Claude token: into the store when one is
+/// configured, into `config.toml` otherwise.
+///
+/// **Shared with the TUI's `L` login on purpose.** The TUI had its own copy
+/// setting `cfg.oauth_token` directly — the forgotten-branch shape this codebase
+/// keeps hitting — so logging in from the TUI would have written the plaintext
+/// straight back into `config.toml` and silently undone the move to the store,
+/// on the machine where the move had just been made. `no_second_writer_of_the_oauth_token`
+/// keeps it that way.
+pub(crate) fn persist_oauth_token(token: String) -> Result<()> {
+    // Ordered so a failed store leaves `config.toml` exactly as it was: the
+    // token is only unreachable if both halves have been done.
+    match vault::script(&config::load()?)? {
+        Some(script) => {
+            vault::store(&script, vault::OAUTH_VAR, &token)?;
+            let mut cfg = config::load()?;
+            let dropped = cfg.oauth_token.take().is_some();
+            config::save(&cfg)?;
+            println!("Stored the token in the vault as {}.", vault::OAUTH_VAR);
+            if dropped {
+                println!("Removed the plaintext copy from config.toml.");
+            }
+            println!("{}", vault::launch_hint(&[vault::OAUTH_VAR]));
+        }
+        None => {
+            let mut cfg = config::load()?;
+            cfg.oauth_token = Some(token);
+            config::save(&cfg)?;
+            println!("Saved shared login token. All envs will use it (CLAUDE_CODE_OAUTH_TOKEN).");
+        }
+    }
+    Ok(())
+}
+
 fn cmd_login_claude() -> Result<()> {
-    let store = vault::script(&config::load()?)?;
-    if store.is_none() {
+    if vault::script(&config::load()?)?.is_none() {
         warn_if_vault_supplies(vault::OAUTH_VAR, "token");
     }
     match auth::capture_setup_token()? {
-        Some(token) => match &store {
-            // Hand it straight over and drop the plaintext copy. Ordered so a
-            // failed store leaves `config.toml` exactly as it was: the token is
-            // only unreachable when both halves have been done.
-            Some(script) => {
-                vault::store(script, vault::OAUTH_VAR, &token)?;
-                let mut cfg = config::load()?;
-                let dropped = cfg.oauth_token.take().is_some();
-                config::save(&cfg)?;
-                println!("Stored the token in the vault as {}.", vault::OAUTH_VAR);
-                if dropped {
-                    println!("Removed the plaintext copy from config.toml.");
-                }
-                println!("{}", vault::launch_hint(&[vault::OAUTH_VAR]));
-            }
-            None => {
-                let mut cfg = config::load()?;
-                cfg.oauth_token = Some(token);
-                config::save(&cfg)?;
-                println!("Saved shared login token. All envs will use it (CLAUDE_CODE_OAUTH_TOKEN).");
-            }
-        },
+        Some(token) => persist_oauth_token(token)?,
         None => println!("Cancelled — no token saved."),
     }
     Ok(())

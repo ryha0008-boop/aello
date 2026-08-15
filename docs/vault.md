@@ -195,6 +195,45 @@ refuse, because a login is also how you replace a credential you have lost.
   single command that needs it through the store directly, which keeps the value
   out of the session entirely.
 
+## Testing it end to end
+
+In order. Each step is checkable without printing a secret.
+
+**1. Point aello at the store.** `aello vault <path-to-vault.ps1>`, then `aello
+vault` on its own — it should say `Reachable`.
+
+**2. Log in, and watch where the credential goes.** Both logins go *into aello*;
+aello writes the store. You never run `vault.ps1 set` by hand for these.
+
+- Claude: `aello login`. The browser flow is unchanged — `claude setup-token`
+  opens it, you sign in with the subscription, and it mints a long-lived token.
+  aello then prints `Stored the token in the vault as AELLO_OAUTH_TOKEN` and
+  `Removed the plaintext copy from config.toml`.
+- Cline: `aello login --agent cline`. Paste the provider key at the hidden
+  prompt. Provider, model and base URL stay in `config.toml`; only the key moves.
+
+`vault.ps1 list` should now show both names with a changed `Updated` time. A
+**blank** key at the Cline prompt means "keep what is stored" — aello cannot read
+it back, so it leaves it alone.
+
+**3. Confirm `config.toml` no longer holds them.** `oauth_token` and
+`[cline].api_key` should be gone from `%APPDATA%\aello\config\config.toml`. The
+TUI's footer should read `AUTH: VAULT ✓`, not `AUTH: NONE ✗`.
+
+**4. Launch, without typing a wrapper.** A plain `aello run <blueprint>` should
+print a `[vault] injected …` banner and then start normally. That banner *is* the
+proof aello wrapped itself; no banner means it did not, and the session is
+running on whatever `config.toml` still had.
+
+**5. Prove the right value arrived.** Compare fingerprints, never values — see
+below. A launch that succeeds while fingerprints *disagree* means something other
+than the store supplied it, which is the failure worth telling apart from a
+clean one.
+
+**A project secret** is the same path with one extra step: put its bare name in a
+committed `.aello-env` at the project root, store it under the identical name,
+and launch normally. Name equality is the whole contract.
+
 ## Verifying a secret arrived without leaking it
 
 Printing the value to prove you have it defeats the purpose. Compare

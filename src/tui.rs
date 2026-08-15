@@ -246,6 +246,7 @@ struct App {
     /// Launch directory as "PARENT / CURRENT", uppercased — shown top-right.
     dir: String,
     has_token: bool,
+    token_in_vault: bool,
     /// Machine-wide voice mute, cached so the footer doesn't re-read the shared
     /// state file every frame. Refreshed on launch and whenever M toggles it.
     voice_muted: bool,
@@ -268,6 +269,11 @@ impl App {
         let local = local_indices(&blueprints);
         let mut app = Self {
             has_token: cfg.oauth_token.is_some(),
+            // A token that has moved to the store leaves `config.toml` empty,
+            // which the footer used to render as "AUTH: NONE ✗ (press L)" — a
+            // false alarm inviting exactly the action that puts the plaintext
+            // back. Its own state, not a third meaning bolted onto `has_token`.
+            token_in_vault: cfg.oauth_token.is_none() && cfg.vault.is_some(),
             blueprints,
             local,
             view: Vec::new(),
@@ -365,11 +371,14 @@ pub fn run() -> Result<()> {
             PostExit::Login => {
                 // Terminal restored; setup-token runs its browser flow here.
                 match crate::auth::capture_setup_token() {
+                    // Through the shared path, never a second copy here: this
+                    // branch used to set `cfg.oauth_token` itself, so a TUI
+                    // login on a machine whose token had just moved to the store
+                    // wrote the plaintext straight back into `config.toml`.
                     Ok(Some(token)) => {
-                        let mut cfg = config::load()?;
-                        cfg.oauth_token = Some(token);
-                        config::save(&cfg)?;
-                        println!("Saved shared login token.");
+                        if let Err(e) = crate::persist_oauth_token(token) {
+                            eprintln!("error: {e:#}");
+                        }
                     }
                     Ok(None) => println!("Login cancelled."),
                     Err(e) => eprintln!("error: {e:#}"),
@@ -1170,6 +1179,8 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
     let status = Line::from(Span::styled(format!(" {}", app.status), Style::default().fg(ORANGE)));
     let auth_span = if app.has_token {
         Span::styled("AUTH: TOKEN ✓", Style::default().fg(GREEN).add_modifier(Modifier::BOLD))
+    } else if app.token_in_vault {
+        Span::styled("AUTH: VAULT ✓", Style::default().fg(GREEN).add_modifier(Modifier::BOLD))
     } else {
         Span::styled("AUTH: NONE ✗ (press L)", Style::default().fg(ERR))
     };
@@ -2575,6 +2586,54 @@ fn truncate(s: &str, n: usize) -> String {
 mod tests {
     use super::*;
 
+    /// There must be exactly ONE writer of the OAuth token, and it is
+    /// `main::persist_oauth_token`, because that is the only place that knows
+    /// whether a vault is configured.
+    ///
+    /// This file had a second one: the `L` login assigned `cfg.oauth_token`
+    /// directly, so a TUI login on a machine whose token had just moved to the
+    /// store wrote the plaintext straight back into `config.toml` and undid the
+    /// move — silently, and reported "Saved shared login token." A source-level
+    /// assertion because the two paths cannot be compared any other way without
+    /// mutating `AELLO_CONFIG_DIR`, which is process-global and races.
+    #[test]
+    fn no_second_writer_of_the_oauth_token() {
+        let src = include_str!("tui.rs");
+        // Assembled at runtime, never written out whole: `include_str!` pulls in
+        // this test module too, so a literal needle matches its own assertion
+        // and the guard fails on a clean file — a check that can only ever be
+        // red is no better than one that can only ever be green.
+        let needle = format!("{}{}", "oauth_token", " = Some(");
+        assert!(
+            !src.contains(&needle),
+            "tui.rs writes the OAuth token itself — a vault-configured machine would get a \
+             plaintext copy back in config.toml. Call crate::persist_oauth_token(token) instead."
+        );
+    }
+
+    /// A token living in the store must not render as "no auth". It did, and
+    /// the footer's remedy is `press L` — the one action that puts the
+    /// plaintext back.
+    #[test]
+    fn a_token_in_the_vault_does_not_read_as_missing() {
+        let mut app = bare_app();
+        app.has_token = false;
+        app.token_in_vault = true;
+        let mut term =
+            Terminal::new(ratatui::backend::TestBackend::new(140, 20)).expect("test terminal");
+        term.draw(|f| draw(f, &app)).expect("draw");
+        let text: String = term
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<Vec<_>>()
+            .concat();
+        assert!(text.contains("AUTH: VAULT"), "{text}");
+        assert!(!text.contains("AUTH: NONE"), "{text}");
+    }
+
     fn press(code: KeyCode, mods: KeyModifiers) -> KeyEvent {
         KeyEvent::new(code, mods)
     }
@@ -2592,6 +2651,7 @@ mod tests {
             status: String::new(),
             dir: "TEST / DIR".into(),
             has_token: true,
+            token_in_vault: false,
             voice_muted: false,
             help_scroll_max: std::cell::Cell::new(0),
             tokens: None,
