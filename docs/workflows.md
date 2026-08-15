@@ -84,7 +84,7 @@ Steps 2 and 3 are different things and you usually want both: `/sync` puts your 
 
 Working the same blueprint from a desktop and a laptop — and the two need not run the same OS, since every path is derived per machine rather than carried in the mirror.
 
-What crosses between them is the tracked `claude-internal/<name>/` folder: memory, skills, the persona snapshot, and the resume note. What does **not** cross is `config.toml` (so the blueprint is added once per machine), your auth, and the contextdb — transcripts and session history stay on the machine that produced them.
+What crosses between them is the tracked `claude-internal/<name>/` folder: memory, skills, your custom slash commands, the persona snapshot, and the resume note. What does **not** cross is `config.toml` (so the blueprint is added once per machine), your auth, and the contextdb — transcripts and session history stay on the machine that produced them.
 
 **First time on the second machine:**
 

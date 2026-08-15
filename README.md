@@ -113,7 +113,7 @@ Four commands come with every agent. You type them; agents never run them by the
 - **`/note <agent>`** — leaves a message for a *different* agent, for when two split a project and one hits something on the other's side.
 - **`/twosentences`** — condenses the last response to two sentences.
 
-Rewritten one of those for a project and want to keep it? Put an empty `.aello-keep` file beside it and aello stops regenerating it.
+Rewritten one of those for a project and want to keep it? Put an empty `.aello-keep` file beside it and aello stops regenerating it. A skill vendored from someone else's repo takes `.aello-nomirror` instead, which keeps it out of the tracked `claude-internal/` mirror rather than out of regeneration.
 
 Transcripts of every session are archived outside the repo so nothing is lost when a session ends.
 
@@ -157,7 +157,7 @@ aello update [--force]                         # self-update (--force reinstalls
 
 - `edit` changes a blueprint in place, including `--rename <new>` (validated, rejected if the name is taken) — which also moves the placed `.claude-env-<name>/` env dir and its `claude-internal/<name>/` mirror in the current project. `--role` swaps the role outright; omitting a flag leaves that field as-is. Changes apply on the next `run`; the global persona in an already-placed env is never re-clobbered.
 - `persona` replaces a placed env's `CLAUDE.md` with a persona you have written for that project, sets the blueprint to `custom` so aello stops seeding a template over it, and records the generation in `<env>/persona.gen` (`gen1 2026-08-03`). It is the only command that overwrites a persona — `run` never does. `aello list` then shows `custom` for that blueprint, so you can see at a glance which envs have a real persona.
-- `restore` is for working one blueprint from **two machines**. `aello run` seeds an env from the tracked `claude-internal/<name>/` mirror only when there is no env dir at all (a fresh clone); on the machine that already has one, pulling another machine's commits changes nothing the agent can see. `restore` copies that pulled memory and skills into the env dir and puts the resume note back at the project root. It is additive — memory and skills are merged, a differing persona is reported rather than replaced — so it's safe to run whenever you're unsure. The full loop is in [`docs/workflows.md`](docs/workflows.md#one-env-two-machines).
+- `restore` is for working one blueprint from **two machines**. `aello run` seeds an env from the tracked `claude-internal/<name>/` mirror only when there is no env dir at all (a fresh clone); on the machine that already has one, pulling another machine's commits changes nothing the agent can see. `restore` copies that pulled memory, skills and custom slash commands into the env dir and puts the resume note back at the project root. It is additive — all three are merged, a differing persona is reported rather than replaced — so it's safe to run whenever you're unsure. The full loop is in [`docs/workflows.md`](docs/workflows.md#one-env-two-machines).
 - `run` with no name uses the sole blueprint (errors if there are several).
 - `--resume` with no value continues the most recent session; `--resume <id>` resumes a specific one. The TUI (`S`) browses sessions to resume.
 - `-p "<prompt>"` runs headless and exits. Anything after `--` is passed straight to `claude`.
