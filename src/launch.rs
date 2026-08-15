@@ -17,7 +17,7 @@ use std::process::Command;
 ///
 /// Removed on the *child*, never unset in this process — `aello` itself still
 /// reads its own environment normally.
-const INHERITED_CREDENTIALS: &[&str] =
+pub const INHERITED_CREDENTIALS: &[&str] =
     &["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"];
 
 /// Strip [`INHERITED_CREDENTIALS`] from a child command. Call before setting any
@@ -87,9 +87,14 @@ pub fn launch(
     extra: &[String],
     contextdb: &Path,
     oauth_token: Option<&str>,
+    declared: &[String],
 ) -> Result<i32> {
     let mut c = Command::new(claude_exe());
     scrub_inherited_credentials(&mut c);
+    // Project secrets: keep the ones this project declares in `.aello-env`, drop
+    // the ones a parent launch declared and this one does not. Before the block
+    // below, so nothing aello sets can be removed by it.
+    crate::vault::apply(&mut c, declared, &crate::vault::inherited_declarations());
     c.env("CLAUDE_CONFIG_DIR", env_dir);
     // Unified transcript folder for the PostCompact hook.
     c.env("AELLO_CONTEXTDB", contextdb);

@@ -18,6 +18,7 @@ mod templates;
 mod tokens;
 mod tui;
 mod update;
+mod vault;
 mod voice;
 
 use models::{Agent, Blueprint, Instance, Role};
@@ -693,11 +694,22 @@ pub(crate) fn run_blueprint(
 
     let project = std::env::current_dir().context("could not determine current directory")?;
 
+    // What this project needs from the vault. Checked before anything is placed
+    // or launched: the alternative is an agent that works until it first needs
+    // the key, and the measured response to *that* is the user pasting the key
+    // into the chat — which is how an OpenRouter key reached twelve transcript
+    // records. Absent file means nothing declared, which is every project today.
+    let declared = vault::read(&project)?;
+    let missing = vault::missing(&declared);
+    if !missing.is_empty() {
+        bail!("{}", vault::missing_message(&project, &missing));
+    }
+
     // The two agents diverge completely from here — different env dir, different
     // placement, different launch mechanism. Everything Cline is in `cline.rs`;
     // the rest of this function is Claude's and stays that way.
     if bp.agent == Agent::Cline {
-        return run_cline(&cfg, bp, &project, resume, prompt, extra);
+        return run_cline(&cfg, bp, &project, resume, prompt, extra, &declared);
     }
 
     let env = project::env_dir(&project, &bp.name);
@@ -729,7 +741,14 @@ pub(crate) fn run_blueprint(
 
     // Concurrency-safe shared login: pass the long-lived OAuth token to the env.
     // No token configured → Claude prompts its own login in this env.
-    if cfg.oauth_token.is_some() {
+    //
+    // The vault wins over `config.toml` so the token can leave that file
+    // entirely — it is plaintext there, and the transcript scan found it dumped
+    // into sessions six times. Resolved here rather than folded into `cfg`,
+    // because `aello login`/`edit` serialize the whole struct back to disk and
+    // would write the vault's value straight back out in plaintext.
+    let oauth_token = vault::env_secret(vault::OAUTH_VAR).or_else(|| cfg.oauth_token.clone());
+    if oauth_token.is_some() {
         // Token handles auth; skip Claude's interactive first-run wizard.
         let _ = project::mark_onboarded(&env);
     } else if !env.join(".credentials.json").exists() {
@@ -742,7 +761,7 @@ pub(crate) fn run_blueprint(
         other => other,
     };
     let contextdb = config::contextdb_dir(&cfg);
-    launch::launch(&env, &bp.name, resume.as_ref(), prompt, extra, &contextdb, cfg.oauth_token.as_deref())
+    launch::launch(&env, &bp.name, resume.as_ref(), prompt, extra, &contextdb, oauth_token.as_deref(), &declared)
 }
 
 /// Place and launch a Cline blueprint.
@@ -757,6 +776,7 @@ fn run_cline(
     resume: Option<Option<String>>,
     prompt: Option<&str>,
     extra: &[String],
+    declared: &[String],
 ) -> Result<i32> {
     let env = cline::env_dir(project, &bp.name);
     // Same persona resolution as a Claude env — the bundled templates are just
@@ -789,6 +809,15 @@ fn run_cline(
         );
     }
 
+    // Same precedence as the Claude token: a vault-supplied key wins, so
+    // `config.toml` can stop holding this one in plaintext too. Overlaid onto a
+    // local copy and never onto `cfg`, which `aello login` writes back to disk.
+    let auth = match vault::env_secret(vault::CLINE_KEY_VAR) {
+        Some(k) => models::ClineAuth { api_key: Some(k), ..auth.clone() },
+        None => auth.clone(),
+    };
+    let auth = &auth;
+
     // Install the credential through `cline auth`. Every run, because the key
     // can change in config.toml and a marker saying "already authenticated"
     // would go stale exactly then.
@@ -800,7 +829,7 @@ fn run_cline(
         bail!("Cline has no 'continue most recent' — pass a session id: aello run {} --resume <id>", bp.name);
     }
 
-    cline::launch(&env, &bp.name, Some(auth), &bp.model, resume.as_ref(), prompt, extra)
+    cline::launch(&env, &bp.name, Some(auth), &bp.model, resume.as_ref(), prompt, extra, declared)
 }
 
 /// `aello login` covers two different accounts, so it asks which one rather
@@ -827,7 +856,26 @@ fn cmd_login(agent: Option<Agent>) -> Result<()> {
     }
 }
 
+/// Warn before a login writes a credential into `config.toml` that the vault is
+/// already supplying.
+///
+/// This is the trap the whole vault path has to survive: `login` and `edit`
+/// serialize the entire `Config`, so a machine whose token lives in the vault
+/// gets a plaintext copy written back the first time anyone logs in — the key
+/// moves into the vault and aello quietly copies it out again, with nothing
+/// saying so. Warn rather than refuse: a login is also how you *replace* a
+/// vault-supplied credential you have lost.
+fn warn_if_vault_supplies(var: &str, what: &str) {
+    if vault::env_secret(var).is_some() {
+        println!(
+            "Note: {var} is set, so the vault is already supplying this {what} — saving here \
+             puts a plaintext copy in config.toml, which is what moving it to the vault avoided."
+        );
+    }
+}
+
 fn cmd_login_claude() -> Result<()> {
+    warn_if_vault_supplies(vault::OAUTH_VAR, "token");
     match auth::capture_setup_token()? {
         Some(token) => {
             let mut cfg = config::load()?;
@@ -851,6 +899,7 @@ fn cmd_login_claude() -> Result<()> {
 fn cmd_login_cline() -> Result<()> {
     let cfg = config::load()?;
     let current = cfg.cline.as_ref();
+    warn_if_vault_supplies(vault::CLINE_KEY_VAR, "key");
     println!("Cline is billed per token by your provider — this is not the Claude subscription.");
     let provider = prompt(
         "Provider id (openrouter, cline, anthropic, …)",

@@ -17,8 +17,8 @@ pub struct Doc {
 
 /// Preferred reading order; anything not listed sorts after, alphabetically.
 const ORDER: &[&str] =
-    &["concepts", "roles", "workflows", "skills", "voice", "tokens", "cline", "upgrading",
-      "migrate", "development", "troubleshooting"];
+    &["concepts", "roles", "workflows", "skills", "voice", "tokens", "cline", "vault",
+      "upgrading", "migrate", "development", "troubleshooting"];
 
 fn rank(slug: &str) -> usize {
     ORDER.iter().position(|s| *s == slug).unwrap_or(ORDER.len())

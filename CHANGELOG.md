@@ -2,6 +2,54 @@
 
 ## [Unreleased]
 
+### Added
+- **`.aello-env` — declare which secrets a project needs, and keep them out of
+  plaintext.** A committed file listing bare variable names, one per line. The
+  values come from an external secret store that launches aello
+  (`vault.ps1 run -NoCapture … -- aello run <bp>`); aello never resolves a secret
+  and never holds one. Environment pass-through already worked, so this adds no
+  injection — it adds the three things injection alone leaves broken.
+
+  **A declared name that is not set stops the launch.** Otherwise you get an
+  agent that works until it first needs the key, and the measured response to
+  that is the user pasting the key into the chat — which is how one OpenRouter
+  key reached twelve transcript records. A present-but-empty variable counts as
+  missing, because a variable set to nothing reads as configured everywhere and
+  silences the check written to catch it.
+
+  **A line containing `=` is refused with an error.** That is the point of the
+  format, not a style rule: a `KEY=value` file eventually holds a real key in a
+  project directory, while bare names make that structurally impossible — which
+  is what lets the file be committed, so a fresh clone learns what a project
+  needs without anyone carrying a value across. A malformed name is an error too,
+  never a silent skip.
+
+  **Secrets no longer leak sideways between projects.** Agents run `aello` from
+  inside an aello env routinely, so project A's keys would otherwise ride into
+  project B's session while B declares none. Each launch publishes its own list
+  as `AELLO_DECLARED`; a nested run strips every inherited name its project does
+  not declare.
+
+- **aello's own credentials can leave `config.toml`.** `AELLO_OAUTH_TOKEN` and
+  `AELLO_CLINE_API_KEY` take precedence over `oauth_token` and
+  `[cline].api_key`, so both can live in the secret store and be deleted from the
+  config file — where they sit in plaintext, and where a transcript scan found
+  the token dumped into sessions six times.
+
+  Deliberately **not** `CLAUDE_CODE_OAUTH_TOKEN`: that name is stripped from
+  every child by the credential scrub, so a store-supplied one was deleted before
+  it could be used, and every env silently fell back to an interactive login.
+  Measured. The scrub is not weakened — it exists so an agent running `aello`
+  inside an env cannot authenticate as whoever owns the ambient variable.
+
+  `aello login` now warns when the store is already supplying the credential it
+  is about to write, because `login` and `edit` serialize the whole config to
+  disk: without the warning the key moves into the store and aello quietly copies
+  it back out in plaintext. It warns rather than refuses, since a login is also
+  how you replace a credential you have lost.
+
+- `docs/vault.md`, in `aello docs`, the TUI reader and the site.
+
 ### Fixed
 - **Custom slash commands now cross machines.** `<env>/commands/*.md` — your own
   `/whatever` commands — were the one part of an env the `claude-internal/`

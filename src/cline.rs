@@ -524,9 +524,14 @@ pub fn launch(
     resume: Option<&Option<String>>,
     prompt: Option<&str>,
     extra: &[String],
+    declared: &[String],
 ) -> Result<i32> {
     let mut c = Command::new(cline_exe());
     c.args(launch_args(env_dir, model, auth.map(|a| a.provider.as_str()), resume, prompt, extra));
+
+    // Same project-secret handling as a Claude env — a Cline session runs the
+    // same code in the same working tree and needs the same keys.
+    crate::vault::apply(&mut c, declared, &crate::vault::inherited_declarations());
 
     // Per-env git attribution, identical to a Claude env: several blueprints
     // share one working tree and `git blame` has to say which one.
