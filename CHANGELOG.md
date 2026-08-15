@@ -3,6 +3,33 @@
 ## [Unreleased]
 
 ### Added
+- **`aello run` goes through the store itself — no wrapper command to type.**
+  With `aello vault <path>` set and something to fetch (this project's declared
+  names, plus whichever of aello's own credentials have left `config.toml`),
+  `aello run` re-runs itself inside the store. Projects that declare nothing, and
+  machines with no store, are untouched.
+
+  **Declared names are fetched even when already set**, because the store is the
+  authority. Measured on the machine this was built on: a User-scope
+  `OPENROUTER_API_KEY` held a *different* value from the stored one, satisfied
+  the declaration check, and a launch carried the wrong key while reporting
+  success.
+
+  A launch passing `--` extras **cannot** be wrapped and is refused with the
+  manual command, rather than launched without the values. A bare `--` anywhere
+  in a `powershell -File` argument list is eaten by PowerShell's parameter binder
+  and everything after it fails to bind — measured three ways, including `--%`,
+  which does not help. The re-exec therefore omits the separator and relies on
+  the store's documented "first bare token is the name list" fallback.
+
+### Fixed
+- **A `.aello-env` with a UTF-8 BOM no longer rejects its own first line.** Every
+  Windows way of creating that file writes one — PowerShell's `Set-Content
+  -Encoding utf8` and Notepad both do — and it is invisible, so the first
+  declared name came back as "not a usable variable name" and the error blamed a
+  word that was spelled correctly. Hit on the first real `.aello-env` ever
+  written for a project.
+
 - **`aello vault <path>` — `aello login` now puts the credential in your secret
   store instead of `config.toml`.** Point aello at the store script once; both
   logins then hand the credential over on **stdin** (never as an argument, which

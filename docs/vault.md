@@ -34,6 +34,38 @@ The secret store is the **outer** process:
 vault.ps1 run -NoCapture … -- aello run <blueprint>
 ```
 
+**With `aello vault <path>` set you don't type that** — `aello run` re-runs
+itself inside the store, asking for this project's declared names plus whichever
+of its own credentials have left `config.toml`. One command, same result:
+
+```
+$ aello run MyEnv
+[vault] injected OPENROUTER_API_KEY, AELLO_OAUTH_TOKEN (values hidden)
+…
+```
+
+It only happens when there is something to fetch, so a project that declares
+nothing — which is nearly all of them — launches exactly as before. A guard
+variable on the child stops the second aello wrapping again; it lives on the
+process, not on disk, so there is nothing to go stale.
+
+**Declared names are fetched even when they are already set**, because the store
+is the authority. That is not theoretical: on the machine this was built on, a
+User-scope `OPENROUTER_API_KEY` sat in the registry with a *different* value from
+the stored one, satisfied the declaration check, and a launch carried the wrong
+key while reporting success.
+
+Two limits, both loud rather than silent:
+
+- **A launch passing `--` extras cannot be wrapped**, and aello refuses it with
+  the manual command rather than launching without the values. A bare `--`
+  anywhere in a `powershell -File` argument list is eaten by PowerShell's
+  parameter binder, and every argument after it fails to bind — measured three
+  ways, `--%` included, which does not help.
+- **`-NoCapture` turns the store's output masking off.** It has to: a redirected
+  stdout is a pipe, not a console, so a full-screen TUI child gets no terminal.
+  Fine for a terminal you are looking at; wrong for a run you redirect to a file.
+
 Everything aello spawns inherits its environment. That is measured, not assumed:
 a variable set on aello's process reaches the `claude` child unchanged, because
 `std::process::Command` inherits the parent environment and aello removes only

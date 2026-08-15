@@ -76,6 +76,13 @@ pub const CLINE_KEY_VAR: &str = "AELLO_CLINE_API_KEY";
 /// nothing — the failure shape this repo keeps hitting.
 pub fn parse(text: &str) -> Result<Vec<String>> {
     let mut names: Vec<String> = Vec::new();
+    // Strip a UTF-8 BOM. Every Windows way of creating this file writes one —
+    // PowerShell's `Set-Content -Encoding utf8` on 5.1 and Notepad both do — and
+    // it is invisible, so without this the FIRST declared name is rejected as
+    // "not a usable variable name" and the error blames the user's spelling of a
+    // word that is spelled correctly. Measured the first time a real `.aello-env`
+    // was created for a real project.
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     for (i, raw) in text.lines().enumerate() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -279,6 +286,102 @@ pub fn store(script: &Path, name: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+/// Set on the child of a re-exec, so the second aello does not do it again.
+///
+/// A marker on the *process*, not on disk: it describes this one launch and
+/// dies with it, so there is nothing to go stale.
+pub const REEXEC_GUARD: &str = "AELLO_VAULT_WRAPPED";
+
+/// Which names this launch should ask the store for.
+///
+/// The project's declared names **always**, even ones already set in the
+/// environment — the store is the authority, and an ambient value is exactly how
+/// a stale key wins silently. Measured on this machine: a User-scope
+/// `OPENROUTER_API_KEY` differed from the stored one and satisfied the
+/// declaration check, so the launch "passed" carrying the wrong key.
+///
+/// aello's own credential only when `config.toml` does not hold it — otherwise a
+/// machine that has not moved its token yet would ask the store for something it
+/// was never given, and `vault.ps1 run` fails hard on an unknown name.
+pub fn wanted(declared: &[String], cfg: &crate::models::Config, cline: bool) -> Vec<String> {
+    let mut names = declared.to_vec();
+    let mut push = |n: &str| {
+        if !names.iter().any(|x| x == n) {
+            names.push(n.to_string());
+        }
+    };
+    if cline {
+        if cfg.cline.as_ref().and_then(|c| c.api_key.as_ref()).is_none() {
+            push(CLINE_KEY_VAR);
+        }
+    } else if cfg.oauth_token.is_none() {
+        push(OAUTH_VAR);
+    }
+    names
+}
+
+/// The argument vector that re-runs this exact command inside the store.
+///
+/// Split out from the spawn so the shape is testable without a store on disk.
+/// Two things go wrong here and neither is visible in a launch that works: the
+/// names must be **one comma-joined token** (space-separated, every name after
+/// the first becomes part of the command), and there must be **no bare `--`**
+/// anywhere.
+///
+/// The missing separator is not an oversight. `vault.ps1` documents `--` as the
+/// way to split names from command, and that is right when a human types it —
+/// but under `powershell -File` a bare `--` is eaten by PowerShell's *parameter
+/// binder* before the script ever runs, and every argument after it fails to
+/// bind ("A positional parameter cannot be found that accepts argument 'run'").
+/// Measured three ways, including with `--%`, which does not help. Without a
+/// separator the script's documented fallback applies: first bare token is the
+/// name list, everything after it is the command.
+pub fn reexec_args(script: &Path, names: &[String], exe: &Path, rest: &[String]) -> Vec<String> {
+    let mut args: Vec<String> = vec![
+        "-NoProfile".into(),
+        "-ExecutionPolicy".into(),
+        "Bypass".into(),
+        "-File".into(),
+        script.to_string_lossy().into_owned(),
+        "run".into(),
+        names.join(","),
+        // The console has to be inherited, or the TUI renders into a pipe and
+        // the user sees nothing. It also turns the store's output masking off,
+        // which is the trade: fine for a terminal you are looking at, wrong for
+        // a run whose output is redirected to a file.
+        "-NoCapture".into(),
+        exe.to_string_lossy().into_owned(),
+    ];
+    args.extend(rest.iter().cloned());
+    args
+}
+
+/// Re-run this launch inside the store, so the values arrive without anyone
+/// typing a wrapper. `Ok(None)` means this launch cannot be wrapped and the
+/// caller should say so rather than pretend.
+///
+/// This is what makes "put it in the vault" survive contact with daily use: the
+/// alternative is remembering a second command every time, and the measured
+/// result of a credential being inconvenient is it getting pasted somewhere.
+pub fn reexec(script: &Path, names: &[String]) -> Result<Option<i32>> {
+    let rest: Vec<String> = std::env::args().skip(1).collect();
+    // A `--` in the user's own arguments collides with the wrapper: PowerShell's
+    // binder breaks on it exactly as it does on one of ours. Refuse and name the
+    // manual form — silently dropping the extras, or silently not wrapping,
+    // would both look like a working launch.
+    if rest.iter().any(|a| a == "--") {
+        return Ok(None);
+    }
+    let exe = std::env::current_exe().context("could not find aello's own path")?;
+    let shell = if cfg!(windows) { "powershell" } else { "pwsh" };
+    let status = Command::new(shell)
+        .args(reexec_args(script, names, &exe, &rest))
+        .env(REEXEC_GUARD, "1")
+        .status()
+        .with_context(|| format!("could not run {} {}", shell, script.display()))?;
+    Ok(Some(status.code().unwrap_or(1)))
+}
+
 /// How to launch so a stored credential actually reaches the session.
 ///
 /// Storing it is only half: the store is the *outer* process, so an env launched
@@ -337,6 +440,15 @@ mod tests {
         assert!(parse("OPEN-ROUTER_KEY").is_err());
         assert!(parse("$OPENROUTER").is_err());
         assert!(parse("2FA_TOKEN").is_err());
+    }
+
+    /// Every Windows way of creating this file writes a UTF-8 BOM, and it is
+    /// invisible — so without stripping it the first declared name is refused
+    /// with an error blaming a word that is spelled correctly. Hit on the very
+    /// first real `.aello-env`, created with PowerShell's `Set-Content`.
+    #[test]
+    fn a_utf8_bom_does_not_poison_the_first_name() {
+        assert_eq!(parse("\u{feff}OPENROUTER_API_KEY\n").unwrap(), ["OPENROUTER_API_KEY"]);
     }
 
     #[test]
@@ -405,6 +517,67 @@ mod tests {
             .map(|(k, _)| k.to_string_lossy().into_owned())
             .collect();
         assert!(removed.contains(&DECLARED_VAR.to_string()));
+    }
+
+    /// The `--` and the comma-joined list are the two things that go wrong here
+    /// and neither is visible in a launch that works: without `--` the store
+    /// reads aello's own arguments as secret names, and a space-separated list
+    /// makes every name after the first part of the command.
+    #[test]
+    fn the_reexec_command_separates_the_names_from_the_command() {
+        let args = reexec_args(
+            Path::new("v.ps1"),
+            &["A".to_string(), "B".to_string()],
+            Path::new("aello.exe"),
+            &["run".to_string(), "Probe".to_string()],
+        );
+        let run = args.iter().position(|a| a == "run").expect("no run verb");
+        assert_eq!(args[run + 1], "A,B", "names must be one comma-joined token: {args:?}");
+        assert_eq!(args[run + 2], "-NoCapture");
+        assert_eq!(&args[run + 3..], ["aello.exe", "run", "Probe"]);
+        // A bare `--` anywhere is eaten by PowerShell's parameter binder under
+        // `-File`, and every argument after it then fails to bind. Measured.
+        assert!(!args.iter().any(|a| a == "--"), "a bare -- breaks the binder: {args:?}");
+    }
+
+    /// A project that declares nothing, on a machine with a store, must not be
+    /// wrapped — otherwise every existing launch grows a PowerShell process and
+    /// asks the store for a name it may not hold.
+    #[test]
+    fn nothing_to_fetch_means_no_wrapper() {
+        let mut cfg = crate::models::Config { oauth_token: Some("t".into()), ..Default::default() };
+        assert!(wanted(&[], &cfg, false).is_empty());
+        // …but a token that has already left `config.toml` is something to fetch.
+        cfg.oauth_token = None;
+        assert_eq!(wanted(&[], &cfg, false), [OAUTH_VAR]);
+    }
+
+    /// Declared names are fetched even when already set. An ambient value is how
+    /// a stale key wins silently — measured here, a User-scope
+    /// `OPENROUTER_API_KEY` differed from the stored one and still satisfied the
+    /// declaration check, so the launch carried the wrong key and reported fine.
+    #[test]
+    fn a_declared_name_is_fetched_even_when_the_environment_already_has_one() {
+        let cfg = crate::models::Config { oauth_token: Some("t".into()), ..Default::default() };
+        assert_eq!(wanted(&["OPENROUTER_API_KEY".to_string()], &cfg, false), ["OPENROUTER_API_KEY"]);
+    }
+
+    /// A Claude blueprint must not ask the store for the Cline key, and vice
+    /// versa: `vault.ps1 run` fails hard on a name it does not hold, so asking
+    /// for the wrong one turns a working launch into an error.
+    #[test]
+    fn each_agent_asks_only_for_its_own_credential() {
+        let cfg = crate::models::Config {
+            cline: Some(crate::models::ClineAuth {
+                provider: "openrouter".into(),
+                api_key: None,
+                model: "m".into(),
+                base_url: None,
+            }),
+            ..Default::default()
+        };
+        assert_eq!(wanted(&[], &cfg, true), [CLINE_KEY_VAR]);
+        assert_eq!(wanted(&[], &cfg, false), [OAUTH_VAR]);
     }
 
     /// The two credential variables must not be the names the launch scrub

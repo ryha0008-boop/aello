@@ -710,6 +710,35 @@ pub(crate) fn run_blueprint(
     // into the chat — which is how an OpenRouter key reached twelve transcript
     // records. Absent file means nothing declared, which is every project today.
     let declared = vault::read(&project)?;
+
+    // Go through the store ourselves rather than making the user type a wrapper.
+    //
+    // Only when there is something to fetch, so the launch is untouched for every
+    // project that declares nothing and every machine with no store — which is
+    // all of them until someone opts in. The guard variable rides on the child so
+    // the second aello runs the launch instead of wrapping it again; it lives on
+    // the process, not on disk, so there is nothing to go stale.
+    if std::env::var(vault::REEXEC_GUARD).is_err() {
+        if let Some(script) = vault::script(&cfg)? {
+            let names = vault::wanted(&declared, &cfg, bp.agent == Agent::Cline);
+            if !names.is_empty() {
+                match vault::reexec(&script, &names)? {
+                    Some(code) => return Ok(code),
+                    // Cannot be wrapped (a `--` of the user's own collides with
+                    // the binder). Say so instead of launching without the
+                    // values, which would look identical until the first 401.
+                    None => bail!(
+                        "this launch passes `--` extras, which the vault wrapper cannot carry.\n\
+                         Run it through the store yourself:\n  \
+                         vault.ps1 run {} -NoCapture {} …",
+                        names.join(","),
+                        std::env::args().next().unwrap_or_else(|| "aello".into()),
+                    ),
+                }
+            }
+        }
+    }
+
     let missing = vault::missing(&declared);
     if !missing.is_empty() {
         bail!("{}", vault::missing_message(&project, &missing));

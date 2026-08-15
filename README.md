@@ -313,7 +313,9 @@ aello vault /path/to/vault.ps1     # `aello vault` shows it, `--clear` forgets i
 aello login
 ```
 
-Writing a secret is not reading one: aello still has no way to get a value back out. After the move, every launch has to go through the store — that is the point, and it changes the command you type. Full details in [`docs/vault.md`](docs/vault.md).
+Writing a secret is not reading one: aello still has no way to get a value back out.
+
+With a vault set, `aello run` **goes through the store itself** — it re-runs inside it, fetching this project's declared names and whichever of aello's own credentials have left `config.toml`. There is no wrapper command to remember, and a project that declares nothing launches exactly as before. Full details in [`docs/vault.md`](docs/vault.md).
 
 ## Self-update
 
