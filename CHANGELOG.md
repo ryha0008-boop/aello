@@ -23,6 +23,13 @@
   the store's documented "first bare token is the name list" fallback.
 
 ### Fixed
+- **The TUI's `L` login no longer writes the token back into `config.toml`.** It
+  had its own copy of the save, so on a machine whose token had just moved to the
+  store a TUI login undid the move — and printed "Saved shared login token."
+  while doing it. Both logins now share one path.
+- **A token living in the store no longer shows as `AUTH: NONE ✗ (press L)`** in
+  the TUI footer. It reads `AUTH: VAULT ✓`. The old label was a false alarm whose
+  suggested remedy was the one action that recreated the plaintext.
 - **A `.aello-env` with a UTF-8 BOM no longer rejects its own first line.** Every
   Windows way of creating that file writes one — PowerShell's `Set-Content
   -Encoding utf8` and Notepad both do — and it is invisible, so the first
