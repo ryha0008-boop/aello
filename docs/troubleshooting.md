@@ -59,6 +59,28 @@ The token authenticates the API, but an interactive `claude` still shows its fir
 
 Re-running `aello run <name>` re-seeds it.
 
+## `/model` is missing Fable and Opus 1M, and the header says "Claude API"
+
+Expected, and not a billing problem — your subscription is fine. Claude Code reads its account record from `CLAUDE_CODE_OAUTH_TOKEN` when that variable is set, and the function that would otherwise look up the real subscription tier returns early *because* it is set. With the tier unknown the CLI falls back to the API-key presentation: the header reads `Claude API`, and the rows gated on a Max tier — Opus with 1M context, and Fable — are not offered.
+
+**The models are not blocked, only unlisted.** Select one by name instead:
+
+```sh
+/model fable                         # in a session — replies "Set model to Fable 5.1"
+aello run <name> -- --model fable    # at launch
+```
+
+(With a vault configured, a launch carrying `--` extras is refused — see [vault.md](vault.md) — so use `/model` in the session instead.)
+
+To get the rows back, tell Claude Code what the token is worth by setting both variables alongside it — the values are in `~/.claude.json` under `oauthAccount` (`organizationType`, `organizationRateLimitTier`):
+
+```sh
+CLAUDE_CODE_SUBSCRIPTION_TYPE=max
+CLAUDE_CODE_RATE_LIMIT_TIER=default_claude_max_5x
+```
+
+aello does not set these, because the right value differs per account. Measured 2026-09-13 on 2.1.263: with them, the header reads `Claude Max` and `Opus (1M context)` returns; without, neither does. Your env's **default** model is unaffected either way — that comes from the env's `settings.json`.
+
 ## `aello login` looks hung
 
 It shells out to `claude setup-token`, which prints an auth URL. aello tees that output rather than piping it, precisely so the URL is visible on a headless box — if you see nothing at all, the underlying `claude` command is the thing to check.

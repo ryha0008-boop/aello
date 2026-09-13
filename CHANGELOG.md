@@ -3,6 +3,17 @@
 ## [Unreleased]
 
 ### Added
+- **Documented why `/model` in an aello env offers no Fable and no Opus 1M, and
+  why the header says "Claude API" on a Max subscription.** Claude Code builds
+  its account record from `CLAUDE_CODE_OAUTH_TOKEN` when that variable is set,
+  and the lookup that would read the real subscription tier returns early
+  *because* it is set — so the tier is unknown and every tier-gated row is
+  withheld. The models are unlisted, not blocked: `/model fable` and
+  `--model fable` both work, and an env's default model comes from its
+  `settings.json` regardless. Setting `CLAUDE_CODE_SUBSCRIPTION_TYPE` and
+  `CLAUDE_CODE_RATE_LIMIT_TIER` alongside the token restores the label and the
+  1M row; aello does not set them, because the correct value is per-account.
+  Measured against 2.1.263. See `docs/troubleshooting.md` and `docs/concepts.md`.
 - **`aello run` goes through the store itself — no wrapper command to type.**
   With `aello vault <path>` set and something to fetch (this project's declared
   names, plus whichever of aello's own credentials have left `config.toml`),
