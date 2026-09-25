@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Security
+- **`rustls` 0.23.40 → 0.23.45** (RUSTSEC-2026-0285: TLS 1.3 handshake messages
+  accepted across encryption-level boundaries) and **`anyhow` 1.0.102 → 1.0.104**
+  (RUSTSEC-2026-0190). `rustls` is what `aello update` downloads over. Still
+  reported as warnings: `lru` and `paste`, both held by `ratatui` 0.29, which
+  needs a ratatui upgrade to clear.
+
 ### Added
 - **Documented why `/model` in an aello env offers no Fable and no Opus 1M, and
   why the header says "Claude API" on a Max subscription.** Claude Code builds
