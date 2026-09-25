@@ -277,6 +277,62 @@ pub struct Instance {
     pub mirror_root: Option<String>,
 }
 
+/// The Claude subscription behind the shared token, as the user declared it.
+///
+/// Declared rather than detected because it cannot be detected: the
+/// `setup-token` credential carries only `user:inference`, so the profile
+/// endpoint refuses it (403, needs `user:profile`), and inference responses
+/// carry quota headers but no plan name. Measured 2026-09-25.
+///
+/// Claude Code needs it because it builds its account record from
+/// `CLAUDE_CODE_OAUTH_TOKEN` alone and skips the lookup that would read the
+/// tier while that variable is set — so without it every env reports "Claude
+/// API" and withholds the tier-gated `/model` rows (Opus 1M).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, clap::ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+#[clap(rename_all = "kebab-case")]
+pub enum Plan {
+    Pro,
+    #[serde(rename = "max-5x")]
+    #[value(name = "max-5x")]
+    Max5x,
+    #[serde(rename = "max-20x")]
+    #[value(name = "max-20x")]
+    Max20x,
+    Team,
+    Enterprise,
+    /// Asked and declined. Recorded so `aello run` does not ask again; sets
+    /// nothing, which is exactly the behaviour before plans existed.
+    Unknown,
+}
+
+impl Plan {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Plan::Pro => "pro",
+            Plan::Max5x => "max-5x",
+            Plan::Max20x => "max-20x",
+            Plan::Team => "team",
+            Plan::Enterprise => "enterprise",
+            Plan::Unknown => "unknown",
+        }
+    }
+
+    /// `CLAUDE_CODE_SUBSCRIPTION_TYPE` and `CLAUDE_CODE_RATE_LIMIT_TIER`. The
+    /// tier strings are the only two in the Claude Code binary; the other plans
+    /// get the type alone, which is what drives the label and the picker.
+    pub fn claude_env(&self) -> Option<(&'static str, Option<&'static str>)> {
+        match self {
+            Plan::Pro => Some(("pro", None)),
+            Plan::Max5x => Some(("max", Some("default_claude_max_5x"))),
+            Plan::Max20x => Some(("max", Some("default_claude_max_20x"))),
+            Plan::Team => Some(("team", None)),
+            Plan::Enterprise => Some(("enterprise", None)),
+            Plan::Unknown => None,
+        }
+    }
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
@@ -290,6 +346,10 @@ pub struct Config {
     /// share it safely. Set via `aello login`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oauth_token: Option<String>,
+    /// Subscription behind `oauth_token`, asked at login (or on the first
+    /// `aello run` of an install that predates the question). See [`Plan`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<Plan>,
     /// Shared Cline provider credential. Set via `aello login --agent cline`.
     /// Deliberately not merged with `oauth_token`: different account, different
     /// billing, and one being set says nothing about the other.
@@ -430,6 +490,17 @@ mod tests {
         assert_eq!(c.api_key.as_deref(), Some("sk-or-v1-xxx"));
         // Setting one login must never disturb the other.
         assert_eq!(back.oauth_token.as_deref(), Some("sk-ant-oat01-xxx"));
+    }
+
+    /// The written spelling is the one `aello plan` takes and the docs name, and
+    /// an older config with no key loads as "never asked".
+    #[test]
+    fn the_plan_is_written_as_typed_and_absent_means_unasked() {
+        let cfg = Config { plan: Some(Plan::Max5x), ..Default::default() };
+        let out = toml::to_string_pretty(&cfg).unwrap();
+        assert!(out.contains("plan = \"max-5x\""), "{out}");
+        assert_eq!(toml::from_str::<Config>(&out).unwrap().plan, Some(Plan::Max5x));
+        assert_eq!(toml::from_str::<Config>("").unwrap().plan, None);
     }
 
     #[test]

@@ -21,7 +21,7 @@ mod update;
 mod vault;
 mod voice;
 
-use models::{Agent, Blueprint, Instance, Role};
+use models::{Agent, Blueprint, Instance, Plan, Role};
 
 /// Isolated Claude Code environments — like venvs, but for AI agents.
 #[derive(Parser)]
@@ -94,6 +94,14 @@ enum Commands {
         /// claude (runs `claude setup-token`) or cline (a provider key).
         #[arg(long, value_enum)]
         agent: Option<Agent>,
+    },
+    /// Show or set the Claude plan behind the shared login (pro, max-5x,
+    /// max-20x, team, enterprise, unknown). Claude Code cannot read it from the
+    /// token, so without it every env shows "Claude API" and hides Opus 1M.
+    Plan {
+        /// The plan to record. Omit to show the current one.
+        #[arg(value_enum)]
+        plan: Option<Plan>,
     },
     /// Point aello at this machine's secret store, so `aello login` puts the
     /// credential there instead of in plaintext in `config.toml`.
@@ -315,6 +323,7 @@ fn main() {
         Some(Commands::Init) => cmd_init(),
         Some(Commands::Login { agent }) => cmd_login(agent),
         Some(Commands::Vault { path, clear }) => cmd_vault(path, clear),
+        Some(Commands::Plan { plan }) => cmd_plan(plan),
         Some(Commands::GithubSetup { name, public, yes }) => github::run(name, public, yes),
         Some(Commands::Update { force }) => update::run(force),
         Some(Commands::Completions { shell }) => cmd_completions(shell),
@@ -787,9 +796,16 @@ pub(crate) fn run_blueprint(
     // because `aello login`/`edit` serialize the whole struct back to disk and
     // would write the vault's value straight back out in plaintext.
     let oauth_token = vault::env_secret(vault::OAUTH_VAR).or_else(|| cfg.oauth_token.clone());
+    let mut plan = cfg.plan;
     if oauth_token.is_some() {
         // Token handles auth; skip Claude's interactive first-run wizard.
         let _ = project::mark_onboarded(&env);
+        // An install that logged in before the plan question existed is asked
+        // once, here. Not from a pipe: a scripted launch must not block on it.
+        use std::io::IsTerminal;
+        if plan.is_none() && std::io::stdin().is_terminal() {
+            plan = Some(ask_plan()?);
+        }
     } else if !env.join(".credentials.json").exists() {
         // Name the right fix. With a store configured the cause is almost never
         // "never logged in" — it is this launch not going through the vault —
@@ -809,7 +825,7 @@ pub(crate) fn run_blueprint(
         other => other,
     };
     let contextdb = config::contextdb_dir(&cfg);
-    launch::launch(&env, &bp.name, resume.as_ref(), prompt, extra, &contextdb, oauth_token.as_deref(), &declared)
+    launch::launch(&env, &bp.name, resume.as_ref(), prompt, extra, &contextdb, oauth_token.as_deref(), plan, &declared)
 }
 
 /// Place and launch a Cline blueprint.
@@ -1026,8 +1042,47 @@ fn cmd_login_claude() -> Result<()> {
         warn_if_vault_supplies(vault::OAUTH_VAR, "token");
     }
     match auth::capture_setup_token()? {
-        Some(token) => persist_oauth_token(token)?,
+        Some(token) => {
+            persist_oauth_token(token)?;
+            ask_plan()?;
+        }
         None => println!("Cancelled — no token saved."),
+    }
+    Ok(())
+}
+
+/// Ask which Claude plan the login belongs to and record it. Shared by both
+/// logins (CLI and the TUI's `L`) and by `aello run`'s one-time catch-up.
+pub(crate) fn ask_plan() -> Result<Plan> {
+    use clap::ValueEnum;
+    println!("\nWhich Claude plan is this login on? Claude Code cannot read it from the token.");
+    println!("  pro, max-5x, max-20x, team, enterprise — or unknown to skip (change later: aello plan <plan>)");
+    let plan = loop {
+        let raw = prompt("Plan", "unknown")?;
+        match Plan::from_str(raw.trim(), true) {
+            Ok(p) => break p,
+            Err(_) => println!("  '{}' isn't a plan", raw.trim()),
+        }
+    };
+    let mut cfg = config::load()?;
+    cfg.plan = Some(plan);
+    config::save(&cfg)?;
+    println!("Recorded plan: {}", plan.as_str());
+    Ok(plan)
+}
+
+fn cmd_plan(plan: Option<Plan>) -> Result<()> {
+    let mut cfg = config::load()?;
+    match plan {
+        Some(p) => {
+            cfg.plan = Some(p);
+            config::save(&cfg)?;
+            println!("Recorded plan: {} — takes effect on each env's next launch.", p.as_str());
+        }
+        None => println!(
+            "{}",
+            cfg.plan.map_or("not set (aello run will ask)", |p| p.as_str())
+        ),
     }
     Ok(())
 }

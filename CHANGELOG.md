@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Added
+- **aello now asks which Claude plan your login is on, so envs stop showing
+  "Claude API" and get Opus 1M back.** `aello login` asks right after storing
+  the token, an existing install is asked once on its next `aello run` from a
+  terminal, and `aello plan <plan>` changes it later. Each launch passes it to
+  Claude Code as `CLAUDE_CODE_SUBSCRIPTION_TYPE` / `CLAUDE_CODE_RATE_LIMIT_TIER`,
+  which it cannot work out from the token alone. It has to be asked because the
+  token cannot tell aello either: its only scope is `user:inference`, the profile
+  endpoint refuses it, and API responses name no plan. Verified on Claude Code
+  2.1.282: `max-5x` shows Claude Max with the Opus 1M default, `unknown` shows
+  neither. Fable is listed either way on 2.1.282.
+
 ### Security
 - **`rustls` 0.23.40 → 0.23.45** (RUSTSEC-2026-0285: TLS 1.3 handshake messages
   accepted across encryption-level boundaries) and **`anyhow` 1.0.102 → 1.0.104**

@@ -376,7 +376,7 @@ pub fn run() -> Result<()> {
                     // login on a machine whose token had just moved to the store
                     // wrote the plaintext straight back into `config.toml`.
                     Ok(Some(token)) => {
-                        if let Err(e) = crate::persist_oauth_token(token) {
+                        if let Err(e) = crate::persist_oauth_token(token).and_then(|_| crate::ask_plan()) {
                             eprintln!("error: {e:#}");
                         }
                     }

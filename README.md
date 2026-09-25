@@ -138,6 +138,7 @@ aello restore <name> [--project <dir>]         # adopt the tracked mirror after 
 aello run [name] [--resume [id]] [-p <prompt>] [-- <extra args for the agent>]
 aello login [--agent claude|cline]             # store a shared login (asks which, if unsaid)
 aello vault [path] [--clear]                   # point logins at a secret store instead of config.toml
+aello plan [pro|max-5x|max-20x|team|enterprise|unknown]   # the Claude plan behind the login (asked at login)
 aello github-setup [--name <repo>] [--public] [--yes]   # create + push the repo via gh
 aello docs [name]                              # print bundled reference docs (no name lists them)
 aello check [path] [--all] [--root <dir>] [--json]      # verify a repo's integrations (exit 1 on failure)

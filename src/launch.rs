@@ -4,6 +4,8 @@ use anyhow::{Context, Result};
 use std::path::Path;
 use std::process::Command;
 
+use crate::models::Plan;
+
 /// Credentials that must not reach a launched agent by inheritance.
 ///
 /// An env's auth is aello's to choose: the shared OAuth token, or nothing and
@@ -87,6 +89,7 @@ pub fn launch(
     extra: &[String],
     contextdb: &Path,
     oauth_token: Option<&str>,
+    plan: Option<Plan>,
     declared: &[String],
 ) -> Result<i32> {
     let mut c = Command::new(claude_exe());
@@ -109,6 +112,7 @@ pub fn launch(
     if let Some(t) = oauth_token {
         c.env("CLAUDE_CODE_OAUTH_TOKEN", t);
     }
+    apply_plan(&mut c, oauth_token.is_some(), plan);
 
     match resume {
         Some(Some(id)) => {
@@ -130,6 +134,25 @@ pub fn launch(
         .status()
         .context("could not launch 'claude' — is Claude Code installed and on PATH?")?;
     Ok(status.code().unwrap_or(1))
+}
+
+const PLAN_VARS: [&str; 2] = ["CLAUDE_CODE_SUBSCRIPTION_TYPE", "CLAUDE_CODE_RATE_LIMIT_TIER"];
+
+/// Tell Claude Code the plan behind an env-var token, which it cannot read for
+/// itself — see [`Plan`]. Only alongside aello's token: with a stored login
+/// Claude Code reads the real tier and these would be noise. Both are removed
+/// first so a parent env's values never stand in for this machine's answer.
+fn apply_plan(c: &mut Command, has_token: bool, plan: Option<Plan>) {
+    for k in PLAN_VARS {
+        c.env_remove(k);
+    }
+    let Some((kind, tier)) = plan.filter(|_| has_token).and_then(|p| p.claude_env()) else {
+        return;
+    };
+    c.env(PLAN_VARS[0], kind);
+    if let Some(t) = tier {
+        c.env(PLAN_VARS[1], t);
+    }
 }
 
 #[cfg(test)]
@@ -183,5 +206,46 @@ mod tests {
     #[test]
     fn thinking_display_asks_for_summaries() {
         assert_eq!(THINKING_DISPLAY, &["--thinking-display", "summarized"]);
+    }
+
+    fn plan_env(has_token: bool, plan: Option<Plan>) -> Vec<(String, Option<String>)> {
+        let mut c = Command::new("claude");
+        apply_plan(&mut c, has_token, plan);
+        let mut v: Vec<_> = c
+            .get_envs()
+            .map(|(k, v)| (k.to_string_lossy().into_owned(), v.map(|v| v.to_string_lossy().into_owned())))
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// The exact strings Claude Code switches on (2.1.282: `case"max"`, and the
+    /// only two tier ids in the binary). A near miss is not an error there — it
+    /// is `null`, the "Claude API" label this exists to fix, so pin them.
+    #[test]
+    fn a_declared_plan_reaches_the_child_as_claude_codes_own_strings() {
+        let s = |x: &str| Some(x.to_string());
+        assert_eq!(
+            plan_env(true, Some(Plan::Max5x)),
+            [
+                ("CLAUDE_CODE_RATE_LIMIT_TIER".into(), s("default_claude_max_5x")),
+                ("CLAUDE_CODE_SUBSCRIPTION_TYPE".into(), s("max")),
+            ]
+        );
+        assert_eq!(plan_env(true, Some(Plan::Max20x))[0].1, s("default_claude_max_20x"));
+        assert_eq!(
+            plan_env(true, Some(Plan::Pro)),
+            [("CLAUDE_CODE_RATE_LIMIT_TIER".into(), None), ("CLAUDE_CODE_SUBSCRIPTION_TYPE".into(), s("pro"))]
+        );
+    }
+
+    /// No token, no plan, or a declined question: both removed, neither set —
+    /// an inherited value from a parent env must not survive any of them.
+    #[test]
+    fn without_a_known_plan_and_a_token_nothing_is_claimed() {
+        let cleared = [("CLAUDE_CODE_RATE_LIMIT_TIER".to_string(), None), ("CLAUDE_CODE_SUBSCRIPTION_TYPE".to_string(), None)];
+        assert_eq!(plan_env(false, Some(Plan::Max5x)), cleared);
+        assert_eq!(plan_env(true, None), cleared);
+        assert_eq!(plan_env(true, Some(Plan::Unknown)), cleared);
     }
 }

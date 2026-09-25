@@ -59,27 +59,18 @@ The token authenticates the API, but an interactive `claude` still shows its fir
 
 Re-running `aello run <name>` re-seeds it.
 
-## `/model` is missing Fable and Opus 1M, and the header says "Claude API"
+## The header says "Claude API" and `/model` has no Opus 1M
 
-Expected, and not a billing problem — your subscription is fine. Claude Code reads its account record from `CLAUDE_CODE_OAUTH_TOKEN` when that variable is set, and the function that would otherwise look up the real subscription tier returns early *because* it is set. With the tier unknown the CLI falls back to the API-key presentation: the header reads `Claude API`, and the rows gated on a Max tier — Opus with 1M context, and Fable — are not offered.
-
-**The models are not blocked, only unlisted.** Select one by name instead:
+Your plan is not recorded, or is recorded as `unknown`. Claude Code cannot read the subscription tier from the token aello passes it (see [concepts.md](concepts.md#authentication)), so aello tells it — but only once you have said what the plan is. Nothing is wrong with the subscription or with billing.
 
 ```sh
-/model fable                         # in a session — replies "Set model to Fable 5.1"
-aello run <name> -- --model fable    # at launch
+aello plan              # show what is recorded
+aello plan max-5x       # pro | max-5x | max-20x | team | enterprise | unknown
 ```
 
-(With a vault configured, a launch carrying `--` extras is refused — see [vault.md](vault.md) — so use `/model` in the session instead.)
+It takes effect on each env's next launch. The model is not blocked in the meantime, just not listed: `/model opus[1m]` in a session selects it by name. Your env's **default** model does not depend on any of this — it comes from the env's `settings.json`.
 
-To get the rows back, tell Claude Code what the token is worth by setting both variables alongside it — the values are in `~/.claude.json` under `oauthAccount` (`organizationType`, `organizationRateLimitTier`):
-
-```sh
-CLAUDE_CODE_SUBSCRIPTION_TYPE=max
-CLAUDE_CODE_RATE_LIMIT_TIER=default_claude_max_5x
-```
-
-aello does not set these, because the right value differs per account. Measured 2026-09-13 on 2.1.263: with them, the header reads `Claude Max` and `Opus (1M context)` returns; without, neither does. Your env's **default** model is unaffected either way — that comes from the env's `settings.json`.
+On Claude Code 2.1.263 the Fable row was missing for the same reason; from 2.1.282 it is listed either way, and `/model fable` always worked.
 
 ## `aello login` looks hung
 
